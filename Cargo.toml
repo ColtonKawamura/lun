@@ -1,0 +1,15 @@
+[package]
+name = "lun"
+version = "0.1.0"
+edition = "2021"
+description = "CLI-first, markdown-formatted task and project version-control tracker backed by SQLite"
+license = "MIT"
+
+# Intentionally minimal for Phase 1. Dependencies are added as phases land:
+#   - rusqlite (SQLite)        -> Phase 2
+#   - clap (CLI arg parsing)   -> Phase 3
+#   - ratatui + crossterm      -> Phase 5 (TUI)
+[dependencies]
+
+[profile.release]
+strip = true

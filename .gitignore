@@ -1,0 +1,23 @@
+# SQLite database and runtime state
+.lun/*.db
+.lun/*.db-journal
+.lun/*.db-wal
+.lun/*.db-shm
+.lun/attachments/
+
+# Build artifacts
+/target
+dist/
+*.rs.bk
+
+# Logs
+*.log
+logs/
+
+# macOS
+.DS_Store
+
+# Editor
+.nvim/
+.idea/
+.vscode/
