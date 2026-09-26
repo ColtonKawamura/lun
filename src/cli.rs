@@ -5,10 +5,21 @@
 //! - `lun status <name|P-001>` — project overview, per-status counts, tasks,
 //!   summary.
 //! - `lun proj add task "<title>"` — interactive task creation (prompts for
-//!   status, priority, assignee, project, commit message), writes a `CREATE`
+//!   status, priority, assignee, commit message), writes a `CREATE`
 //!   log entry, prints `Created task T-00N in project X` + `Committed: <msg>`.
-//! - `lun task <key|title>` — task fields, labels, timestamps, log history.
+//! - `lun task <key|title>` — task fields, labels, timestamps, attachments,
+//!   links, log history.
 //! - `lun log <project|task>` — commit-style history.
+//!
+//! Phase 4 adds Mac linking & attachments:
+//! - `lun attach task <T-00N|title> /path/to/file` — copies repo files into
+//!   `.lun/attachments/` (name collisions get `-2`, `-3`, ... suffixes);
+//!   files OUTSIDE the repo require a `y/N` confirmation and are linked by
+//!   absolute path without copying.
+//! - `lun link <task|project> <key|title> "<label>" "<uri>"` — record a
+//!   link (file path, URL, or custom URI such as `obsidian://...`).
+//! - `lun open-link <task|project> <key|title> <label>` — look up a link
+//!   and open it with macOS `open`.
 //!
 //! All data comes from `.lun/lun.db`; the markdown-like text produced here is
 //! terminal rendering only and is never stored.
@@ -22,10 +33,12 @@
 //!   (2 for usage/resolution failures, 1 for DB/IO failures).
 
 use std::io::{BufRead, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::db::{DbError, LogEntry, Lun, Project, Task, TaskSpec};
+use crate::db::{
+    DbError, Link, LinkTarget, LogEntry, Lun, Project, Task, TaskSpec,
+};
 use crate::db::Result;
 
 /// CLI exit codes: 2 = usage/resolution error, 1 = runtime (DB/IO) error.
@@ -335,6 +348,11 @@ fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
     }
+    if let Some(label) = json_str(&entry.details, "label") {
+        if let Some(uri) = json_str(&entry.details, "uri") {
+            lines.push(format!("    Link: [{label}] {uri}"));
+        }
+    }
     if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
         lines.push(format!("    Commit: {}", entry.message));
     }
@@ -378,6 +396,11 @@ fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
     }
+    if let Some(label) = json_str(&entry.details, "label") {
+        if let Some(uri) = json_str(&entry.details, "uri") {
+            lines.push(format!("    Link: [{label}] {uri}"));
+        }
+    }
     if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
         lines.push(format!("    Commit: {}", entry.message));
     }
@@ -401,6 +424,11 @@ fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
     }
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
+    }
+    if let Some(label) = json_str(&entry.details, "label") {
+        if let Some(uri) = json_str(&entry.details, "uri") {
+            lines.push(format!("    Link: [{label}] {uri}"));
+        }
     }
     lines
 }
@@ -499,10 +527,40 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
     out.push_str(&format!("Created:   {}\n", display_ts(&t.created_at)));
     out.push_str(&format!("Updated:   {}\n", display_ts(&t.updated_at)));
-    out.push_str("\nChecklist:\n");
-    out.push_str(&format!("- [ ] (add checklist items with `lun task edit {}`)\n", t.task_key));
+        out.push_str("\nChecklist:\n");
+    out.push_str(&format!(
+        "- [ ] (add checklist items with `lun task edit {}`)",
+        t.task_key
+    ));
     out.push_str("\nNotes:\n");
-    out.push_str(&format!("- (add notes with `lun task edit {}`)\n", t.task_key));
+    out.push_str(&format!(
+        "- (add notes with `lun task edit {}`)",
+        t.task_key
+    ));
+    out.push_str("\nAttachments:\n");
+    let attachments = app.lun.attachments_for_task(t.id)?;
+    if attachments.is_empty() {
+        out.push_str(&format!(
+            "- (no attachments - add one with `lun attach task {t} /path/to/file`)",
+            t = t.task_key
+        ));
+    } else {
+        for a in &attachments {
+            out.push_str(&format!("- {} ({})", a.filename, a.stored_path));
+        }
+    }
+    out.push_str("\nLinks:\n");
+    let links = app.lun.links_for_task(t.id)?;
+    if links.is_empty() {
+        out.push_str(&format!(
+            "- (no links - add one with `lun link task {t} <label> <uri>`)",
+            t = t.task_key
+        ));
+    } else {
+        for l in &links {
+            out.push_str(&format!("- [{}] {}", l.label, l.uri));
+        }
+    }
     out.push_str("\nHistory (log):\n");
     for e in &entries {
         for line in task_view_entry_lines(e) {
@@ -546,6 +604,186 @@ pub fn log_view(app: &App, query: &str) -> Result<String> {
         }
     }
     Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: attachments & links (Mac linking)
+// ---------------------------------------------------------------------------
+
+/// Where copied attachments live: `<root>/.lun/attachments/`.
+pub fn attachments_root(root: &Path) -> PathBuf {
+    root.join(".lun/attachments")
+}
+
+/// Copy `src` into `<root>/.lun/attachments/`, suffixing the file name
+/// (`-2`, `-3`, ...) on collision. Returns the destination path.
+fn copy_into_attachments(root: &Path, src: &Path) -> Result<PathBuf> {
+    let dir = attachments_root(root);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| DbError::new("io", format!("creating {}: {e}", dir.display())))?;
+    let name = src
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .ok_or_else(|| DbError::new("invalid", format!("'{}' has no file name", src.display())))?;
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (name[..i].to_string(), Some(name[i..].to_string())),
+        _ => (name.clone(), None),
+    };
+    let mut dest = dir.join(&name);
+    let mut n = 2;
+    while dest.exists() {
+        let suffixed = match &ext {
+            Some(e) => format!("{stem}-{n}{e}"),
+            None => format!("{stem}-{n}"),
+        };
+        dest = dir.join(suffixed);
+        n += 1;
+    }
+    std::fs::copy(src, &dest)
+        .map_err(|e| DbError::new("io", format!("copying {} to {}: {e}", src.display(), dest.display())))?;
+    Ok(dest)
+}
+
+/// `lun attach task <key|title> /path/to/file`.
+///
+/// Files inside `root` are copied into `.lun/attachments/`; files OUTSIDE
+/// `root` require `y` at the confirmation prompt (anything else aborts) and
+/// are recorded by absolute path without copying.
+pub fn attach_file(
+    app: &App,
+    root: &Path,
+    task_query: &str,
+    file_path: &str,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let t = resolve_task(&app.lun, task_query)?;
+    let src = Path::new(file_path);
+    if !src.is_file() {
+        return Err(DbError::new(
+            "not-found",
+            format!("no such file: {} (expected a path to a file)", file_path),
+        ));
+    }
+
+    let inside = std::path::absolute(src)
+        .ok()
+        .zip(std::path::absolute(root).ok())
+        .map(|(s, r)| s.starts_with(&r))
+        .unwrap_or(false);
+
+    let stored = if inside {
+        copy_into_attachments(root, src)?
+    } else {
+        let answer = read_prompt(
+            stdin,
+            "This path is outside the current repo. Link anyway? [y/N] ",
+        )?;
+        if !matches!(answer.to_lowercase().as_str(), "y" | "yes") {
+            return Err(DbError::new(
+                "declined",
+                format!(
+                    "not attached: '{}' is outside {} (answer 'y' to link it by path anyway)",
+                    file_path,
+                    root.display()
+                ),
+            ));
+        }
+        std::path::absolute(src).map_err(|e| DbError::new("io", format!("resolving path: {e}")))?
+    };
+
+    let filename = stored
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    app.lun
+        .add_attachment(t.id, &filename, stored.to_str().unwrap_or_default(), None, None)?;
+    Ok(format!("Attached {} to {} (stored: {})", filename, t.task_key, stored.display()))
+}
+
+/// `lun link <task|project> <key|title> "<label>" "<uri>"`.
+pub fn add_link_command(
+    app: &App,
+    kind: &str,
+    query: &str,
+    label: &str,
+    uri: &str,
+) -> Result<String> {
+    if label.trim().is_empty() {
+        return Err(DbError::new("usage", "link label must not be empty"));
+    }
+    if uri.trim().is_empty() {
+        return Err(DbError::new("usage", "link URI must not be empty"));
+    }
+    let (target, label2) = match kind {
+        "task" => {
+            let t = resolve_task(&app.lun, query)?;
+            (LinkTarget::Task(t.id), format!("task {}", t.task_key))
+        }
+        "project" => {
+            let p = resolve_project(&app.lun, query)?;
+            (
+                LinkTarget::Project(p.id),
+                format!("project {} [{}]", p.name, p.project_key),
+            )
+        }
+        _ => {
+            return Err(DbError::new(
+                "usage",
+                "expected: lun link <task|project> <key|title> \"<label>\" \"<uri>\"",
+            ))
+        }
+    };
+    app.lun.add_link(target, label, uri, None, None)?;
+    Ok(format!("Linked {label} to {label2}: {uri}"))
+}
+
+/// Look up a link by label on a task or project; returns the URI.
+pub fn resolve_link(app: &App, kind: &str, query: &str, label: &str) -> Result<String> {
+    let links = match kind {
+        "task" => app.lun.links_for_task(resolve_task(&app.lun, query)?.id)?,
+        "project" => app.lun.links_for_project(resolve_project(&app.lun, query)?.id)?,
+        _ => {
+            return Err(DbError::new(
+                "usage",
+                "expected: lun open-link <task|project> <key|title> <label>",
+            ))
+        }
+    };
+    let matches: Vec<Link> = links
+        .into_iter()
+        .filter(|l| l.label == label.trim())
+        .collect();
+    match matches.as_slice() {
+        [l] => Ok(l.uri.clone()),
+        [] => Err(DbError::new(
+            "not-found",
+            format!("no link labeled '{label}' on {kind} '{query}' (see `lun task {query}`)"),
+        )),
+        many => Err(DbError::new(
+            "ambiguous",
+            format!(
+                "ambiguous link '{label}' on {kind} '{query}': {} entries",
+                many.len()
+            ),
+        )),
+    }
+}
+
+/// `lun open-link <task|project> <key|title> <label>` — resolve the link and
+/// hand the URI to macOS `open`.
+pub fn open_link(app: &App, kind: &str, query: &str, label: &str) -> Result<String> {
+    let uri = resolve_link(app, kind, query, label)?;
+    let status = std::process::Command::new("open")
+        .arg(&uri)
+        .status()
+        .map_err(|e| DbError::new("io", format!("spawning `open`: {e}")))?;
+    if !status.success() {
+        return Err(DbError::new(
+            "io",
+            format!("`open {uri}` exited with {status}"),
+        ));
+    }
+    Ok(format!("Opened: {uri}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -701,6 +939,36 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
             Some(q) => log_view(app, q),
             None => Err(DbError::new("usage", "expected: lun log <project|task>")),
         },
+        Some("attach") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(kind), Some(q), Some(file)) if kind == "task" => {
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                match std::env::current_dir() {
+                    Ok(root) => attach_file(app, &root, q, file, &mut reader),
+                    Err(e) => Err(DbError::new("io", format!("resolving CWD: {e}"))),
+                }
+            }
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun attach task <T-00N|title> /path/to/file",
+            )),
+        },
+        Some("link") => match (args.get(1), args.get(2), args.get(3), args.get(4)) {
+            (Some(kind), Some(q), Some(label), Some(uri)) => {
+                add_link_command(app, kind, q, label, uri)
+            }
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun link <task|project> <key|title> \"<label>\" \"<uri>\"",
+            )),
+        },
+        Some("open-link") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(kind), Some(q), Some(label)) => open_link(app, kind, q, label),
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun open-link <task|project> <key|title> <label>",
+            )),
+        },
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),
@@ -715,7 +983,7 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
         }
         Err(e) => {
             let code = match e.kind() {
-                "usage" | "not-found" | "ambiguous" | "invalid" => EXIT_USAGE,
+                "usage" | "not-found" | "ambiguous" | "invalid" | "declined" => EXIT_USAGE,
                 _ => EXIT_RUNTIME,
             };
             eprintln!("lun: {e}");

@@ -52,6 +52,27 @@ pub enum LinkTarget {
     Project(i64),
 }
 
+/// Row of the `attachments` table (read model).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attachment {
+    pub id: i64,
+    pub task_id: i64,
+    pub filename: String,
+    pub stored_path: String,
+    pub created_at: String,
+}
+
+/// Row of the `links` table (read model).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub id: i64,
+    pub task_id: Option<i64>,
+    pub project_id: Option<i64>,
+    pub label: String,
+    pub uri: String,
+    pub created_at: String,
+}
+
 /// Input for [`Lun::create_project`].
 #[derive(Debug, Clone, Default)]
 pub struct ProjectSpec {
@@ -714,6 +735,64 @@ impl Lun {
             Some(user),
         )?;
         Ok(id)
+    }
+
+    /// List attachments recorded for a task, oldest first.
+    pub fn attachments_for_task(&self, task_id: i64) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, filename, stored_path, created_at
+             FROM attachments WHERE task_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([task_id], |r| {
+                Ok(Attachment {
+                    id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    filename: r.get(2)?,
+                    stored_path: r.get(3)?,
+                    created_at: r.get(4)?,
+                })
+            })
+            .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))
+    }
+
+    /// List links on a task, oldest first.
+    pub fn links_for_task(&self, task_id: i64) -> Result<Vec<Link>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, project_id, label, uri, created_at
+             FROM links WHERE task_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([task_id], Self::link_from_row)
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))
+    }
+
+    /// List links on a project, oldest first.
+    pub fn links_for_project(&self, project_id: i64) -> Result<Vec<Link>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, project_id, label, uri, created_at
+             FROM links WHERE project_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([project_id], Self::link_from_row)
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))
+    }
+
+    fn link_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Link> {
+        Ok(Link {
+            id: r.get(0)?,
+            task_id: r.get(1)?,
+            project_id: r.get(2)?,
+            label: r.get(3)?,
+            uri: r.get(4)?,
+            created_at: r.get(5)?,
+        })
     }
 }
 

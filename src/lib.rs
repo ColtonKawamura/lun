@@ -5,4 +5,6 @@
 pub mod cli;
 pub mod db;
 
-pub use db::{Lun, LinkTarget, LogEntry, Project, ProjectSpec, Task, TaskSpec};
+pub use db::{
+    Attachment, Link, LinkTarget, LogEntry, Lun, Project, ProjectSpec, Task, TaskSpec,
+};
