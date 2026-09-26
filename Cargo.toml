@@ -11,6 +11,8 @@ license = "MIT"
 #   - ratatui + crossterm      -> Phase 5 (TUI)
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+ratatui = "0.26"
+crossterm = "0.28"
 
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }

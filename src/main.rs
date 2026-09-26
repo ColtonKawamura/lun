@@ -1,14 +1,17 @@
 //! lun — CLI-first, markdown-formatted task and project version-control tracker.
 //!
 //! Phase 3: `lun status`, `lun status <project>`, `lun proj add task`,
-//! `lun task`, and `lun log` on top of the Phase 2 DB layer. `lun init`
-//! (and the bare banner) keep working.
+//! `lun task`, and `lun log` on top of the Phase 2 DB layer.
+//! Phase 4: `lun attach`, `lun link`, `lun open-link` (Mac linking).
+//! Phase 5: bare `lun` launches the full-screen TUI when stdout is a TTY
+//! (piped output keeps the plain banner).
 
 use std::env;
 use std::process::ExitCode;
 
 pub mod cli;
 pub mod db;
+pub mod tui;
 
 pub use db::{Lun, LinkTarget, LogEntry, Project, ProjectSpec, Task, TaskSpec};
 
@@ -40,6 +43,27 @@ fn main() -> ExitCode {
             }
         },
         None => {
+            // Phase 5: bare `lun` opens the full-screen TUI when stdout is a
+            // TTY; piped/redirected output keeps the plain banner so scripts
+            // can still capture `lun` output.
+            use std::io::IsTerminal;
+            if std::io::stdout().is_terminal() {
+                let cwd = match env::current_dir() {
+                    Ok(d) => d,
+                    Err(e) => {
+                        eprintln!("lun: resolving CWD: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                };
+                match tui::term::launch(&cwd, env!("CARGO_PKG_VERSION")) {
+                    Ok(0) => return ExitCode::SUCCESS,
+                    Ok(code) => return ExitCode::from(code as u8),
+                    Err(e) => {
+                        eprintln!("lun: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
             print!(
                 "\
     _                    _
@@ -51,7 +75,8 @@ fn main() -> ExitCode {
             );
             println!("lun v{} — CLI-first markdown task & project tracker", env!("CARGO_PKG_VERSION"));
             println!("-----------------------------------------------------------");
-            println!("Phase 3: `lun status` for the overview, `lun --help` for commands.");
+            println!("Run `lun` in a terminal for the full-screen TUI (Phase 5);");
+            println!("`lun --help` for CLI commands.");
             ExitCode::SUCCESS
         }
     }
