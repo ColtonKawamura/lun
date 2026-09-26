@@ -99,10 +99,12 @@ fn print_help() {
     println!("  lun proj add task \"<title>\"  Create a task (interactive prompts)");
     println!("  lun task <T-00N|title>    View a task (fields, labels, history)");
     println!("  lun log <project|task>    Commit-style history for a project or task");
+    println!("  lun attach task <T-00N|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");
+    println!("  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link");
+    println!("  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`");
     println!("  lun --version             Print version");
     println!("  lun --help                Print this help");
     println!();
     println!("Planned (later phases):");
-    println!("  lun attach / lun link     Attachments & links (Phase 4)");
     println!("  lun (no args in TUI mode) Full-screen TUI (Phase 5+)");
 }
