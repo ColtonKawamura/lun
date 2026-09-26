@@ -5,11 +5,15 @@ edition = "2021"
 description = "CLI-first, markdown-formatted task and project version-control tracker backed by SQLite"
 license = "MIT"
 
-# Intentionally minimal for Phase 1. Dependencies are added as phases land:
-#   - rusqlite (SQLite)        -> Phase 2
+# Dependencies are added as phases land:
+#   - rusqlite (SQLite)        -> Phase 2 (bundled: compiles SQLite, no system lib)
 #   - clap (CLI arg parsing)   -> Phase 3
 #   - ratatui + crossterm      -> Phase 5 (TUI)
 [dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 strip = true
