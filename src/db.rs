@@ -19,8 +19,13 @@ pub struct DbError {
 }
 
 impl DbError {
-    fn new(kind: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn new(kind: &'static str, message: impl Into<String>) -> Self {
         Self { kind, message: message.into() }
+    }
+
+    /// Error category (`db`, `io`, `not-found`, `usage`, `ambiguous`, ...).
+    pub fn kind(&self) -> &'static str {
+        self.kind
     }
 }
 
@@ -75,6 +80,19 @@ pub struct TaskSpec {
     /// Commit-style message for the log entry. Defaults to `add task "<title>" to <project>`.
     pub message: Option<String>,
     pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntry {
+    pub id: i64,
+    pub entity_type: String,
+    pub entity_id: i64,
+    pub timestamp: String,
+    pub user: String,
+    pub action: String,
+    pub message: String,
+    /// JSON object with field changes/notes (small, by design).
+    pub details: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -338,18 +356,20 @@ impl Lun {
         let mut stmt = self.conn.prepare("SELECT id, project_key, name, status, created_at, updated_at
                                           FROM projects ORDER BY project_key")?;
         let rows = stmt
-            .query_map([], |r| {
-                Ok(Project {
-                    id: r.get(0)?,
-                    project_key: r.get(1)?,
-                    name: r.get(2)?,
-                    status: r.get(3)?,
-                    created_at: r.get(4)?,
-                    updated_at: r.get(5)?,
-                })
-            })?
+            .query_map([], Self::project_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    fn project_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Project> {
+        Ok(Project {
+            id: r.get(0)?,
+            project_key: r.get(1)?,
+            name: r.get(2)?,
+            status: r.get(3)?,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
+        })
     }
 
     fn next_project_key(&self) -> Result<String> {
@@ -462,6 +482,125 @@ impl Lun {
             |r| r.get(0),
         )?;
         Ok(format!("T-{:03}", n + 1))
+    }
+
+    /// Look up a project by its `P-00N` key.
+    pub fn project_by_key(&self, key: &str) -> Result<Project> {
+        self.conn
+            .query_row(
+                "SELECT id, project_key, name, status, created_at, updated_at
+                 FROM projects WHERE project_key = ?1",
+                [key],
+                Self::project_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("no project with key '{key}': {e}")))
+    }
+
+    /// Look up a project by exact name.
+    pub fn project_by_name(&self, name: &str) -> Result<Project> {
+        self.conn
+            .query_row(
+                "SELECT id, project_key, name, status, created_at, updated_at
+                 FROM projects WHERE name = ?1",
+                [name],
+                Self::project_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("no project named '{name}': {e}")))
+    }
+
+    /// Look up a task by its `T-00N` key.
+    pub fn task_by_key(&self, key: &str) -> Result<Task> {
+        self.conn
+            .query_row("SELECT * FROM tasks WHERE task_key = ?1", [key], Self::task_from_row)
+            .map_err(|e| DbError::new("not-found", format!("no task with key '{key}': {e}")))
+    }
+
+    /// Look up a task by its internal row id.
+    pub fn task_by_id(&self, id: i64) -> Result<Task> {
+        self.conn
+            .query_row("SELECT * FROM tasks WHERE id = ?1", [id], Self::task_from_row)
+            .map_err(|e| DbError::new("not-found", format!("no task with id {id}: {e}")))
+    }
+
+    /// All tasks whose title exactly equals `title`. Zero, one, or many —
+    /// the CLI layer treats >1 as ambiguous.
+    pub fn tasks_by_title(&self, title: &str) -> Result<Vec<Task>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM tasks WHERE title = ?1 ORDER BY id")?;
+        let rows = stmt
+            .query_map([title], Self::task_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Tasks belonging to `project_id`, ordered by id.
+    pub fn tasks_for_project(&self, project_id: i64) -> Result<Vec<Task>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM tasks WHERE project_id = ?1 ORDER BY id")?;
+        let rows = stmt
+            .query_map([project_id], Self::task_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Project name for a task (used in views and log lines).
+    pub fn project_name_for_task(&self, task: &Task) -> String {
+        match task.project_id {
+            Some(pid) => self
+                .conn
+                .query_row("SELECT name FROM projects WHERE id = ?1", [pid], |r| {
+                    r.get::<_, String>(0)
+                })
+                .unwrap_or_else(|_| "Unassigned".to_string()),
+            None => "Unassigned".to_string(),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Log history
+    // ------------------------------------------------------------------
+
+    /// All log entries for one entity, newest first.
+    pub fn logs_for(&self, entity_type: &str, entity_id: i64) -> Result<Vec<LogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entity_type, entity_id, timestamp, user, action, message, details
+             FROM logs WHERE entity_type = ?1 AND entity_id = ?2 ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map(params![entity_type, entity_id], Self::log_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Log entries for every task in a project. Newest first.
+    pub fn logs_for_project(&self, project_id: i64) -> Result<Vec<LogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.id, l.entity_type, l.entity_id, l.timestamp, l.user, l.action,
+                    l.message, l.details
+             FROM logs l
+             JOIN tasks t ON t.id = l.entity_id AND l.entity_type = 'task'
+             WHERE t.project_id = ?1
+             ORDER BY l.id DESC",
+        )?;
+        let rows = stmt
+            .query_map([project_id], Self::log_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    fn log_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<LogEntry> {
+        Ok(LogEntry {
+            id: r.get(0)?,
+            entity_type: r.get(1)?,
+            entity_id: r.get(2)?,
+            timestamp: r.get(3)?,
+            user: r.get(4)?,
+            action: r.get(5)?,
+            message: r.get(6)?,
+            details: r.get(7)?,
+        })
     }
 
     /// Row id of the seeded P-000 "Unassigned" project.

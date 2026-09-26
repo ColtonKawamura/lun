@@ -1,0 +1,725 @@
+//! Phase 3: core non-TUI CLI commands on top of the Phase 2 DB layer.
+//!
+//! Commands:
+//! - `lun status` — project table + all-task table + summary line.
+//! - `lun status <name|P-001>` — project overview, per-status counts, tasks,
+//!   summary.
+//! - `lun proj add task "<title>"` — interactive task creation (prompts for
+//!   status, priority, assignee, project, commit message), writes a `CREATE`
+//!   log entry, prints `Created task T-00N in project X` + `Committed: <msg>`.
+//! - `lun task <key|title>` — task fields, labels, timestamps, log history.
+//! - `lun log <project|task>` — commit-style history.
+//!
+//! All data comes from `.lun/lun.db`; the markdown-like text produced here is
+//! terminal rendering only and is never stored.
+//!
+//! Resolution rules (per docs/plan.md):
+//! - exact match only; names with whitespace must be quoted argv;
+//! - project keys (`P-00N`), task keys (`T-00N`), project names, and task
+//!   titles are all exact;
+//! - for `lun log`, a string matching a project name/key wins over a task;
+//! - unknown or ambiguous targets produce a clear error and a nonzero exit
+//!   (2 for usage/resolution failures, 1 for DB/IO failures).
+
+use std::io::{BufRead, Write};
+use std::path::Path;
+use std::process::ExitCode;
+
+use crate::db::{DbError, LogEntry, Lun, Project, Task, TaskSpec};
+use crate::db::Result;
+
+/// CLI exit codes: 2 = usage/resolution error, 1 = runtime (DB/IO) error.
+pub const EXIT_USAGE: u8 = 2;
+pub const EXIT_RUNTIME: u8 = 1;
+
+/// An opened lun database rooted at an explicit directory (tests) or the CWD
+/// (the binary).
+pub struct App {
+    pub lun: Lun,
+}
+
+impl App {
+    /// Open an existing, already-initialized DB under `root` (no migration
+    /// side effects beyond what `Lun::open` does — it requires the file).
+    pub fn open(root: &Path) -> Result<Self> {
+        Ok(Self { lun: Lun::open(root)? })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resolution
+// ---------------------------------------------------------------------------
+
+fn is_project_key(s: &str) -> bool {
+    let rest = s.strip_prefix("P-").unwrap_or("");
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+fn is_task_key(s: &str) -> bool {
+    let rest = s.strip_prefix("T-").unwrap_or("");
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Resolve a project query (for `lun status <...>`): exact key first, then
+/// exact name. A task key is a clear, actionable "not found".
+pub fn resolve_project(lun: &Lun, query: &str) -> Result<Project> {
+    if is_project_key(query) {
+        return lun.project_by_key(query);
+    }
+    if let Ok(p) = lun.project_by_name(query) {
+        return Ok(p);
+    }
+    if is_task_key(query) {
+        return Err(DbError::new(
+            "not-found",
+            format!(
+                "'{query}' is a task key — use `lun task {query}` or `lun log {query}`"
+            ),
+        ));
+    }
+    Err(DbError::new(
+        "not-found",
+        format!(
+            "unknown project '{query}': no project with this name or key (try `lun status` to list projects)"
+        ),
+    ))
+}
+
+/// Resolve a task query (for `lun task <...>`): exact key first, then exact
+/// title; >1 title matches is ambiguous.
+pub fn resolve_task(lun: &Lun, query: &str) -> Result<Task> {
+    if is_task_key(query) {
+        return lun.task_by_key(query);
+    }
+    let matches = lun.tasks_by_title(query)?;
+    match matches.as_slice() {
+        [] => Err(DbError::new(
+            "not-found",
+            format!(
+                "unknown task '{query}': no task has this key or title (try `lun status`)"
+            ),
+        )),
+        [t] => Ok(t.clone()),
+        many => Err(DbError::new(
+            "ambiguous",
+            format!(
+                "ambiguous task '{query}': {} tasks share this title: {} — use the task key (e.g. {})",
+                many.len(),
+                many.iter().map(|t| t.task_key.clone()).collect::<Vec<_>>().join(", "),
+                many[0].task_key
+            ),
+        )),
+    }
+}
+
+/// A resolved entity for `lun log <...>`.
+#[derive(Debug)]
+pub enum Entity {
+    Project(Project),
+    Task(Task),
+}
+
+/// Resolve `lun log`'s argument: project (key, then name) wins over task
+/// (key, then title), per the plan's parsing rules. Matching is exact on
+/// trimmed input (the shell strips surrounding quotes).
+pub fn resolve_entity(lun: &Lun, query: &str) -> Result<Entity> {
+    let q = query.trim();
+    if is_project_key(q) {
+        return lun
+            .project_by_key(q)
+            .map(Entity::Project)
+            .map_err(|e| DbError::new("not-found", e.to_string()));
+    }
+    if is_task_key(q) {
+        return lun
+            .task_by_key(q)
+            .map(Entity::Task)
+            .map_err(|e| DbError::new("not-found", e.to_string()));
+    }
+    if let Ok(p) = lun.project_by_name(q) {
+        return Ok(Entity::Project(p));
+    }
+    let matches = lun.tasks_by_title(q)?;
+    match matches.as_slice() {
+        [] => Err(DbError::new(
+            "not-found",
+            format!(
+                "unknown project or task '{q}': no exact match (names with whitespace must be quoted)"
+            ),
+        )),
+        [t] => Ok(Entity::Task(t.clone())),
+        many => Err(DbError::new(
+            "ambiguous",
+            format!(
+                "ambiguous '{q}': {} tasks share this title: {} — use the task key",
+                many.len(),
+                many.iter().map(|t| t.task_key.clone()).collect::<Vec<_>>().join(", ")
+            ),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Small rendering helpers
+// ---------------------------------------------------------------------------
+
+/// Pad cells to column widths, join with 3 spaces, trim trailing spaces.
+fn pad_row(cells: &[String], widths: &[usize]) -> String {
+    let mut s = String::new();
+    for (i, c) in cells.iter().enumerate() {
+        if i > 0 {
+            s.push_str("   ");
+        }
+        let w = widths.get(i).map(|x| *x).unwrap_or(c.len());
+        s.push_str(&format!("{:w$}", c, w = w));
+    }
+    s.trim_end().to_string()
+}
+
+/// Render a monospaced table: header row + data rows, 3-space column gaps.
+pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let ncols = headers.len();
+    let widths: Vec<usize> = (0..ncols)
+        .map(|i| {
+            let mut w = headers[i].len();
+            for r in rows {
+                if i < r.len() {
+                    w = w.max(r[i].len());
+                }
+            }
+            w
+        })
+        .collect();
+    let mut lines: Vec<String> = Vec::with_capacity(rows.len() + 1);
+    let hcells: Vec<String> = headers.iter().map(|h| h.to_string()).collect();
+    lines.push(pad_row(&hcells, &widths));
+    for r in rows {
+        lines.push(pad_row(r, &widths));
+    }
+    lines.join("\n")
+}
+
+/// `2026-09-25T16:45:00Z` (UTC, as stored) -> `2026-09-25 16:45` (display).
+fn display_ts(ts: &str) -> String {
+    let t = ts.replace('T', " ");
+    t.chars().take(16).collect()
+}
+
+/// Pull a string value out of a small flat JSON object stored as TEXT
+/// (e.g. `{"status": "todo", "priority": "med"}`). Details are written by
+/// lun itself with string values only; this avoids a JSON dependency.
+pub fn json_str(details: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let start = details.find(&needle)? + needle.len();
+    let after = details[start..].find(':')?;
+    let after = details[start + after + 1..].trim_start();
+    if !after.starts_with('"') {
+        return None;
+    }
+    let body = &after[1..];
+    let mut out = String::new();
+    let mut chars = body.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                if let Some(&n) = chars.peek() {
+                    chars.next();
+                    match n {
+                        '"' => out.push('"'),
+                        '\\' => out.push('\\'),
+                        'n' => out.push('\n'),
+                        't' => out.push('\t'),
+                        other => {
+                            out.push('\\');
+                            out.push(other);
+                        }
+                    }
+                }
+            }
+            '"' => break,
+            c => out.push(c),
+        }
+    }
+    Some(out)
+}
+
+/// Per-project task counts: Open = todo + in-progress, Review, Done.
+fn status_counts(tasks: &[Task]) -> (usize, usize, usize) {
+    let open = tasks
+        .iter()
+        .filter(|t| t.status == "todo" || t.status == "in-progress")
+        .count();
+    let review = tasks.iter().filter(|t| t.status == "review").count();
+    let done = tasks.iter().filter(|t| t.status == "done").count();
+    (open, review, done)
+}
+
+fn counts_by_status(tasks: &[Task]) -> Vec<(&'static str, usize)> {
+    let mut out = Vec::new();
+    for s in ["todo", "in-progress", "review", "done"] {
+        out.push((s, tasks.iter().filter(|t| t.status == s).count()));
+    }
+    out
+}
+
+/// The plan's summary line: `Summary: N projects · M tasks (a todo, b in-progress, c review, d done)`.
+pub fn summary_line(n_projects: usize, tasks: &[Task]) -> String {
+    let (t, ip, r, d) = (
+        tasks.iter().filter(|t| t.status == "todo").count(),
+        tasks.iter().filter(|t| t.status == "in-progress").count(),
+        tasks.iter().filter(|t| t.status == "review").count(),
+        tasks.iter().filter(|t| t.status == "done").count(),
+    );
+    format!(
+        "Summary: {n_projects} project{} · {} task{} ({t} todo, {ip} in-progress, {r} review, {d} done)",
+        if n_projects == 1 { "" } else { "s" },
+        tasks.len(),
+        if tasks.len() == 1 { "" } else { "s" }
+    )
+}
+
+fn task_row(lun: &Lun, t: &Task, with_project: bool) -> Vec<String> {
+    let mut cells = vec![t.task_key.clone()];
+    if with_project {
+        cells.push(lun.project_name_for_task(t));
+    }
+    cells.push(t.title.clone());
+    cells.push(t.status.clone());
+    cells.push(t.priority.clone());
+    cells.push(t.assignee.clone().unwrap_or_default());
+    cells.push(t.branch.clone().unwrap_or_default());
+    cells
+}
+
+/// One compact detail line (or none) for a log entry, used where the plan
+/// shows a single `Status: ...` line under the entry.
+fn entry_inline_details(entry: &LogEntry) -> Option<String> {
+    if let Some(changes) = json_str(&entry.details, "changes") {
+        let parts: Vec<String> = changes
+            .split(", ")
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        if !parts.is_empty() {
+            return Some(parts.join(", "));
+        }
+    }
+    let status = json_str(&entry.details, "status");
+    let priority = json_str(&entry.details, "priority");
+    match (status, priority) {
+        (Some(s), Some(p)) if entry.entity_type == "task" => {
+            Some(format!("Status: {s}, Priority: {p}"))
+        }
+        (Some(s), _) => Some(format!("Status: {s}")),
+        _ => None,
+    }
+}
+
+/// History lines for `lun task` (plan "Viewing a task" format):
+/// `- <ts>  <user>  <ACTION>` + compact detail + `Commit:` (COMMENT entries
+/// carry a `Note:` instead).
+fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
+    let mut lines = vec![format!(
+        "- {}  {}  {}",
+        display_ts(&entry.timestamp),
+        entry.user,
+        entry.action
+    )];
+    if let Some(d) = entry_inline_details(entry) {
+        lines.push(format!("    {d}"));
+    }
+    if let Some(note) = json_str(&entry.details, "note") {
+        lines.push(format!("    Note: \"{note}\""));
+    }
+    if let Some(filename) = json_str(&entry.details, "filename") {
+        lines.push(format!("    File: {filename}"));
+    }
+    if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
+        lines.push(format!("    Commit: {}", entry.message));
+    }
+    lines
+}
+
+/// Full detail lines for `lun log <task>` (plan "Logs for tasks" format):
+/// no bullet; CREATE expands Project/Status/Priority, UPDATE a
+/// `Field changes:` block, COMMENT a note, ATTACH the filename; most end
+/// with the `Commit:` line.
+fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{}  {}  {}",
+        display_ts(&entry.timestamp),
+        entry.user,
+        entry.action
+    )];
+    if let Some(project) = json_str(&entry.details, "project") {
+        lines.push(format!("    Project: {project}"));
+    }
+    match (
+        json_str(&entry.details, "status"),
+        json_str(&entry.details, "priority"),
+    ) {
+        (Some(s), Some(p)) => {
+            lines.push(format!("    Status:  {s}"));
+            lines.push(format!("    Priority: {p}"));
+        }
+        (Some(s), None) => lines.push(format!("    Status:  {s}")),
+        _ => {}
+    }
+    if let Some(changes) = json_str(&entry.details, "changes") {
+        lines.push("    Field changes:".into());
+        for part in changes.split(", ").filter(|c| !c.is_empty()) {
+            lines.push(format!("      {part}"));
+        }
+    }
+    if let Some(note) = json_str(&entry.details, "note") {
+        lines.push(format!("    Note: \"{note}\""));
+    }
+    if let Some(filename) = json_str(&entry.details, "filename") {
+        lines.push(format!("    File: {filename}"));
+    }
+    if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
+        lines.push(format!("    Commit: {}", entry.message));
+    }
+    lines
+}
+
+/// Lines for `lun log <project>` (plan "Logs for projects" format): the
+/// commit message IS the line, with a compact detail line under it.
+fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
+    let mut lines = vec![format!(
+        "{}  {}  {}",
+        display_ts(&entry.timestamp),
+        entry.user,
+        entry.message
+    )];
+    if let Some(d) = entry_inline_details(entry) {
+        lines.push(format!("    {d}"));
+    }
+    if let Some(note) = json_str(&entry.details, "note") {
+        lines.push(format!("    Note: \"{note}\""));
+    }
+    if let Some(filename) = json_str(&entry.details, "filename") {
+        lines.push(format!("    File: {filename}"));
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------
+// Views (pure: App in -> markdown-ish String out)
+// ---------------------------------------------------------------------------
+
+/// `lun status` — global project table, all-task table, summary.
+pub fn status_all(app: &App) -> Result<String> {
+    let projects = app.lun.list_projects()?;
+    let tasks = app.lun.list_tasks()?;
+
+    let mut prow = Vec::new();
+    for p in &projects {
+        let (open, review, done) = status_counts(&app.lun.tasks_for_project(p.id)?);
+        prow.push(vec![
+            p.project_key.clone(),
+            p.name.clone(),
+            p.status.clone(),
+            open.to_string(),
+            review.to_string(),
+            done.to_string(),
+        ]);
+    }
+
+    let trow: Vec<Vec<String>> = tasks
+        .iter()
+        .map(|t| task_row(&app.lun, t, true))
+        .collect();
+
+    let mut out = String::new();
+    out.push_str("Projects\n--------\n\n");
+    out.push_str(&render_table(
+        &["ID", "Name", "Status", "Open", "Review", "Done"],
+        &prow,
+    ));
+    out.push_str("\n\n\nTasks\n-----\n\n");
+    out.push_str(&render_table(
+        &["ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch"],
+        &trow,
+    ));
+    out.push('\n');
+    out.push_str(&summary_line(projects.len(), &tasks));
+    Ok(out)
+}
+
+/// `lun status <name|P-001>` — project overview, tasks-by-status, tasks,
+/// summary.
+pub fn status_project(app: &App, query: &str) -> Result<String> {
+    let p = resolve_project(&app.lun, query)?;
+    let tasks = app.lun.tasks_for_project(p.id)?;
+
+    let header = format!("Project: {}", p.name);
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push_str("\n\nOverview\n--------\n\n");
+    out.push_str(&format!("ID:      {}\n", p.project_key));
+    out.push_str(&format!("Name:    {}\n", p.name));
+    out.push_str(&format!("Status:  {}\n\n", p.status));
+    out.push_str("Tasks by Status:\n");
+    for (s, n) in counts_by_status(&tasks) {
+        out.push_str(&format!("- {:<14}{}\n", format!("{s}:"), n));
+    }
+    out.push_str("\nTasks\n-----\n\n");
+    let trow: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, false)).collect();
+    out.push_str(&render_table(
+        &["ID", "Title", "Status", "Priority", "Assignee", "Branch"],
+        &trow,
+    ));
+    out.push('\n');
+    out.push_str(&summary_line(1, &tasks));
+    Ok(out)
+}
+
+/// `lun task <key|title>` — fields, labels, timestamps, log history.
+pub fn task_view(app: &App, query: &str) -> Result<String> {
+    let t = resolve_task(&app.lun, query)?;
+    let project = app.lun.project_name_for_task(&t);
+    let entries = app.lun.logs_for("task", t.id)?;
+
+    let header = format!("Task {}", t.task_key);
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push_str("\n\n");
+    out.push_str(&format!("Project:   {project}\n"));
+    out.push_str(&format!("Title:     {}\n", t.title));
+    out.push_str(&format!("Status:    {}\n", t.status));
+    out.push_str(&format!("Priority:  {}\n", t.priority));
+    out.push_str(&format!("Assignee:  {}\n", t.assignee.unwrap_or_default()));
+    out.push_str(&format!("Labels:    {}\n", t.labels));
+    out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
+    out.push_str(&format!("Created:   {}\n", display_ts(&t.created_at)));
+    out.push_str(&format!("Updated:   {}\n", display_ts(&t.updated_at)));
+    out.push_str("\nChecklist:\n");
+    out.push_str(&format!("- [ ] (add checklist items with `lun task edit {}`)\n", t.task_key));
+    out.push_str("\nNotes:\n");
+    out.push_str(&format!("- (add notes with `lun task edit {}`)\n", t.task_key));
+    out.push_str("\nHistory (log):\n");
+    for e in &entries {
+        for line in task_view_entry_lines(e) {
+            out.push_str(&format!("{line}\n"));
+        }
+    }
+    Ok(out)
+}
+
+/// `lun log <project|task>` — commit-style history, newest first.
+pub fn log_view(app: &App, query: &str) -> Result<String> {
+    let entity = resolve_entity(&app.lun, query)?;
+    let (header, is_project) = match &entity {
+        Entity::Project(p) => (format!("Log: {}", p.name), true),
+        Entity::Task(t) => (format!("Log: Task {} \"{}\"", t.task_key, t.title), false),
+    };
+    let entries: Vec<LogEntry> = match entity {
+        Entity::Project(p) => {
+            let mut all = app.lun.logs_for("project", p.id)?;
+            all.extend(app.lun.logs_for_project(p.id)?);
+            all.sort_by(|a, b| b.id.cmp(&a.id));
+            all
+        }
+        Entity::Task(t) => app.lun.logs_for("task", t.id)?,
+    };
+
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push('\n');
+    for e in &entries {
+        out.push('\n');
+        let lines = if is_project {
+            project_log_entry_lines(e)
+        } else {
+            task_log_entry_lines(e)
+        };
+        for line in lines {
+            out.push_str(&format!("{line}\n"));
+        }
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Interactive task creation
+// ---------------------------------------------------------------------------
+
+fn read_prompt(stdin: &mut dyn BufRead, label: &str) -> Result<String> {
+    eprint!("{label}");
+    let _ = std::io::stderr().flush();
+    let mut line = String::new();
+    stdin
+        .read_line(&mut line)
+        .map_err(|e| DbError::new("io", format!("reading prompt input: {e}")))?;
+    Ok(line.trim().to_string())
+}
+
+fn valid_task_status(s: &str) -> bool {
+    matches!(s, "todo" | "in-progress" | "review" | "done")
+}
+
+fn valid_priority(s: &str) -> bool {
+    matches!(s, "low" | "med" | "high")
+}
+
+/// `lun proj add task "<title>"`.
+///
+/// Prompts (printed to stderr; empty input accepts the default):
+/// - `Status?:` (default: todo; must be todo|in-progress|review|done)
+/// - `Priority?:` (default: low; must be low|med|high)
+/// - `Assignee? (default: me):`
+/// - `Project?:` — default is the sole project when exactly one exists,
+///   otherwise Unassigned (P-000); accepts a project name or key.
+/// - `Commit message?:` — default `add task "<title>" to <project>` (the
+///   same default the DB layer would use).
+///
+/// Returns the two-line user output:
+/// `Created task T-00N in project X` / `Committed: <msg>`.
+pub fn create_task(app: &App, title: &str, stdin: &mut dyn BufRead) -> Result<String> {
+    if title.trim().is_empty() {
+        return Err(DbError::new(
+            "usage",
+            "task title must not be empty (quote titles with whitespace)",
+        ));
+    }
+    let projects = app.lun.list_projects()?;
+    // Default project: the sole user project if exactly one exists, otherwise
+    // the implicit P-000 Unassigned bucket (P-000 never counts as a user pick).
+    let user_projects: Vec<_> = projects
+        .iter()
+        .filter(|p| p.project_key != "P-000")
+        .cloned()
+        .collect();
+    let default_project = if user_projects.len() == 1 {
+        user_projects.into_iter().next().unwrap()
+    } else {
+        app.lun.project_by_key("P-000")?
+    };
+
+    let status = read_prompt(stdin, "Status?: ")?;
+    let status = if status.is_empty() {
+        "todo".to_string()
+    } else {
+        if !valid_task_status(&status) {
+            return Err(DbError::new(
+                "invalid",
+                format!(
+                    "invalid status '{status}' (expected todo, in-progress, review, or done)"
+                ),
+            ));
+        }
+        status
+    };
+
+    let priority = read_prompt(stdin, "Priority?: ")?;
+    let priority = if priority.is_empty() {
+        "low".to_string()
+    } else {
+        if !valid_priority(&priority) {
+            return Err(DbError::new(
+                "invalid",
+                format!("invalid priority '{priority}' (expected low, med, or high)"),
+            ));
+        }
+        priority
+    };
+
+    let assignee = read_prompt(stdin, "Assignee? (default: me): ")?;
+    let assignee = if assignee.is_empty() {
+        "me".to_string()
+    } else {
+        assignee
+    };
+
+    // Project: the sole user project when exactly one exists, otherwise the
+    // implicit P-000 Unassigned bucket (the plan's flow has no project prompt).
+    let project = default_project;
+
+    let default_msg = format!("add task \"{title}\" to {}", project.name);
+    let msg_ans = read_prompt(stdin, &format!("Commit message?: "))?;
+    let message = if msg_ans.is_empty() {
+        default_msg
+    } else {
+        msg_ans
+    };
+
+    let task = app.lun.create_task(TaskSpec {
+        title: title.to_string(),
+        project: Some(project.id),
+        status: Some(status),
+        priority: Some(priority),
+        assignee: Some(assignee),
+        branch: None,
+        labels: None,
+        message: Some(message.clone()),
+        user: None,
+    })?;
+
+    Ok(format!(
+        "Created task {} in project {}\nCommitted: {message}",
+        task.task_key, project.name
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Dispatch (used by the binary)
+// ---------------------------------------------------------------------------
+
+/// Dispatch already-split argv (without the program name) to a command.
+/// Prints the result to stdout, errors to stderr, and returns the exit code.
+/// (2 = usage/resolution error, 1 = runtime (DB/IO) error.)
+pub fn run(app: &App, args: &[String]) -> ExitCode {
+    let result: Result<String> = match args.first().map(String::as_str) {
+        Some("status") => match args.get(1) {
+            None => status_all(app),
+            Some(q) => status_project(app, q),
+        },
+        Some("proj") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(a), Some(b), Some(title)) if a == "add" && b == "task" => {
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                create_task(app, title, &mut reader)
+            }
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun proj add task \"<title>\"",
+            )),
+        },
+        Some("task") => match args.get(1) {
+            Some(q) => task_view(app, q),
+            None => Err(DbError::new("usage", "expected: lun task <key|title>")),
+        },
+        Some("log") => match args.get(1) {
+            Some(q) => log_view(app, q),
+            None => Err(DbError::new("usage", "expected: lun log <project|task>")),
+        },
+        Some(other) => Err(DbError::new(
+            "usage",
+            format!("command '{other}' not implemented (see `lun --help`)"),
+        )),
+        None => Err(DbError::new("usage", "no command given (see `lun --help`)")),
+    };
+
+    match result {
+        Ok(out) => {
+            println!("{out}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            let code = match e.kind() {
+                "usage" | "not-found" | "ambiguous" | "invalid" => EXIT_USAGE,
+                _ => EXIT_RUNTIME,
+            };
+            eprintln!("lun: {e}");
+            ExitCode::from(code)
+        }
+    }
+}
