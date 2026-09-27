@@ -64,7 +64,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
     let hint: String = if app.statusline_open {
         format!("status {}", app.statusline_query)
     } else if app.mode == super::app::Mode::Insert {
-        "inserting note — esc back to normal, ctrl-s to save (Phase 7)".to_string()
+        "inserting note — esc back to normal, ctrl-s to save".to_string()
     } else {
         " type \"/\" for commands, \":\" for quick actions, \"q\" to quit".to_string()
     };
@@ -466,7 +466,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("esc", "close the palette / statusline, back to normal mode"),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
-        ("…", "/new-task, /config, drag-and-drop arrive in Phase 7+"),
+        ("…", "/new-task and /config arrive in a later phase"),
     ];
     for (key, desc) in rows {
         if y >= area.bottom() {
@@ -686,7 +686,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= bottom {
         return;
     }
-    put(buf, x, y, "- [ ] (add checklist items with /new-task — planned Phase 7)", Style::default().fg(t::DIM));
+    put(buf, x, y, "- [ ] (add checklist items with /new-task — planned later)", Style::default().fg(t::DIM));
     y += 2;
     if y >= bottom {
         return;
@@ -698,6 +698,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     }
     let editing = app.mode == super::app::Mode::Insert;
     if editing {
+        // Insert mode: the live draft (starts from the stored notes).
         let notes = app.notes_draft.lines().chain(std::iter::once(""));
         for line in notes {
             if y >= bottom {
@@ -707,9 +708,10 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             put(buf, x + 2, y, line, Style::default().fg(t::TEXT));
             y += 1;
         }
-    } else if !app.notes_draft.is_empty() {
-        // Unsaved draft from a previous insert session is shown as text.
-        for line in app.notes_draft.lines() {
+    } else if !task.notes.is_empty() {
+        // Normal mode: the persisted notes (Phase 7: `e`/`i` to edit,
+        // Esc/Ctrl-S to save, drop a file to insert a link).
+        for line in task.notes.lines() {
             if y >= bottom {
                 return;
             }
@@ -736,7 +738,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             x,
             y,
-            "- (drag a file into the TUI to attach one — Phase 7)",
+            "- (drag a file onto the TUI to attach one)",
             Style::default().fg(t::DIM),
         );
     } else {

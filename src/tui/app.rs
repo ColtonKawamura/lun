@@ -9,7 +9,10 @@
 //!   returns to normal mode.
 //! - The palette and the statusline have their own key handling too.
 
+use std::path::PathBuf;
+
 use super::data::TuiData;
+use crate::db::Lun;
 
 /// Where the app is looking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,15 +70,15 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand { name: "/board", description: "Show kanban board for current project", view: Some(View::Board) },
     SlashCommand { name: "/project", description: "Select or view a project", view: Some(View::Project) },
     SlashCommand { name: "/task", description: "View a task: /task <T-00N|title> (default: current task)", view: Some(View::Task) },
-    SlashCommand { name: "/new-task", description: "Create a new task in current project (planned: Phase 7)", view: Some(View::Placeholder) },
+    SlashCommand { name: "/new-task", description: "Create a new task in current project (planned: later)", view: Some(View::Placeholder) },
     SlashCommand { name: "/log", description: "Show logs: /log <project|task> (default: current project)", view: Some(View::Log) },
     SlashCommand { name: "/config", description: "View configuration (planned)", view: Some(View::Placeholder) },
     SlashCommand { name: "/help", description: "Show help and keybindings", view: Some(View::Help) },
     SlashCommand { name: "/quit", description: "Exit lun", view: None },
 ];
 
-/// The whole TUI application (state only — no IO).
-#[derive(Debug, Clone)]
+/// The whole TUI application (state + the Phase 7 DB handle).
+#[derive(Debug)]
 pub struct App {
     pub data: TuiData,
     pub view: View,
@@ -99,9 +102,19 @@ pub struct App {
     /// (text, is_error) shown on the message line above the hint bar.
     pub message: Option<(String, bool)>,
     pub quit: bool,
+    /// The `.lun/` root (Phase 7: the TUI writes through here — notes
+    /// saves and drop/paste attachments). `None` for headless test apps
+    /// built with [`App::new`].
+    pub root: Option<PathBuf>,
+    /// Open DB handle for Phase 7 writes (notes, attachments). `None`
+    /// for headless test apps.
+    pub lun: Option<Lun>,
 }
 
 impl App {
+    /// Create a fresh app (headless — no DB handle; Phase 7 write paths
+    /// no-op with a message). Used by tests and by anything that only
+    /// renders/dispatches.
     pub fn new(data: TuiData) -> Self {
         Self {
             data,
@@ -119,7 +132,18 @@ impl App {
             notes_dirty: false,
             message: None,
             quit: false,
+            root: None,
+            lun: None,
         }
+    }
+
+    /// Create the real TUI app (`term::launch`): keeps the open DB and
+    /// the `.lun/` root so notes saves and drop/paste attachments work.
+    pub fn with_store(data: TuiData, root: PathBuf, lun: Lun) -> Self {
+        let mut app = Self::new(data);
+        app.root = Some(root);
+        app.lun = Some(lun);
+        app
     }
 
     /// The current task (selection clamped into range).
@@ -385,8 +409,7 @@ impl App {
     }
 
     /// `e` in normal mode (task view): start editing the current task's
-    /// notes. The buffer starts from the last-committed notes text
-    /// (Phase 6 stores nothing yet — see Phase 7 for persistence).
+    /// notes. The buffer starts from the last-committed notes text.
     pub fn enter_notes_edit(&mut self) {
         if self.current_task().is_none() || self.view != View::Task {
             return;
@@ -395,12 +418,15 @@ impl App {
             return; // already editing
         }
         self.mode = Mode::Insert;
-        self.notes_draft.clear();
+        self.notes_draft = self
+            .current_task()
+            .map(|t| t.notes.clone())
+            .unwrap_or_default();
         self.notes_dirty = false;
         self.statusline_open = false;
         self.statusline_query.clear();
         self.message = Some((
-            "note: editing notes — Esc to finish, Ctrl-S to save".to_string(),
+            "note: editing notes — Esc to finish & save, Ctrl-S to save now".to_string(),
             false,
         ));
     }
@@ -430,20 +456,168 @@ impl App {
         self.notes_dirty = true;
     }
 
-    /// `Esc` in insert mode: back to normal mode. (Phase 6 keeps the edit
-    /// as an unsaved draft; Phase 7 wires commit/persistence.)
+    /// `Esc` in insert mode: back to normal mode. Phase 7: Esc is "save
+    /// and done" when the draft changed (vim-style write-out) — no silent
+    /// data loss; an unchanged draft exits without a log entry.
     pub fn exit_insert(&mut self) {
         if self.mode != Mode::Insert {
             return;
         }
         self.mode = Mode::Normal;
-        self.notes_dirty = false;
-        if !self.notes_draft.is_empty() {
+        if self.notes_dirty {
+            // Esc = save-and-exit: the default commit message applies
+            // (`update notes for <task>`).
+            self.save_notes_draft(None);
+        } else if !self.notes_draft.is_empty() {
             self.message = Some((
-                "note edited (draft — saving lands with Phase 7)".to_string(),
+                "notes unchanged — nothing to save".to_string(),
                 false,
             ));
         }
+    }
+
+    /// Persist the notes draft to the DB (log-on-write: `UPDATE` entry)
+    /// and refresh the snapshot. Called by Esc (save-and-exit) and
+    /// Ctrl-S (save-and-stay); `message` is the commit message for the
+    /// log entry (default: `update notes for <task>`).
+    pub fn save_notes_draft(&mut self, message: Option<&str>) {
+        // Copy the fields we need out of the (immutable) current-task
+        // borrow BEFORE taking the mutable `self.lun` borrow, so the two
+        // borrows never overlap.
+        let Some((task_id, task_key)) = self
+            .current_task()
+            .map(|t| (t.id, t.task_key.clone()))
+        else {
+            self.notes_dirty = false;
+            return;
+        };
+        let Some(lun) = self.lun.as_mut() else {
+            // Headless app (tests): no store to write through.
+            self.message = Some((
+                "no store attached — notes cannot be saved".to_string(),
+                true,
+            ));
+            return;
+        };
+        let notes = self.notes_draft.trim_end().to_string();
+        let result = lun.set_notes(task_id, &notes, message, None);
+        match result {
+            Ok(()) => {
+                self.notes_dirty = false;
+                self.notes_draft = notes.clone();
+                // Refresh the snapshot so the rendered fields/history are
+                // current; fall back to patching the task row in place.
+                let committed = match message {
+                    Some(m) => m.to_string(),
+                    None => format!("update notes for {task_key}"),
+                };
+                if let Ok(fresh) = super::data::load(
+                    lun,
+                    &self.data.version,
+                    &self.data.repo_path,
+                    self.data.branch.clone(),
+                    self.data.current().map(|p| p.project_key.clone()).as_deref(),
+                ) {
+                    let sel = self.task_selected;
+                    let proj = self.data.current_project;
+                    self.data = fresh;
+                    self.task_selected = sel;
+                    self.data.current_project = proj;
+                } else {
+                    if let Some(t) = self.data.tasks.get_mut(self.task_selected) {
+                        t.notes = notes.clone();
+                    }
+                }
+                self.message = Some((format!("Committed: {committed}"), false));
+            }
+            Err(e) => {
+                self.message = Some((format!("save failed: {e}"), true));
+            }
+        }
+    }
+
+    /// Drop/paste a file into the TUI (Phase 7, docs/plan.md): the
+    /// terminal delivers the dropped path as crossterm `Event::Paste`.
+    /// The file must exist; it is copied into `.lun/attachments/` (same
+    /// collision-suffixing as `lun attach`), an `ATTACH` log entry is
+    /// written, and a markdown link line is appended to the current
+    /// task's notes (the drop IS the edit — the notes are saved
+    /// immediately, so nothing is lost if the TUI exits right away).
+    pub fn attach_dropped_file(&mut self, text: &str) {
+        // Terminals paste the path verbatim; strip stray whitespace/quotes.
+        let path = text.trim().trim_matches('\'').trim_matches('"');
+        if path.is_empty() {
+            self.message = Some(("drop a file to attach it (empty paste ignored)".to_string(), false));
+            return;
+        }
+        let src = std::path::Path::new(path);
+        if !src.is_file() {
+            self.message = Some((
+                format!("no such file: {path} (attach needs a path to an existing file)"),
+                true,
+            ));
+            return;
+        }
+        let Some(task) = self.current_task() else {
+            self.message = Some(("no current task — select one (j/k, t) before dropping".to_string(), true));
+            return;
+        };
+        let task_key = task.task_key.clone();
+        let task_id = task.id;
+        drop(task);
+
+        // Phase 7 writes need the store + the `.lun/` root; a headless
+        // app (tests without a store) reports instead of panicking.
+        let Some((lun, root)) = self.lun.as_mut().zip(self.root.as_ref()) else {
+            self.message = Some((
+                "no store attached — drop/paste attach is unavailable".to_string(),
+                true,
+            ));
+            return;
+        };
+
+        let stored = match crate::cli::copy_into_attachments(root, src) {
+            Ok(p) => p,
+            Err(e) => {
+                self.message = Some((format!("attach failed: {e}"), true));
+                return;
+            }
+        };
+        let filename = stored
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Err(e) = lun.add_attachment(task_id, &filename, stored.to_str().unwrap_or_default(), None, None) {
+            // Roll the copy back: no dangling file without a DB record.
+            let _ = std::fs::remove_file(&stored);
+            self.message = Some((format!("attach failed: {e}"), true));
+            return;
+        }
+
+        // Link line appended to the notes (the drop inserts the link at
+        // the end of the buffer — the cursor position in the Phase 7
+        // plan; the buffer is a whole-text draft, so end == cursor for
+        // a fresh/pasted note).
+        let rel = stored
+            .strip_prefix(root)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| stored.display().to_string());
+        let mut notes = self.notes_draft.trim_end().to_string();
+        if !notes.is_empty() {
+            notes.push('\n');
+        }
+        notes.push_str(&format!("- [{filename}]({rel})"));
+        self.notes_draft = notes;
+        self.notes_dirty = true;
+        // Save immediately: the plan shows the commit happening as part
+        // of the drop (default: `attach "<filename>" to <task>`).
+        self.save_notes_draft(None);
+        self.message = Some((
+            format!(
+                "Dropped {path} — saved as {rel}, link inserted in notes (Committed: attach \"{filename}\" to {task_key})"
+            ),
+            false,
+        ));
     }
 
     /// `:status <query>` — run the statusline query against the log
