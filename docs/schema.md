@@ -32,6 +32,12 @@ CREATE TABLE migrations (
 
 Version 1 (initial schema) creates the tables below and seeds P-000.
 
+Version 2 (Phase 7) adds `tasks.notes` (see `tasks` below):
+
+```sql
+ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+```
+
 ## projects
 
 | column        | type    | notes |
@@ -58,6 +64,7 @@ Seed row: `P-000 / "Unassigned" / active`.
 | assignee   | TEXT    | nullable |
 | branch     | TEXT    | nullable (git branch name) |
 | labels     | TEXT    | JSON array of strings, default `[]` |
+| notes      | TEXT    | free-form markdown notes, default `''` (Phase 7: editable in the TUI; saved via `Lun::set_notes`, which logs `UPDATE`) |
 | created_at | TEXT    | UTC timestamp |
 | updated_at | TEXT    | UTC timestamp |
 
@@ -118,3 +125,13 @@ CHECK constraint: exactly one of `task_id` / `project_id` is set
 - `add_link` — logs `LINK`; target is a task or a project.
 - `log` — direct entry point for non-mutating records (e.g. comments in
   a later phase).
+
+## Phase 7 additions
+
+- `tasks.notes` — free-form markdown per task, editable in the TUI.
+- `Lun::set_notes(task_id, notes, message, user)` — replaces the notes,
+  bumps `updated_at`, and logs `UPDATE` with the default commit message
+  `update notes for <task>` (or the supplied message). `details` records
+  `notes: <old> -> <new>` as a line-count description (`empty`,
+  `1 line`, `2 lines`, …) — the notes text itself lives in the column,
+  not in `details`.

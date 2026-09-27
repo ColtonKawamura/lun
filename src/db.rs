@@ -7,7 +7,7 @@
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 1;
+pub const CURRENT_VERSION: i64 = 2;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -138,6 +138,8 @@ pub struct Task {
     pub branch: Option<String>,
     /// JSON array of strings.
     pub labels: String,
+    /// Free-form markdown notes (Phase 7: editable in the TUI).
+    pub notes: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -272,6 +274,16 @@ impl Lun {
                          'system', 'CREATE',
                          'seed P-000 \"Unassigned\" project',
                          '{\"seed\": true}');",
+            )?;
+        }
+
+        if version < 2 {
+            // Phase 7: tasks gain a `notes` column (free-form markdown,
+            // editable in the TUI; saved notes log UPDATE).
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+                 INSERT INTO migrations (version, applied_at)
+                     VALUES (2, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
             )?;
         }
 
@@ -443,7 +455,6 @@ impl Lun {
             ],
         )?;
         let id = self.conn.last_insert_rowid();
-
         let project_name: String = match project_id {
             Some(pid) => self
                 .conn
@@ -478,6 +489,7 @@ impl Lun {
             assignee: spec.assignee,
             branch: spec.branch,
             labels,
+            notes: String::new(),
             created_at: now.clone(),
             updated_at: now,
         })
@@ -487,7 +499,7 @@ impl Lun {
     pub fn list_tasks(&self) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_key, project_id, title, status, priority,
-                    assignee, branch, labels, created_at, updated_at
+                    assignee, branch, labels, notes, created_at, updated_at
              FROM tasks ORDER BY id",
         )?;
         let rows = stmt
@@ -532,14 +544,26 @@ impl Lun {
     /// Look up a task by its `T-00N` key.
     pub fn task_by_key(&self, key: &str) -> Result<Task> {
         self.conn
-            .query_row("SELECT * FROM tasks WHERE task_key = ?1", [key], Self::task_from_row)
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE task_key = ?1",
+                [key],
+                Self::task_from_row,
+            )
             .map_err(|e| DbError::new("not-found", format!("no task with key '{key}': {e}")))
     }
 
     /// Look up a task by its internal row id.
     pub fn task_by_id(&self, id: i64) -> Result<Task> {
         self.conn
-            .query_row("SELECT * FROM tasks WHERE id = ?1", [id], Self::task_from_row)
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                [id],
+                Self::task_from_row,
+            )
             .map_err(|e| DbError::new("not-found", format!("no task with id {id}: {e}")))
     }
 
@@ -548,7 +572,11 @@ impl Lun {
     pub fn tasks_by_title(&self, title: &str) -> Result<Vec<Task>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM tasks WHERE title = ?1 ORDER BY id")?;
+            .prepare(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE title = ?1 ORDER BY id",
+            )?;
         let rows = stmt
             .query_map([title], Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -559,7 +587,11 @@ impl Lun {
     pub fn tasks_for_project(&self, project_id: i64) -> Result<Vec<Task>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT * FROM tasks WHERE project_id = ?1 ORDER BY id")?;
+            .prepare(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE project_id = ?1 ORDER BY id",
+            )?;
         let rows = stmt
             .query_map([project_id], Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -577,6 +609,60 @@ impl Lun {
                 .unwrap_or_else(|_| "Unassigned".to_string()),
             None => "Unassigned".to_string(),
         }
+    }
+
+    /// Replace a task's notes with new markdown text (Phase 7: the TUI's
+    /// notes editor saves through here). Updates `updated_at` and writes an
+    /// `UPDATE` log entry whose `details.changes` records the old/new state
+    /// (`notes: empty -> 2 lines` / `notes: 2 lines -> 3 lines`), keeping
+    /// the notes text itself out of `details` (the column IS the record).
+    pub fn set_notes(
+        &self,
+        task_id: i64,
+        notes: &str,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<()> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let now = Self::now();
+        let task: Task = self
+            .conn
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                [task_id],
+                Self::task_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
+
+        self.conn
+            .execute(
+                "UPDATE tasks SET notes = ?1, updated_at = ?2 WHERE id = ?3",
+                params![notes, now, task_id],
+            )?;
+
+        let describe = |t: &str| {
+            let n = t.lines().count();
+            if n == 0 {
+                "empty".to_string()
+            } else {
+                format!("{n} line{}", if n == 1 { "" } else { "s" })
+            }
+        };
+        let changes = format!("notes: {} -> {}", describe(&task.notes), describe(notes));
+        let message = message
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| format!("update notes for {}", task.task_key));
+        self.log(
+            "task",
+            task_id,
+            "UPDATE",
+            &message,
+            &format!("{{\"changes\": \"{changes}\"}}"),
+            Some(user),
+        )?;
+        Ok(())
     }
 
     // ------------------------------------------------------------------
@@ -651,8 +737,9 @@ impl Lun {
             assignee: r.get(6)?,
             branch: r.get(7)?,
             labels: r.get(8)?,
-            created_at: r.get(9)?,
-            updated_at: r.get(10)?,
+            notes: r.get(9)?,
+            created_at: r.get(10)?,
+            updated_at: r.get(11)?,
         })
     }
 
@@ -675,8 +762,14 @@ impl Lun {
         let now = Self::now();
         let task: Task = self
             .conn
-            .query_row("SELECT * FROM tasks WHERE id = ?1", [task_id], Self::task_from_row)
-            .map_err(|e| DbError::new("not-found", format!("task {}: {}", task_id, e)))?;
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                [task_id],
+                Self::task_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
 
         self.conn.execute(
             "INSERT INTO attachments (task_id, filename, stored_path, created_at)

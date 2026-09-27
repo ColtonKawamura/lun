@@ -537,10 +537,20 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
         t.task_key
     ));
     out.push_str("\nNotes:\n");
-    out.push_str(&format!(
-        "- (add notes with `lun task edit {}`)",
-        t.task_key
-    ));
+    // Phase 7: notes are real data (TUI-editable). Show the saved text
+    // when present; otherwise the add-hint (editing still lands with a
+    // later CLI phase — the TUI edits them today).
+    if t.notes.trim().is_empty() {
+        out.push_str(&format!(
+            "- (add notes with `lun task edit {}`)",
+            t.task_key
+        ));
+    } else {
+        for line in t.notes.lines() {
+            out.push_str(&format!("- {line}\n"));
+        }
+    }
+    out.push('\n');
     out.push_str("\nAttachments:\n");
     let attachments = app.lun.attachments_for_task(t.id)?;
     if attachments.is_empty() {
@@ -621,7 +631,9 @@ pub fn attachments_root(root: &Path) -> PathBuf {
 
 /// Copy `src` into `<root>/.lun/attachments/`, suffixing the file name
 /// (`-2`, `-3`, ...) on collision. Returns the destination path.
-fn copy_into_attachments(root: &Path, src: &Path) -> Result<PathBuf> {
+/// `pub(crate)` so the TUI's drop/paste attach (Phase 7) reuses the exact
+/// same collision-suffixed copy semantics.
+pub(crate) fn copy_into_attachments(root: &Path, src: &Path) -> Result<PathBuf> {
     let dir = attachments_root(root);
     std::fs::create_dir_all(&dir)
         .map_err(|e| DbError::new("io", format!("creating {}: {e}", dir.display())))?;

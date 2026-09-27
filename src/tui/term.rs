@@ -39,7 +39,7 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
         None,
     )
     .map_err(|e| e.to_string())?;
-    let mut app = App::new(data);
+    let mut app = App::with_store(data, root.to_path_buf(), lun);
 
     let mut terminal =
         Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
@@ -82,6 +82,12 @@ fn run_loop(
             match event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     handle_key(app, &key);
+                }
+                // Phase 7: drag-and-drop. macOS terminals (and most
+                // others) deliver a dropped file as a bracketed paste of
+                // its absolute path — this is the drop event.
+                Ok(Event::Paste(text)) => {
+                    app.attach_dropped_file(&text);
                 }
                 // Resize and everything else: the next repaint picks up
                 // the new size.
@@ -155,14 +161,15 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
                 app.notes_type(c)
             }
-            // Ctrl-S: save the note (Phase 6 keeps the draft in memory;
-            // persistence + commit lands in Phase 7 — see docs/phase7).
+            // Ctrl-S: save the notes draft to the DB (Phase 7), with the
+            // default commit message filled in for the current task.
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
-                app.notes_dirty = false;
-                app.message = Some((
-                    "note saved (draft — DB persistence lands in Phase 7)".to_string(),
-                    false,
-                ));
+                let key = app.current_task().map(|t| t.task_key.clone());
+                let msg = match key {
+                    Some(k) => format!("save notes for {k}"),
+                    None => "save notes".to_string(),
+                };
+                app.save_notes_draft(Some(&msg));
             }
             _ => {}
         }
