@@ -127,6 +127,7 @@ fn print_help() {
     println!("  lun attach task <T-00N|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");
     println!("  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link");
     println!("  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`");
+    println!("  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)");
     println!("  lun --version             Print version");
     println!("  lun --help                Print this help");
     println!();

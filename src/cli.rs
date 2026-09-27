@@ -802,6 +802,90 @@ pub fn open_link(app: &App, kind: &str, query: &str, label: &str) -> Result<Stri
     Ok(format!("Opened: {uri}"))
 }
 
+/// `lun open-uri <uri> [--on task|project <key|title>]` — hand an arbitrary
+/// URI to macOS `open` (Phase 8: the nvim plugin's ⌘⇧L goes through this,
+/// so the open path — and the optional LINK_OPENED log — live in lun, not
+/// in the plugin).
+///
+/// With `--on <kind> <key|title>`, a `LINK_OPENED` log entry is written on
+/// that entity (message `open link "<uri>"`, details `{"uri": ...}`).
+pub fn open_uri(app: &App, args: &[String]) -> Result<String> {
+    let mut uri: Option<&str> = None;
+    let mut on: Option<(String, String)> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--on" => {
+                let kind = args
+                    .get(i + 1)
+                    .ok_or_else(|| DbError::new("usage", "`--on` needs <task|project>"))?
+                    .clone();
+                if kind != "task" && kind != "project" {
+                    return Err(DbError::new(
+                        "usage",
+                        format!("invalid --on kind '{kind}' (expected task or project)"),
+                    ));
+                }
+                let q = args.get(i + 2).ok_or_else(|| {
+                    DbError::new("usage", "`--on <task|project>` needs a <key|title>")
+                })?;
+                on = Some((kind, q.clone()));
+                i += 3;
+            }
+            other if uri.is_none() => {
+                uri = Some(other);
+                i += 1;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected argument '{other}' (expected: lun open-uri <uri> [--on <task|project> <key|title>])"),
+                ));
+            }
+        }
+    }
+    let Some(uri) = uri else {
+        return Err(DbError::new(
+            "usage",
+            "expected: lun open-uri <uri> [--on <task|project> <key|title>]",
+        ));
+    };
+
+    let status = std::process::Command::new("open")
+        .arg(uri)
+        .status()
+        .map_err(|e| DbError::new("io", format!("spawning `open`: {e}")))?;
+    if !status.success() {
+        return Err(DbError::new("io", format!("`open {uri}` exited with {status}")));
+    }
+
+    match on {
+        Some((kind, q)) => {
+            let (entity_type, entity_id, key) = match kind.as_str() {
+                "task" => {
+                    let t = resolve_task(&app.lun, &q)?;
+                    ("task", t.id, t.task_key)
+                }
+                "project" => {
+                    let p = resolve_project(&app.lun, &q)?;
+                    ("project", p.id, p.project_key)
+                }
+                _ => unreachable!("kind validated above"),
+            };
+            app.lun.log(
+                entity_type,
+                entity_id,
+                "LINK_OPENED",
+                &format!("open link \"{uri}\""),
+                &format!("{{\"uri\": \"{uri}\"}}"),
+                None,
+            )?;
+            Ok(format!("Opened: {uri} (logged LINK_OPENED on {key})"))
+        }
+        None => Ok(format!("Opened: {uri}")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Interactive task creation
 // ---------------------------------------------------------------------------
@@ -985,6 +1069,7 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
                 "expected: lun open-link <task|project> <key|title> <label>",
             )),
         },
+        Some("open-uri") => open_uri(app, &args[1..].to_vec()),
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),
