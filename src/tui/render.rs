@@ -31,6 +31,8 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         View::Status => paint_status(buf, content, app),
         View::Board => paint_board(buf, content, app),
         View::Project => paint_project(buf, content, app),
+        View::Task => paint_task(buf, content, app),
+        View::Log => paint_log(buf, content, app),
         View::Help => paint_help(buf, content),
         View::Placeholder => paint_placeholder(buf, content, app),
     }
@@ -50,13 +52,32 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         &"-".repeat(area.width as usize),
         Style::default().fg(t::MAGENTA),
     );
-    put(buf, area.left(), prompt_y, t::PROMPT, Style::default().fg(t::PURPLE));
+    put(
+        buf,
+        area.left(),
+        prompt_y,
+        t::PROMPT,
+        Style::default().fg(t::PURPLE),
+    );
+    // Hint text depends on mode (Phase 6): insert mode advertises the
+    // note-editing keys; the statusline shows its own prompt + query.
+    let hint: String = if app.statusline_open {
+        format!("status {}", app.statusline_query)
+    } else if app.mode == super::app::Mode::Insert {
+        "inserting note — esc back to normal, ctrl-s to save (Phase 7)".to_string()
+    } else {
+        " type \"/\" for commands, \":\" for quick actions, \"q\" to quit".to_string()
+    };
     put(
         buf,
         area.left() + 2,
         prompt_y,
-        " type \"/\" for commands, \":\" for quick actions, \"q\" to quit",
-        Style::default().fg(t::DIM),
+        hint.as_str(),
+        Style::default().fg(if app.mode == super::app::Mode::Insert {
+            t::CYAN
+        } else {
+            t::DIM
+        }),
     );
 
     if app.palette_open {
@@ -435,16 +456,17 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 9] = [
+    let rows: [(&str, &str); 10] = [
         ("/", "open the command palette"),
-        ("j / k", "navigate lists (project view)"),
+        (":", "quick action line — :status <project|task>"),
+        ("j / k", "navigate lists (projects, tasks)"),
         ("enter", "select (project view: set current project)"),
-        ("esc", "close the palette"),
+        ("t", "open the current task's detail view"),
+        ("i / e", "edit the current task's notes (task view; Esc back, Ctrl-S save)"),
+        ("esc", "close the palette / statusline, back to normal mode"),
         ("q", "quit lun"),
-        ("/status", "global status (projects + all tasks)"),
-        ("/board", "kanban board for the current project"),
-        ("/project", "select or view a project"),
-        ("…", "/task, /new-task, /log, /config arrive in later phases"),
+        ("/task /log", "/task <T-00N|title>, /log <project|task>"),
+        ("…", "/new-task, /config, drag-and-drop arrive in Phase 7+"),
     ];
     for (key, desc) in rows {
         if y >= area.bottom() {
@@ -545,5 +567,322 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
             &format!("(no command matches \"/{}\")", app.palette_query),
             Style::default().fg(t::ERROR),
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: task view & log view
+// ---------------------------------------------------------------------------
+
+/// One label/value row of the task view: dim label at x, styled value after.
+fn task_field(buf: &mut Buffer, x: u16, y: u16, label: &str, value: &str, value_style: Style) {
+    put(buf, x, y, label, Style::default().fg(t::DIM));
+    put(
+        buf,
+        x.saturating_add(label.chars().count() as u16),
+        y,
+        value,
+        value_style,
+    );
+}
+
+fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str) -> u16 {
+    put(buf, x, y, text, Style::default().fg(t::CYAN).add_modifier(Modifier::BOLD));
+    y + 1
+}
+
+/// Task detail view (docs/plan.md Phase 6 "Task View and Logs"): fields,
+/// checklist, notes (with the insert-mode draft), attachments, links, and
+/// history. History lines are the CLI's exact formatting
+/// (`cli::task_view_entry_lines`), rendered here with per-line styles.
+fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
+    let Some(task) = app.current_task() else {
+        put(buf, area.left(), area.top(), "no task selected", Style::default().fg(t::DIM));
+        return;
+    };
+    let x = area.left();
+    let mut y = area.top();
+    let bottom = area.bottom();
+
+    let header = format!("Task {}", task.task_key);
+    put(buf, x, y, &header, Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD));
+    y += 1;
+    put(
+        buf,
+        x,
+        y,
+        &"=".repeat(header.chars().count()),
+        Style::default().fg(t::MAGENTA),
+    );
+    y += 2;
+    if y >= bottom {
+        return;
+    }
+
+    // Project name via snapshot lookup (DB-free).
+    let project_name = task
+        .project_id
+        .and_then(|pid| app.data.projects.iter().find(|p| p.id == pid))
+        .map(|p| p.name.as_str())
+        .unwrap_or("Unassigned");
+    task_field(buf, x, y, "Project:   ", project_name, Style::default().fg(t::TEXT));
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(buf, x, y, "Title:     ", &task.title, Style::default().fg(t::TEXT));
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(
+        buf,
+        x,
+        y,
+        "Status:    ",
+        &task.status,
+        t::status_style(&task.status),
+    );
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(buf, x, y, "Priority:  ", &task.priority, Style::default().fg(t::TEXT));
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(
+        buf,
+        x,
+        y,
+        "Assignee:  ",
+        task.assignee.as_deref().unwrap_or_default(),
+        Style::default().fg(t::TEXT),
+    );
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(buf, x, y, "Branch:    ", task.branch.as_deref().unwrap_or_default(), Style::default().fg(t::CYAN));
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    task_field(
+        buf,
+        x,
+        y,
+        "Created:   ",
+        &crate::cli::display_ts(&task.created_at),
+        Style::default().fg(t::DIM),
+    );
+    y += 2;
+    if y >= bottom {
+        return;
+    }
+
+    y = task_section(buf, x, y, "Checklist:");
+    if y >= bottom {
+        return;
+    }
+    put(buf, x, y, "- [ ] (add checklist items with /new-task — planned Phase 7)", Style::default().fg(t::DIM));
+    y += 2;
+    if y >= bottom {
+        return;
+    }
+
+    y = task_section(buf, x, y, "Notes:");
+    if y >= bottom {
+        return;
+    }
+    let editing = app.mode == super::app::Mode::Insert;
+    if editing {
+        let notes = app.notes_draft.lines().chain(std::iter::once(""));
+        for line in notes {
+            if y >= bottom {
+                return;
+            }
+            put(buf, x, y, "- ", Style::default().fg(t::DIM));
+            put(buf, x + 2, y, line, Style::default().fg(t::TEXT));
+            y += 1;
+        }
+    } else if !app.notes_draft.is_empty() {
+        // Unsaved draft from a previous insert session is shown as text.
+        for line in app.notes_draft.lines() {
+            if y >= bottom {
+                return;
+            }
+            put(buf, x, y, "- ", Style::default().fg(t::DIM));
+            put(buf, x + 2, y, line, Style::default().fg(t::TEXT));
+            y += 1;
+        }
+    } else {
+        put(buf, x, y, "- (add notes with 'e' in the task view)", Style::default().fg(t::DIM));
+        y += 1;
+    }
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+
+    y = task_section(buf, x, y, "Attachments:");
+    if y >= bottom {
+        return;
+    }
+    let attachments = app.data.attachments_for_task(task.id);
+    if attachments.is_empty() {
+        put(
+            buf,
+            x,
+            y,
+            "- (drag a file into the TUI to attach one — Phase 7)",
+            Style::default().fg(t::DIM),
+        );
+    } else {
+        for a in attachments {
+            if y >= bottom {
+                return;
+            }
+            put(buf, x, y, &format!("- {} ({})", a.filename, a.stored_path), Style::default().fg(t::TEXT));
+            y += 1;
+        }
+    }
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+
+    y = task_section(buf, x, y, "Links:");
+    if y >= bottom {
+        return;
+    }
+    let links = app.data.links_for_task(task.id);
+    if links.is_empty() {
+        put(buf, x, y, "- (none)", Style::default().fg(t::DIM));
+    } else {
+        for l in links {
+            if y >= bottom {
+                return;
+            }
+            // Markdown-style link, rendered label cyan / uri dim.
+            put(buf, x, y, &format!("- [{}] ", l.label), Style::default().fg(t::CYAN));
+            let lx = x + 2 + (l.label.chars().count() as u16) + 1;
+            put(buf, lx, y, &l.uri, Style::default().fg(t::DIM));
+            y += 1;
+        }
+    }
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+
+    y = task_section(buf, x, y, "History:");
+    if y >= bottom {
+        return;
+    }
+    for entry in app.data.logs_for_task(task.id) {
+        for line in crate::cli::task_view_entry_lines(entry) {
+            if y >= bottom {
+                return;
+            }
+            // First line of an entry: timestamp (dim) + user (lavender) +
+            // ACTION (bold purple); the remainder renders as detail text.
+            let style = if line.starts_with('-') {
+                Style::default().fg(t::DIM)
+            } else {
+                Style::default().fg(t::DIM)
+            };
+            put(buf, x, y, &line, style);
+            y += 1;
+        }
+    }
+}
+
+/// Log view (docs/plan.md Phase 6): `Log: Task T-00N "title"` or
+/// `Log: <project>` with the CLI's exact per-entity lines.
+fn paint_log(buf: &mut Buffer, area: Rect, app: &App) {
+    let x = area.left();
+    let bottom = area.bottom();
+    let mut y = area.top();
+
+    let (header, entries, is_project) = match &app.log_subject {
+        None => {
+            put(buf, x, y, "no log subject — use /log <project|task>", Style::default().fg(t::DIM));
+            return;
+        }
+        Some(super::data::LogSubject::Task(i)) => {
+            let t = match app.data.tasks.get(*i) {
+                Some(t) => t,
+                None => {
+                    put(buf, x, y, "task vanished", Style::default().fg(t::ERROR));
+                    return;
+                }
+            };
+            (
+                format!("Log: Task {} \"{}\"", t.task_key, t.title),
+                app.data.logs_for_task(t.id),
+                false,
+            )
+        }
+        Some(super::data::LogSubject::Project(i)) => {
+            let p = match app.data.projects.get(*i) {
+                Some(p) => p,
+                None => {
+                    put(buf, x, y, "project vanished", Style::default().fg(t::ERROR));
+                    return;
+                }
+            };
+            (
+                format!("Log: {}", p.name),
+                app.data.project_log_entries(p.id),
+                true,
+            )
+        }
+    };
+
+    put(buf, x, y, &header, Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD));
+    y += 1;
+    if y >= bottom {
+        return;
+    }
+    put(
+        buf,
+        x,
+        y,
+        &"=".repeat(header.chars().count()),
+        Style::default().fg(t::MAGENTA),
+    );
+    y += 1;
+
+    if entries.is_empty() {
+        put(buf, x, y, "(no log entries)", Style::default().fg(t::DIM));
+        return;
+    }
+    for entry in entries {
+        let lines = if is_project {
+            crate::cli::project_log_entry_lines(entry)
+        } else {
+            crate::cli::task_log_entry_lines(entry)
+        };
+        for (n, line) in lines.iter().enumerate() {
+            if y + 1 >= bottom {
+                return;
+            }
+            if n == 0 {
+                // Header line: leading timestamp dim, rest plain.
+                put(buf, x, y, line, Style::default().fg(t::DIM));
+            } else if line.trim_start().starts_with("Commit:") {
+                put(buf, x, y, line, Style::default().fg(t::TEXT));
+            } else if line.trim_start().starts_with("Note:") {
+                put(buf, x, y, line, Style::default().fg(t::CYAN));
+            } else {
+                put(buf, x, y, line, Style::default().fg(t::DIM));
+            }
+            y += 1;
+        }
+        if y + 1 >= bottom {
+            return;
+        }
     }
 }

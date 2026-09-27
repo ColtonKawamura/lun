@@ -98,18 +98,24 @@ fn run_loop(
 
 /// Pure key dispatch — the whole keyboard map of the TUI in one place.
 ///
-/// Palette (open): printable chars filter, j/k/arrows move, Enter runs,
-/// Esc closes. Outside the palette: `/` opens the palette, `q` quits, and
-/// in the project view j/k/Enter navigate and select.
+/// Palette (open): printable chars filter (j/k are typed, so command
+/// lines like `/task T-001` work), arrows move, Enter runs, Esc closes. Statusline (open): printable chars append, Backspace
+/// removes, Enter runs, Esc closes. Insert mode: typing appends to the
+/// notes draft, Enter is a newline, Esc returns to normal mode. Outside
+/// all of that (normal mode): `/` opens the palette, `:` opens the
+/// statusline, `q` quits, `t` opens the current task, and in the
+/// project view j/k/Enter navigate and select.
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.palette_open {
+        // Note: in the palette j/k are TYPED, not navigation — command
+        // lines like `/task T-001` contain them. Arrow keys navigate.
         match key.code {
             KeyCode::Esc => app.palette_open = false,
             KeyCode::Enter => app.run_command(app.palette_selected),
-            KeyCode::Up | KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE => {
+            KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
                 app.palette_up()
             }
-            KeyCode::Down | KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => {
+            KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
                 app.palette_down()
             }
             KeyCode::Backspace => app.palette_backspace(),
@@ -121,15 +127,74 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
         return;
     }
 
+    if app.statusline_open {
+        match key.code {
+            KeyCode::Esc => {
+                app.statusline_open = false;
+                app.statusline_query.clear();
+            }
+            KeyCode::Enter => {
+                app.run_statusline()
+            }
+            KeyCode::Backspace => {
+                app.statusline_query.pop();
+            }
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
+                app.statusline_query.push(c)
+            }
+            _ => {}
+        }
+        return;
+    }
+
+    if app.mode == super::app::Mode::Insert {
+        match key.code {
+            KeyCode::Esc => app.exit_insert(),
+            KeyCode::Enter => app.notes_newline(),
+            KeyCode::Backspace => app.notes_backspace(),
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
+                app.notes_type(c)
+            }
+            // Ctrl-S: save the note (Phase 6 keeps the draft in memory;
+            // persistence + commit lands in Phase 7 — see docs/phase7).
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                app.notes_dirty = false;
+                app.message = Some((
+                    "note saved (draft — DB persistence lands in Phase 7)".to_string(),
+                    false,
+                ));
+            }
+            _ => {}
+        }
+        return;
+    }
+
     match key.code {
         KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
+        KeyCode::Char(':') if key.modifiers == KeyModifiers::NONE => {
+            app.statusline_open = true;
+            app.statusline_query.clear();
+        }
         KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => app.quit = true,
-        KeyCode::Char('j') if app.view == View::Project && key.modifiers == KeyModifiers::NONE => {
-            app.project_nav(1, false)
+        KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => app.open_current_task(),
+        KeyCode::Char('e') if key.modifiers == KeyModifiers::NONE && app.view == View::Task => {
+            app.enter_notes_edit()
         }
-        KeyCode::Char('k') if app.view == View::Project && key.modifiers == KeyModifiers::NONE => {
-            app.project_nav(-1, false)
+        // `i` (vim insert): same as `e` in the task view — notes editing.
+        KeyCode::Char('i') if key.modifiers == KeyModifiers::NONE && app.view == View::Task => {
+            app.enter_notes_edit()
         }
+        // `h`/`l` are reserved horizontal vim motions: lun's views are
+        // vertical, so they are no-ops (the plan keeps the keymap vim-shaped).
+        KeyCode::Char('h') | KeyCode::Char('l') if key.modifiers == KeyModifiers::NONE => {}
+        KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => match app.view {
+            View::Project => app.project_nav(1, false),
+            _ => app.task_nav(1),
+        },
+        KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE => match app.view {
+            View::Project => app.project_nav(-1, false),
+            _ => app.task_nav(-1),
+        },
         KeyCode::Enter if app.view == View::Project => app.project_nav(0, true),
         _ => {}
     }
