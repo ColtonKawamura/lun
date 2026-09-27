@@ -213,7 +213,8 @@ pub fn render_table(headers: &[&str], rows: &[Vec<String>]) -> String {
 }
 
 /// `2026-09-25T16:45:00Z` (UTC, as stored) -> `2026-09-25 16:45` (display).
-fn display_ts(ts: &str) -> String {
+/// `pub` so the TUI (Phase 6) renders timestamps identically to the CLI.
+pub fn display_ts(ts: &str) -> String {
     let t = ts.replace('T', " ");
     t.chars().take(16).collect()
 }
@@ -306,7 +307,7 @@ fn task_row(lun: &Lun, t: &Task, with_project: bool) -> Vec<String> {
 
 /// One compact detail line (or none) for a log entry, used where the plan
 /// shows a single `Status: ...` line under the entry.
-fn entry_inline_details(entry: &LogEntry) -> Option<String> {
+pub(crate) fn entry_inline_details(entry: &LogEntry) -> Option<String> {
     if let Some(changes) = json_str(&entry.details, "changes") {
         let parts: Vec<String> = changes
             .split(", ")
@@ -331,8 +332,9 @@ fn entry_inline_details(entry: &LogEntry) -> Option<String> {
 
 /// History lines for `lun task` (plan "Viewing a task" format):
 /// `- <ts>  <user>  <ACTION>` + compact detail + `Commit:` (COMMENT entries
-/// carry a `Note:` instead).
-fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
+/// carry a `Note:` instead). `pub` so the TUI's task view (Phase 6) renders
+/// the identical history.
+pub fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
     let mut lines = vec![format!(
         "- {}  {}  {}",
         display_ts(&entry.timestamp),
@@ -362,8 +364,9 @@ fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
 /// Full detail lines for `lun log <task>` (plan "Logs for tasks" format):
 /// no bullet; CREATE expands Project/Status/Priority, UPDATE a
 /// `Field changes:` block, COMMENT a note, ATTACH the filename; most end
-/// with the `Commit:` line.
-fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
+/// with the `Commit:` line. `pub` so the TUI's log view (Phase 6) renders
+/// the identical lines.
+pub fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
     let mut lines = vec![format!(
         "{}  {}  {}",
         display_ts(&entry.timestamp),
@@ -409,7 +412,8 @@ fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
 
 /// Lines for `lun log <project>` (plan "Logs for projects" format): the
 /// commit message IS the line, with a compact detail line under it.
-fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
+/// `pub` so the TUI's log view (Phase 6) renders the identical lines.
+pub fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
     let mut lines = vec![format!(
         "{}  {}  {}",
         display_ts(&entry.timestamp),
