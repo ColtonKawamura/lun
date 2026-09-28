@@ -10,30 +10,49 @@ is a human-facing view rendered from the DB.
 
 ## Status
 
-Phases 1–8 of [docs/plan.md](docs/plan.md) are implemented:
+All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
 - DB layer + core CLI (`status`, `proj add task`, `task`, `log`)
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
   views, task detail with vim-style keys, in-TUI logs
+  ([docs/tui.md](docs/tui.md))
 - Drag-and-drop file attachments into the TUI (paste a path) and notes
   editing with log-on-write (`e`/`i` to edit, `Esc` to save)
+- PRs & git glue (`lun pr new|show|ls|merge`): GitHub-style PRs over tasks,
+  with optional best-effort `git merge` when the CWD is on the target branch
 - nvim plugin: `:Lun` and `⌘⇧L` to open the link under the cursor
   ([docs/nvim.md](docs/nvim.md))
-
-Phases 9 (PRs/git glue) and 10 (packaging/docs) remain.
 
 ## Quick start
 
 ```sh
-cargo build --release        # binary lands at target/release/lun
-lun init                     # create .lun/lun.db in the current directory
-lun status                   # projects + tasks overview
-lun                          # full-screen TUI (when run in a terminal)
+make                      # release build -> target/release/lun
+lun init                  # create .lun/lun.db in the current directory
+lun status                # projects + tasks overview
+lun                       # full-screen TUI (when run in a terminal)
 ```
 
-`lun --help` lists all CLI commands. Schema reference:
-[docs/schema.md](docs/schema.md).
+`lun --help` lists all CLI commands.
+
+## Install
+
+```sh
+make install              # -> ~/.local/bin/lun
+make uninstall            # remove it
+```
+
+Point `PREFIX` elsewhere (`make install PREFIX=/usr/local`). The release
+binary is stripped; `rusqlite` ships its own SQLite (no system library
+needed). A future Homebrew tap is on the roadmap.
+
+## Docs
+
+- [docs/plan.md](docs/plan.md) — the phase-by-phase plan
+- [docs/architecture.md](docs/architecture.md) — design notes
+- [docs/schema.md](docs/schema.md) — SQLite schema (v1→v3) reference
+- [docs/tui.md](docs/tui.md) — TUI views & keybindings
+- [docs/nvim.md](docs/nvim.md) — the nvim plugin
 
 ## nvim
 
