@@ -70,11 +70,12 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
 /// The event loop: poll with a short timeout, dispatch, repaint.
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> i32 {
     let repaint = |terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-                   app: &App|
+                   app: &mut App|
      -> Result<(), std::io::Error> {
         terminal
             .draw(|f| {
                 let size = f.size();
+                app.update_layout_metrics(size.height);
                 render::paint(f.buffer_mut(), size, app);
             })
             .map(|_| ())

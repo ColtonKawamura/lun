@@ -274,11 +274,11 @@ fn paint_output(buf: &mut Buffer, area: Rect, app: &App) {
         Style::default().fg(t::CYAN),
     );
     y += 2;
-    let lines: Vec<&str> = output.text.lines().collect();
     let max_rows = area.bottom().saturating_sub(y) as usize;
-    let start = app.output_scroll.min(lines.len().saturating_sub(max_rows));
+    let total_lines = output.text.lines().count();
+    let start = app.output_scroll.min(total_lines.saturating_sub(max_rows));
     let fg = if output.is_error { t::ERROR } else { t::TEXT };
-    for line in lines.into_iter().skip(start).take(max_rows) {
+    for line in output.text.lines().skip(start).take(max_rows) {
         put(buf, area.left(), y, line, Style::default().fg(fg));
         y += 1;
         if y >= area.bottom() {

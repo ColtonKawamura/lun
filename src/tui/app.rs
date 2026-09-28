@@ -212,6 +212,7 @@ pub struct App {
     pub palette_selected: usize,
     pub output: Option<CommandOutput>,
     pub output_scroll: usize,
+    pub output_page_rows: usize,
     pub prompt_session: Option<PromptSession>,
     pub project_selected: usize,
     /// Task list selection; doubles as the "current task" for the task
@@ -259,6 +260,7 @@ impl App {
             palette_selected: 0,
             output: None,
             output_scroll: 0,
+            output_page_rows: 5,
             prompt_session: None,
             project_selected: 0,
             task_selected: 0,
@@ -1234,6 +1236,9 @@ impl App {
 
     pub fn palette_backspace(&mut self) {
         self.palette_query.pop();
+        if self.prompt_session.is_some() {
+            return;
+        }
         let n = self.command_suggestions().len();
         if n == 0 {
             self.palette_selected = 0;
@@ -1328,7 +1333,7 @@ impl App {
 
     pub fn page_nav(&mut self, dir: i32) {
         match self.view {
-            View::Output => self.output_scroll_by(dir * 5),
+            View::Output => self.output_scroll_by(dir * self.output_page_rows.max(1) as i32),
             View::Project => self.project_nav(dir * 5, false),
             _ => self.task_nav(dir * 5),
         }
@@ -1337,6 +1342,10 @@ impl App {
     pub fn output_scroll_by(&mut self, dir: i32) {
         let current = self.output_scroll as i32;
         self.output_scroll = (current + dir).max(0) as usize;
+    }
+
+    pub fn update_layout_metrics(&mut self, total_height: u16) {
+        self.output_page_rows = total_height.saturating_sub(5).max(1) as usize;
     }
 
     pub fn task_focus_next(&mut self) {
