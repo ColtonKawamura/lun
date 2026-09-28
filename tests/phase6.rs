@@ -440,6 +440,16 @@ fn leader_space_f_g_opens_text_grep_finder() {
 }
 
 #[test]
+fn slash_prefixed_query_runs_status_in_tui_palette() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    open_palette_and_run(&mut app, "/paper-stack");
+    let out = app.output.as_ref().unwrap();
+    assert!(!out.is_error, "{}", out.text);
+    assert!(out.text.contains("Project: paper-stack"), "{}", out.text);
+}
+
+#[test]
 fn command_bracket_shortcuts_navigate_screen_history() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);

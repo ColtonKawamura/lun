@@ -1223,7 +1223,10 @@ impl App {
             return;
         }
         let args = match crate::cli::split_command_line(&line) {
-            Ok(args) => self.normalize_command_args(args),
+            Ok(args) => {
+                let args = crate::cli::normalize_invocation_args(args);
+                self.normalize_command_args(args)
+            }
             Err(e) => {
                 self.output = Some(CommandOutput {
                     command: line.clone(),

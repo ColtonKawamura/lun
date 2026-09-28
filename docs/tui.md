@@ -8,6 +8,7 @@
 Press `/` or `:` to open the bottom command prompt. Inside that prompt, type
 the same commands you would run in the shell, but **without** the leading
 `lun`.
+As a shortcut, `/<name-or-key>` runs `status <name-or-key>`.
 
 Examples:
 
