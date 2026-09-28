@@ -1480,11 +1480,11 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "History:", false);
+    y = task_section(buf, x, y, "Last Commit:", false);
     if y >= bottom {
         return;
     }
-    for entry in app.data.logs_for_task(task.id) {
+    if let Some(entry) = app.data.logs_for_task(task.id).into_iter().next() {
         for line in crate::cli::task_view_entry_lines(entry) {
             if y >= bottom {
                 return;
@@ -1499,6 +1499,8 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             put(buf, x, y, &line, style);
             y += 1;
         }
+    } else {
+        put(buf, x, y, "- (none)", Style::default().fg(t::DIM));
     }
 }
 

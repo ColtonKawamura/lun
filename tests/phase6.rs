@@ -549,12 +549,10 @@ fn task_view_renders_fields_notes_and_history() {
     assert!(s.contains("mock.png"));
     assert!(s.contains("Links:"));
     assert!(s.contains("obsidian"));
-    assert!(s.contains("History:"));
-    // History contains the CLI-format CREATE line and the COMMENT note.
-    // (The DB records action "CREATE" for task creation — the TUI renders
-    // the exact CLI formatting, so the test asserts the real action string.)
+    assert!(s.contains("Last Commit:"));
+    assert!(!s.contains("History:"));
+    // Task view shows only the latest CLI-format entry for the task.
     assert!(s.contains("me"));
-    assert!(s.contains("CREATE"));
     assert!(s.contains("COMMENT"));
     assert!(s.contains("Commit:"));
     assert!(s.contains("watch damping"));
