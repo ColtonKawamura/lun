@@ -311,7 +311,108 @@ impl Lun {
         Ok(Self { conn })
     }
 
+    pub fn schema_version(&self) -> Result<i64> {
+        self.conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM migrations",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    fn bootstrap_current_schema(conn: &Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE projects (
+                id          INTEGER PRIMARY KEY,
+                project_key TEXT NOT NULL UNIQUE,
+                name        TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'active'
+                           CHECK (status IN ('active', 'inactive')),
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL
+             );
+             CREATE TABLE tasks (
+                id          INTEGER PRIMARY KEY,
+                task_key    TEXT NOT NULL UNIQUE,
+                project_id  INTEGER REFERENCES projects(id),
+                title       TEXT NOT NULL,
+                status      TEXT NOT NULL DEFAULT 'todo'
+                           CHECK (status IN ('todo', 'doing', 'follow-up', 'blocked', 'done')),
+                priority    TEXT NOT NULL DEFAULT 'low'
+                           CHECK (priority IN ('low', 'med', 'high')),
+                assignee    TEXT,
+                branch      TEXT,
+                labels      TEXT NOT NULL DEFAULT '[]',
+                created_at  TEXT NOT NULL,
+                updated_at  TEXT NOT NULL,
+                notes       TEXT NOT NULL DEFAULT '',
+                archived_at TEXT
+             );
+             CREATE TABLE logs (
+                id          INTEGER PRIMARY KEY,
+                entity_type TEXT NOT NULL CHECK (entity_type IN ('project', 'task')),
+                entity_id   INTEGER NOT NULL,
+                timestamp   TEXT NOT NULL,
+                user        TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                message     TEXT NOT NULL,
+                details     TEXT NOT NULL DEFAULT '{}'
+             );
+             CREATE TABLE attachments (
+                id          INTEGER PRIMARY KEY,
+                task_id     INTEGER REFERENCES tasks(id),
+                project_id  INTEGER REFERENCES projects(id),
+                filename    TEXT NOT NULL,
+                stored_path TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                CHECK ((task_id IS NULL) <> (project_id IS NULL))
+             );
+             CREATE TABLE links (
+                id          INTEGER PRIMARY KEY,
+                task_id     INTEGER REFERENCES tasks(id),
+                project_id  INTEGER REFERENCES projects(id),
+                label       TEXT NOT NULL,
+                uri         TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                CHECK ((task_id IS NULL) <> (project_id IS NULL))
+             );
+             CREATE TABLE prs (
+                id            INTEGER PRIMARY KEY,
+                pr_key        TEXT NOT NULL UNIQUE,
+                task_id       INTEGER NOT NULL REFERENCES tasks(id),
+                source_branch TEXT NOT NULL,
+                target_branch TEXT NOT NULL,
+                status        TEXT NOT NULL DEFAULT 'open'
+                            CHECK (status IN ('open', 'merged')),
+                created_at    TEXT NOT NULL,
+                merged_at     TEXT
+             );
+             INSERT INTO projects (project_key, name, status, created_at, updated_at)
+             VALUES ('P-000', 'Unassigned', 'active',
+                     (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                     (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));
+             INSERT INTO logs (entity_type, entity_id, timestamp, user, action, message, details)
+             VALUES ('project', 1,
+                     (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                     'system', 'CREATE',
+                     'seed P-000 \"Unassigned\" project',
+                     '{\"seed\": true}');
+             INSERT INTO migrations (version, applied_at)
+                 VALUES (6, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+        )?;
+        Ok(())
+    }
+
     fn migrate(conn: &mut Connection) -> Result<()> {
+        let user_tables_before: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE type = 'table'
+                AND name != 'sqlite_sequence'",
+            [],
+            |r| r.get(0),
+        )?;
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS migrations (
                 version    INTEGER PRIMARY KEY,
@@ -327,9 +428,12 @@ impl Lun {
             )
             .unwrap_or(0);
 
-        if version < 1 {
-            conn.execute_batch(
-                "CREATE TABLE projects (
+        if version == 0 && user_tables_before == 0 {
+            Self::bootstrap_current_schema(conn)?;
+        } else {
+            if version < 1 {
+                conn.execute_batch(
+                    "CREATE TABLE projects (
                     id          INTEGER PRIMARY KEY,
                     project_key TEXT NOT NULL UNIQUE,
                     name        TEXT NOT NULL,
@@ -393,94 +497,94 @@ impl Lun {
                          'system', 'CREATE',
                          'seed P-000 \"Unassigned\" project',
                          '{\"seed\": true}');",
-            )?;
-        }
-
-        if version < 2 {
-            // Phase 7: tasks gain a `notes` column (free-form markdown,
-            // editable in the TUI; saved notes log UPDATE).
-            conn.execute_batch(
-                "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
-                 INSERT INTO migrations (version, applied_at)
-                     VALUES (2, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
-            )?;
-        }
-
-        if version < 3 {
-            // Phase 9: the `prs` table — lun's GitHub-style PRs. A PR is
-            // always about one task (task_id FK); source/target branches
-            // are recorded for the `git diff`/`git merge` glue.
-            conn.execute_batch(
-                "CREATE TABLE prs (
-                    id            INTEGER PRIMARY KEY,
-                    pr_key        TEXT NOT NULL UNIQUE,
-                    task_id       INTEGER NOT NULL REFERENCES tasks(id),
-                    source_branch TEXT NOT NULL,
-                    target_branch TEXT NOT NULL,
-                    status        TEXT NOT NULL DEFAULT 'open'
-                                CHECK (status IN ('open', 'merged')),
-                    created_at    TEXT NOT NULL,
-                    merged_at     TEXT
-                 );
-                 INSERT INTO migrations (version, applied_at)
-                     VALUES (3, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
-            )?;
-        }
-
-        if version < 4 {
-            conn.execute_batch(
-                "ALTER TABLE attachments RENAME TO attachments_v1;
-                CREATE TABLE attachments (
-                   id          INTEGER PRIMARY KEY,
-                   task_id     INTEGER REFERENCES tasks(id),
-                   project_id  INTEGER REFERENCES projects(id),
-                   filename    TEXT NOT NULL,
-                   stored_path TEXT NOT NULL,
-                   created_at  TEXT NOT NULL,
-                   CHECK ((task_id IS NULL) <> (project_id IS NULL))
-                );
-                INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
-                SELECT id, task_id, NULL, filename, stored_path, created_at
-                  FROM attachments_v1;
-                DROP TABLE attachments_v1;
-                INSERT INTO migrations (version, applied_at)
-                    VALUES (4, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
-            )?;
-        }
-
-        if version < 5 {
-            conn.execute_batch(
-                "ALTER TABLE tasks ADD COLUMN archived_at TEXT;
-                INSERT INTO migrations (version, applied_at)
-                    VALUES (5, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
-            )?;
-        }
-
-        if version < 6 {
-            let table_exists = |name: &str| -> Result<bool> {
-                let exists: i64 = conn.query_row(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
-                    [name],
-                    |r| r.get(0),
                 )?;
-                Ok(exists > 0)
-            };
-            let has_attachments = table_exists("attachments")?;
-            let has_links = table_exists("links")?;
-            let has_prs = table_exists("prs")?;
+            }
 
-            let mut sql = String::new();
-            if has_attachments {
-                sql.push_str("ALTER TABLE attachments RENAME TO attachments_v5;");
+            if version < 2 {
+                // Phase 7: tasks gain a `notes` column (free-form markdown,
+                // editable in the TUI; saved notes log UPDATE).
+                conn.execute_batch(
+                    "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
+                     INSERT INTO migrations (version, applied_at)
+                         VALUES (2, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                )?;
             }
-            if has_links {
-                sql.push_str("ALTER TABLE links RENAME TO links_v5;");
+
+            if version < 3 {
+                // Phase 9: the `prs` table — lun's GitHub-style PRs. A PR is
+                // always about one task (task_id FK); source/target branches
+                // are recorded for the `git diff`/`git merge` glue.
+                conn.execute_batch(
+                    "CREATE TABLE prs (
+                        id            INTEGER PRIMARY KEY,
+                        pr_key        TEXT NOT NULL UNIQUE,
+                        task_id       INTEGER NOT NULL REFERENCES tasks(id),
+                        source_branch TEXT NOT NULL,
+                        target_branch TEXT NOT NULL,
+                        status        TEXT NOT NULL DEFAULT 'open'
+                                    CHECK (status IN ('open', 'merged')),
+                        created_at    TEXT NOT NULL,
+                        merged_at     TEXT
+                     );
+                     INSERT INTO migrations (version, applied_at)
+                         VALUES (3, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                )?;
             }
-            if has_prs {
-                sql.push_str("ALTER TABLE prs RENAME TO prs_v5;");
+
+            if version < 4 {
+                conn.execute_batch(
+                    "ALTER TABLE attachments RENAME TO attachments_v1;
+                    CREATE TABLE attachments (
+                       id          INTEGER PRIMARY KEY,
+                       task_id     INTEGER REFERENCES tasks(id),
+                       project_id  INTEGER REFERENCES projects(id),
+                       filename    TEXT NOT NULL,
+                       stored_path TEXT NOT NULL,
+                       created_at  TEXT NOT NULL,
+                       CHECK ((task_id IS NULL) <> (project_id IS NULL))
+                    );
+                    INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
+                    SELECT id, task_id, NULL, filename, stored_path, created_at
+                      FROM attachments_v1;
+                    DROP TABLE attachments_v1;
+                    INSERT INTO migrations (version, applied_at)
+                        VALUES (4, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                )?;
             }
-            sql.push_str(
-                "ALTER TABLE projects RENAME TO projects_v5;
+
+            if version < 5 {
+                conn.execute_batch(
+                    "ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+                    INSERT INTO migrations (version, applied_at)
+                        VALUES (5, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                )?;
+            }
+
+            if version < 6 {
+                let table_exists = |name: &str| -> Result<bool> {
+                    let exists: i64 = conn.query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                        [name],
+                        |r| r.get(0),
+                    )?;
+                    Ok(exists > 0)
+                };
+                let has_attachments = table_exists("attachments")?;
+                let has_links = table_exists("links")?;
+                let has_prs = table_exists("prs")?;
+
+                let mut sql = String::new();
+                if has_attachments {
+                    sql.push_str("ALTER TABLE attachments RENAME TO attachments_v5;");
+                }
+                if has_links {
+                    sql.push_str("ALTER TABLE links RENAME TO links_v5;");
+                }
+                if has_prs {
+                    sql.push_str("ALTER TABLE prs RENAME TO prs_v5;");
+                }
+                sql.push_str(
+                    "ALTER TABLE projects RENAME TO projects_v5;
                 ALTER TABLE tasks RENAME TO tasks_v5;
                 CREATE TABLE projects (
                    id          INTEGER PRIMARY KEY,
@@ -568,38 +672,39 @@ impl Lun {
                        notes,
                        archived_at
                   FROM tasks_v5;",
-            );
-            if has_attachments {
-                sql.push_str(
-                   "INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
+                );
+                if has_attachments {
+                    sql.push_str(
+                       "INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
                     SELECT id, task_id, project_id, filename, stored_path, created_at
                       FROM attachments_v5;
                     DROP TABLE attachments_v5;",
-                );
-            }
-            if has_links {
-                sql.push_str(
-                    "INSERT INTO links (id, task_id, project_id, label, uri, created_at)
+                    );
+                }
+                if has_links {
+                    sql.push_str(
+                        "INSERT INTO links (id, task_id, project_id, label, uri, created_at)
                     SELECT id, task_id, project_id, label, uri, created_at
                       FROM links_v5;
                     DROP TABLE links_v5;",
-                );
-            }
-            if has_prs {
-                sql.push_str(
-                   "INSERT INTO prs (id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at)
+                    );
+                }
+                if has_prs {
+                    sql.push_str(
+                       "INSERT INTO prs (id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at)
                     SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
                       FROM prs_v5;
                     DROP TABLE prs_v5;",
+                    );
+                }
+                sql.push_str(
+                    "DROP TABLE tasks_v5;
+                    DROP TABLE projects_v5;
+                    INSERT INTO migrations (version, applied_at)
+                       VALUES (6, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
                 );
+                conn.execute_batch(&sql)?;
             }
-            sql.push_str(
-                "DROP TABLE tasks_v5;
-                DROP TABLE projects_v5;
-                INSERT INTO migrations (version, applied_at)
-                    VALUES (6, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
-            );
-            conn.execute_batch(&sql)?;
         }
 
         let version: i64 = conn.query_row(

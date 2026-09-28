@@ -13,6 +13,7 @@
 //! regression in the upgrade path fails here.
 
 use lun::Lun;
+use std::process::Command;
 
 fn temp_root(name: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -169,7 +170,7 @@ fn table_count(conn: &rusqlite::Connection, tables: &[&str]) -> i64 {
 #[test]
 fn fresh_init_reaches_current_schema_with_all_tables() {
     let root = temp_root("fresh");
-    let lun = Lun::init(&root).unwrap();
+    let _lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
     assert_eq!(schema_version(&conn), 6);
     assert_eq!(
@@ -210,7 +211,38 @@ fn fresh_init_reaches_current_schema_with_all_tables() {
         .unwrap();
     assert_eq!(task_cols, 1);
     assert_eq!(lun::db::CURRENT_VERSION, 6);
+    let migration_rows: i64 = conn
+        .query_row("SELECT COUNT(*) FROM migrations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        migration_rows, 1,
+        "fresh init should bootstrap directly to the current schema version"
+    );
     drop(conn);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn binary_init_in_empty_directory_creates_database() {
+    let root = temp_root("bin-init-empty");
+    let bin = env!("CARGO_BIN_EXE_lun");
+    let output = Command::new(bin)
+        .arg("init")
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(root.join(".lun/lun.db").exists());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("lun init: .lun/lun.db ready (schema v6)"),
+        "stdout:\n{stdout}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
