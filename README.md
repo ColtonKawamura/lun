@@ -85,10 +85,13 @@ zstyle ':completion:*' menu select
 
 ### bash (best effort)
 
-Source the script:
+Install and source the script (if you do not keep a local checkout, copy it to a stable path first):
 
 ```sh
-source /path/to/lun/completions/lun.bash
+mkdir -p ~/.bash_completion.d
+cp /path/to/lun/completions/lun.bash ~/.bash_completion.d/lun.bash
+echo 'source ~/.bash_completion.d/lun.bash' >> ~/.bashrc
+source ~/.bash_completion.d/lun.bash
 ```
 
 To cycle candidates with repeated Tab in bash, add:

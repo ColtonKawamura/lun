@@ -113,7 +113,10 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
     match tokens[0].as_str() {
         "status" => extend_unique(&mut out, ["--board"]),
         "new" => extend_unique(&mut out, ["--status", "--message"]),
-        "proj" | "project" => extend_unique(&mut out, ["--status", "--message"]),
+        "proj" | "project" if tokens.len() >= 2 => {
+            extend_unique(&mut out, ["--status", "--message"]);
+        }
+        "proj" | "project" => {}
         "task" => match tokens.get(1).map(String::as_str) {
             Some("ls") => {
                 extend_unique(
