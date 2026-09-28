@@ -16,11 +16,13 @@ use std::time::Duration;
 
 use crossterm::event::{
     self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
-    KeyModifiers,
+    KeyModifiers, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+    LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::terminal::Terminal;
@@ -62,22 +64,48 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
 
     enable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(
-        terminal.backend_mut(),
-        EnterAlternateScreen,
-        EnableBracketedPaste
-    )
-    .map_err(|e| e.to_string())?;
+    let supports_keyboard_enhancement = matches!(supports_keyboard_enhancement(), Ok(true));
+    if supports_keyboard_enhancement {
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            ),
+            EnableBracketedPaste
+        )
+        .map_err(|e| e.to_string())?;
+    } else {
+        execute!(
+            terminal.backend_mut(),
+            EnterAlternateScreen,
+            EnableBracketedPaste
+        )
+        .map_err(|e| e.to_string())?;
+    }
 
     let code = run_loop(&mut terminal, &mut app);
 
     disable_raw_mode().ok();
-    execute!(
-        terminal.backend_mut(),
-        DisableBracketedPaste,
-        LeaveAlternateScreen
-    )
-    .ok();
+    if supports_keyboard_enhancement {
+        execute!(
+            terminal.backend_mut(),
+            PopKeyboardEnhancementFlags,
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        )
+        .ok();
+    } else {
+        execute!(
+            terminal.backend_mut(),
+            DisableBracketedPaste,
+            LeaveAlternateScreen
+        )
+        .ok();
+    }
     let _ = terminal.flush();
     Ok(code)
 }
