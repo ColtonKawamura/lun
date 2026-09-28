@@ -30,6 +30,21 @@ use crate::db::Lun;
 use super::app::{App, View};
 use super::{data, render};
 
+fn accepts_text_input(key: &KeyEvent) -> Option<char> {
+    match key.code {
+        KeyCode::Char(c)
+            if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            Some(c)
+        }
+        _ => None,
+    }
+}
+
+fn accepts_shifted_shortcut(key: &KeyEvent) -> bool {
+    key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT
+}
+
 /// Run the TUI against `.lun/lun.db` in `root`. Restores the terminal on
 /// the way out; returns the process exit code.
 pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
@@ -133,7 +148,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Right => app.form_cycle(1),
             KeyCode::Backspace => app.form_backspace(),
             KeyCode::Enter => app.submit_form(),
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.form_type(c),
+            _ if accepts_text_input(key).is_some() => {
+                app.form_type(accepts_text_input(key).unwrap())
+            }
             _ => {}
         }
         return;
@@ -146,6 +163,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
         }
 
         match key.code {
+            KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
+                app.open_palette()
+            }
             KeyCode::Esc => {
                 if app.prompt_session.is_some()
                     || app.palette_vim_nav
@@ -157,8 +177,14 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
                 }
             }
             KeyCode::Enter => app.run_command(),
-            KeyCode::Up if key.modifiers == KeyModifiers::NONE => app.palette_up(),
-            KeyCode::Down if key.modifiers == KeyModifiers::NONE => app.palette_down(),
+            KeyCode::Up if key.modifiers == KeyModifiers::NONE && app.prompt_session.is_none() => {
+                app.history_prev()
+            }
+            KeyCode::Down
+                if key.modifiers == KeyModifiers::NONE && app.prompt_session.is_none() =>
+            {
+                app.history_next()
+            }
             KeyCode::Tab if key.modifiers == KeyModifiers::NONE => app.apply_selected_suggestion(),
             KeyCode::Backspace => app.palette_backspace(),
             KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
@@ -167,7 +193,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
                 app.palette_up()
             }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.palette_type(c),
+            _ if accepts_text_input(key).is_some() => {
+                app.palette_type(accepts_text_input(key).unwrap())
+            }
             _ => {}
         }
         return;
@@ -179,7 +207,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Esc => app.exit_insert(),
             KeyCode::Enter => app.notes_newline(),
             KeyCode::Backspace => app.notes_backspace(),
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.notes_type(c),
+            _ if accepts_text_input(key).is_some() => {
+                app.notes_type(accepts_text_input(key).unwrap())
+            }
             // Ctrl-S: save the notes draft to the DB (Phase 7), with the
             // default commit message filled in for the current task.
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
@@ -231,8 +261,8 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
 
     match key.code {
         KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
-        KeyCode::Char('?') if key.modifiers == KeyModifiers::NONE => app.enter_view(View::Help, ""),
-        KeyCode::Char(':') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
+        KeyCode::Char('?') if accepts_shifted_shortcut(key) => app.enter_view(View::Help, ""),
+        KeyCode::Char(':') if accepts_shifted_shortcut(key) => app.open_palette(),
         KeyCode::Esc | KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => app.go_back(),
         KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => app.quit = true,
         KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => app.open_current_task(),

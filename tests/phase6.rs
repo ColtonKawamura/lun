@@ -22,6 +22,10 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+}
+
 /// Render one frame of `app` at w×h and return the screen as lines of text.
 fn screen(app: &App, w: u16, h: u16) -> String {
     let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
@@ -770,6 +774,34 @@ fn new_project_form_creates_project_and_selects_it() {
         app.data.projects[app.data.current_project].project_key,
         "P-002"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn new_task_form_accepts_shifted_printable_input_and_esc_cancels() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+    let starting_tasks = app.data.tasks.len();
+
+    app.enter_view(View::NewTask, "");
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('A'), KeyModifiers::SHIFT),
+    );
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('_'), KeyModifiers::SHIFT),
+    );
+    if let Some(lun::tui::app::FormState::NewTask(draft)) = app.form() {
+        assert_eq!(draft.title, "A_");
+    } else {
+        panic!("expected new-task form");
+    }
+
+    term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.form().is_none());
+    assert_eq!(app.data.tasks.len(), starting_tasks);
 
     let _ = std::fs::remove_dir_all(&root);
 }

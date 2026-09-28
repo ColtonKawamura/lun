@@ -32,9 +32,10 @@ result; running another command intentionally replaces it. Long command output
 can be scrolled with the normal navigation keys (`j`/`k`, arrows, PageUp,
 PageDown, `gg`, `G`, Home, End).
 
-Interactive CLI prompts stay inside the TUI command line too: task-creation
-questions, commit messages, and out-of-repo attach confirmation are asked on
-the same bottom prompt instead of reading raw stdin.
+Interactive CLI prompts stay inside the TUI command line too for commit
+messages and out-of-repo attach confirmation, instead of reading raw stdin.
+Task creation uses the native TUI form so every field stays editable in raw
+mode without suspending the screen.
 
 ### Relative defaults in the TUI
 
@@ -82,6 +83,7 @@ their context-relative behavior.
 | `i` / `e` | task view       | edit the current task's notes |
 | `?`       | normal          | open help |
 | `tab`     | command prompt  | apply the selected completion suggestion |
+| `↑` / `↓` | command prompt  | browse command history from the current TUI session |
 | `esc`     | command prompt  | after typing, enter vim prompt-nav mode (`j`/`k` cycle suggestions); press `esc` again to close |
 | `backspace` | command prompt / insert / detail views | edit the line, delete notes chars, or go back |
 | `<space> f f` | normal | open task/project finder prompt (`status ` prefilled) |

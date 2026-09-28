@@ -12,6 +12,10 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+}
+
 fn prompt_reader(lines: &[&str]) -> BufReader<std::io::Cursor<Vec<u8>>> {
     let mut buf = Vec::new();
     for line in lines {
@@ -98,38 +102,40 @@ fn tui_task_command_matches_cli_output_for_quoted_title() {
 }
 
 #[test]
-fn tui_add_task_uses_current_project_and_cli_prompt_flow() {
+fn tui_add_task_opens_native_form_with_prefilled_title_and_current_project() {
     let (root, _cli, mut tui) = fixture();
     send_command(&mut tui, "add task \"task from tui\"");
-    assert!(tui.prompt_session.is_some());
-    assert_eq!(
-        tui.current_prompt_label().as_deref(),
-        Some("Status? (todo, doing, follow-up, blocked, done): ")
-    );
-    for _ in 0..4 {
+    assert!(tui.prompt_session.is_none());
+    assert_eq!(tui.view, View::NewTask);
+    if let Some(lun::tui::app::FormState::NewTask(draft)) = tui.form() {
+        assert_eq!(draft.title, "task from tui");
+        let project = &tui.data.projects[draft.project_index];
+        assert_eq!(project.project_key, "P-001");
+    } else {
+        panic!("expected new-task form");
+    }
+    for _ in 0..8 {
         term::handle_key(&mut tui, &key(KeyCode::Enter));
     }
-    let tui_out = tui.output.as_ref().unwrap().text.clone();
-
-    let (_root2, cli2, _tui2) = fixture();
-    let mut input = prompt_reader(&["", "", "", ""]);
-    let cli_out = run_result_with_reader(
-        &cli2,
-        &[
-            "add".into(),
-            "task".into(),
-            "task from tui".into(),
-            "proj".into(),
-            "P-001".into(),
-        ],
-        &mut input,
-    )
-    .unwrap();
-
-    assert_eq!(tui_out, cli_out);
+    assert_eq!(tui.view, View::Task);
     let task = tui.lun.as_ref().unwrap().task_by_key("T-002").unwrap();
     let project = tui.lun.as_ref().unwrap().project_by_key("P-001").unwrap();
     assert_eq!(task.project_id, Some(project.id));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tui_add_task_with_project_argument_prefills_selected_project() {
+    let (root, _cli, mut tui) = fixture();
+    send_command(&mut tui, "add task \"task from tui\" proj P-000");
+    assert_eq!(tui.view, View::NewTask);
+    if let Some(lun::tui::app::FormState::NewTask(draft)) = tui.form() {
+        let project = &tui.data.projects[draft.project_index];
+        assert_eq!(project.project_key, "P-000");
+    } else {
+        panic!("expected new-task form");
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -265,6 +271,34 @@ fn tui_external_attach_decline_surfaces_visible_error() {
     assert!(out.is_error);
     assert!(out.text.contains("not attached"));
     assert_ne!(out.text, previous);
+
+    let _ = std::fs::remove_file(&outside);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tui_external_attach_prompt_accepts_shifted_confirmation() {
+    let (root, _cli, mut tui) = fixture();
+    let outside = root.parent().unwrap().join(format!(
+        "outside-attach-yes-{}-{}.txt",
+        std::process::id(),
+        root.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&outside, "external").unwrap();
+
+    send_command(
+        &mut tui,
+        &format!("attach task T-001 \"{}\"", outside.display()),
+    );
+    assert!(tui.prompt_session.is_some());
+    term::handle_key(
+        &mut tui,
+        &key_with_modifiers(KeyCode::Char('Y'), KeyModifiers::SHIFT),
+    );
+    term::handle_key(&mut tui, &key(KeyCode::Enter));
+    let out = tui.output.as_ref().unwrap();
+    assert!(!out.is_error);
+    assert!(out.text.contains("Attached"));
 
     let _ = std::fs::remove_file(&outside);
     let _ = std::fs::remove_dir_all(&root);

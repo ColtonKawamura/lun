@@ -277,14 +277,198 @@ fn paint_output(buf: &mut Buffer, area: Rect, app: &App) {
     let max_rows = area.bottom().saturating_sub(y) as usize;
     let total_lines = output.text.lines().count();
     let start = app.output_scroll.min(total_lines.saturating_sub(max_rows));
-    let fg = if output.is_error { t::ERROR } else { t::TEXT };
-    for line in output.text.lines().skip(start).take(max_rows) {
-        put(buf, area.left(), y, line, Style::default().fg(fg));
-        y += 1;
+    let mut lines = output.text.lines().skip(start).peekable();
+    while let Some(line) = lines.next() {
         if y >= area.bottom() {
             break;
         }
+        if !output.is_error
+            && line.starts_with("Summary: ")
+            && y + 1 < area.bottom()
+            && !line.is_empty()
+        {
+            put(
+                buf,
+                area.left(),
+                y,
+                &"-".repeat(area.width as usize),
+                Style::default().fg(t::MAGENTA),
+            );
+            y += 1;
+            if y >= area.bottom() {
+                break;
+            }
+        }
+        paint_output_line(buf, area.left(), y, line, output.is_error);
+        y += 1;
+        if line.is_empty() && lines.peek().is_none() {
+            break;
+        }
     }
+}
+
+fn paint_output_line(buf: &mut Buffer, x: u16, y: u16, line: &str, is_error: bool) {
+    if is_error {
+        put(
+            buf,
+            x,
+            y,
+            line,
+            Style::default().fg(t::ERROR).add_modifier(Modifier::BOLD),
+        );
+        return;
+    }
+    if let Some(title) = emphasized_heading(line) {
+        put(buf, x, y, &title, t::heading_style());
+        return;
+    }
+    if is_rule_line(line) {
+        put(buf, x, y, line, Style::default().fg(t::MAGENTA));
+        return;
+    }
+    if let Some(section) = section_heading(line) {
+        put(
+            buf,
+            x,
+            y,
+            &section,
+            Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD),
+        );
+        return;
+    }
+    if line.starts_with("Summary: ") {
+        put(
+            buf,
+            x,
+            y,
+            line,
+            Style::default().fg(t::TEXT).add_modifier(Modifier::BOLD),
+        );
+        return;
+    }
+    if let Some((label, spacing, value)) = detail_label_value(line) {
+        put(
+            buf,
+            x,
+            y,
+            label,
+            Style::default().fg(t::DIM).add_modifier(Modifier::BOLD),
+        );
+        put(
+            buf,
+            x + label.chars().count() as u16,
+            y,
+            spacing,
+            Style::default().fg(t::DIM),
+        );
+        put(
+            buf,
+            x + (label.chars().count() + spacing.chars().count()) as u16,
+            y,
+            value,
+            detail_value_style(label, value),
+        );
+        return;
+    }
+    if let Some((prefix, status, rest)) = status_count_line(line) {
+        put(buf, x, y, prefix, Style::default().fg(t::DIM));
+        put(
+            buf,
+            x + prefix.chars().count() as u16,
+            y,
+            status,
+            t::status_style(status.trim_end_matches(':')).add_modifier(Modifier::BOLD),
+        );
+        put(
+            buf,
+            x + (prefix.chars().count() + status.chars().count()) as u16,
+            y,
+            rest,
+            Style::default().fg(t::TEXT),
+        );
+        return;
+    }
+    if table_header_line(line) {
+        put(
+            buf,
+            x,
+            y,
+            line,
+            Style::default().fg(t::DIM).add_modifier(Modifier::BOLD),
+        );
+        return;
+    }
+    put(buf, x, y, line, Style::default().fg(t::TEXT));
+}
+
+fn emphasized_heading(line: &str) -> Option<String> {
+    if let Some(body) = line.strip_prefix("**").and_then(|s| s.strip_suffix("**")) {
+        return Some(body.to_string());
+    }
+    if line.starts_with("Project: ") || line.starts_with("Task ") || line.starts_with("Board: ") {
+        return Some(line.to_string());
+    }
+    None
+}
+
+fn is_rule_line(line: &str) -> bool {
+    !line.is_empty() && line.chars().all(|c| matches!(c, '=' | '-'))
+}
+
+fn section_heading(line: &str) -> Option<String> {
+    match line.trim() {
+        "Overview" | "Tasks" | "Checklist" | "Notes:" | "Attachments:" | "Links:" | "History"
+        | "History (log):" | "Last Commit:" | "Tasks by Status:" => {
+            Some(line.trim_end_matches(':').to_string())
+        }
+        _ => None,
+    }
+}
+
+fn detail_label_value(line: &str) -> Option<(&str, &str, &str)> {
+    if line.starts_with("- ") || line.starts_with("    ") {
+        return None;
+    }
+    let colon = line.find(':')?;
+    let label = &line[..=colon];
+    if !label
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | ' ' | '-' | '*'))
+    {
+        return None;
+    }
+    let rest = &line[colon + 1..];
+    let pad_len = rest.chars().take_while(|c| *c == ' ').count();
+    let (spacing, value) = rest.split_at(pad_len);
+    Some((label, spacing, value))
+}
+
+fn detail_value_style(label: &str, value: &str) -> Style {
+    match label.trim_end_matches(':') {
+        "ID" => Style::default().fg(t::LAVENDER),
+        "Status" => t::status_style(value.trim()),
+        "Branch" => Style::default().fg(t::CYAN),
+        _ => Style::default().fg(t::TEXT),
+    }
+}
+
+fn status_count_line(line: &str) -> Option<(&str, &str, &str)> {
+    let body = line.strip_prefix("- ")?;
+    let colon = body.find(':')?;
+    let status = &body[..=colon];
+    if !matches!(
+        status.trim_end_matches(':'),
+        "todo" | "doing" | "follow-up" | "blocked" | "done"
+    ) {
+        return None;
+    }
+    Some(("- ", status, &body[colon + 1..]))
+}
+
+fn table_header_line(line: &str) -> bool {
+    line.starts_with("ID")
+        && (line.contains("Project") || line.contains("Title"))
+        && line.contains("Status")
 }
 
 fn project_counts(app: &App, project_id: i64) -> [usize; 5] {
@@ -563,7 +747,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 23] = [
+    let rows: [(&str, &str); 24] = [
         ("/", "open the command palette"),
         ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
@@ -588,6 +772,10 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         (
             "i / e",
             "edit the current task's notes (task view; Esc back, Ctrl-S save)",
+        ),
+        (
+            "↑ / ↓",
+            "command prompt: browse command history for this session",
         ),
         (
             "esc",
