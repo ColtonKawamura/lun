@@ -8,6 +8,7 @@
 Press `/` or `:` to open the bottom command prompt. Inside that prompt, type
 the same commands you would run in the shell, but **without** the leading
 `lun`.
+As a shortcut, `/<name-or-key>` runs `status <name-or-key>`.
 
 Examples:
 
@@ -89,7 +90,7 @@ their context-relative behavior.
 | `backspace` | command prompt / insert / detail views | edit the line, delete notes chars, or go back |
 | `<space> f f` | normal | open task/project finder prompt (`status ` prefilled) |
 | `<space> f g` | normal | open text grep prompt (`grep ` prefilled) |
-| `shift + command + [` / `shift + command + ]` | normal | move backward / forward through screen history |
+| `command + [` / `command + ]` | normal | move backward / forward through screen history |
 | `ctrl-s`  | insert (description)  | save the description draft (logs `UPDATE`; default message `update notes for <task>`) |
 | `q`       | normal          | quit (blocked while notes have unsaved edits) |
 

@@ -429,6 +429,7 @@ Usage:\n\
   lun                     Show banner\n\
   lun init                Create .lun/lun.db in the current directory (idempotent)\n\
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\
+  lun /<name|key>         Shortcut for `lun status <name|key>`\n\
   lun add proj \"<name>\" [--status active|inactive]  Create a project\n\
   lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\
   lun move \"<task>\" \"<project>\"   Move a task to a project\n\
@@ -467,6 +468,32 @@ pub fn init_db_command(app: &App) -> Result<String> {
     }
     out.push_str("lun init: re-run anytime — migrations are idempotent.");
     Ok(out)
+}
+
+/// Accept slash-prefixed invocation forms:
+/// - `/status ...` -> `status ...` (same for any known top-level command)
+/// - `/<query>` -> `status <query>`
+pub fn normalize_invocation_args(args: Vec<String>) -> Vec<String> {
+    let Some(first) = args.first() else {
+        return args;
+    };
+    let Some(stripped_raw) = first.strip_prefix('/') else {
+        return args;
+    };
+    let stripped = stripped_raw.to_string();
+    if stripped.is_empty() {
+        return args;
+    }
+    let mut normalized = args;
+    if TOP_LEVEL_COMMANDS.contains(&stripped.as_str())
+        || matches!(stripped.as_str(), "--help" | "--version")
+    {
+        normalized[0] = stripped;
+        return normalized;
+    }
+    normalized[0] = "status".to_string();
+    normalized.insert(1, stripped);
+    normalized
 }
 
 // ---------------------------------------------------------------------------
@@ -2634,6 +2661,7 @@ pub fn run_result_in_reader(
     stdin: &mut dyn BufRead,
     root_override: Option<&Path>,
 ) -> Result<String> {
+    let args = normalize_invocation_args(args.to_vec());
     match args.first().map(String::as_str) {
         Some("complete") => Ok(complete_output(Some(app), &args[1..])),
         Some("init") => init_db_command(app),

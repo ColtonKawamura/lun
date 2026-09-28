@@ -545,8 +545,13 @@ fn table_header_line(line: &str) -> bool {
         || (line.starts_with("Entity") && line.contains("Action"))
 }
 
-fn split_table_columns(line: &str) -> Vec<&str> {
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    s.chars().take(max_chars).collect()
+}
+
+fn split_table_columns_with_gaps<'a>(line: &'a str) -> (Vec<&'a str>, Vec<&'a str>) {
     let mut cols = Vec::new();
+    let mut gaps = Vec::new();
     let mut start = 0usize;
     let bytes = line.as_bytes();
     let mut i = 0usize;
@@ -558,6 +563,7 @@ fn split_table_columns(line: &str) -> Vec<&str> {
             }
             if i - run_start >= 3 {
                 cols.push(line[start..run_start].trim_end());
+                gaps.push(&line[run_start..i]);
                 start = i;
             }
         } else {
@@ -565,39 +571,48 @@ fn split_table_columns(line: &str) -> Vec<&str> {
         }
     }
     cols.push(line[start..].trim_end());
-    cols
+    (cols, gaps)
 }
 
 fn paint_project_status_row(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
     if !line.starts_with("P-") {
         return false;
     }
-    let cols = split_table_columns(line);
+    let (cols, gaps) = split_table_columns_with_gaps(line);
     if cols.len() != 8 {
         return false;
     }
-    put_segments(
-        buf,
-        x,
-        y,
-        &[
-            (cols[0], Style::default().fg(t::LAVENDER)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[1], Style::default().fg(t::TEXT)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[2], t::project_status_style(cols[2])),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[3], t::status_style("todo")),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[4], t::status_style("doing")),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[5], t::status_style("follow-up")),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[6], t::status_style("blocked")),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[7], t::status_style("done")),
-        ],
-    );
+    let mut segments: Vec<(&str, Style)> = Vec::new();
+    segments.push((cols[0], Style::default().fg(t::LAVENDER)));
+    if let Some(g) = gaps.first() {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[1], Style::default().fg(t::TEXT)));
+    if let Some(g) = gaps.get(1) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[2], t::project_status_style(cols[2])));
+    if let Some(g) = gaps.get(2) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[3], t::status_style("todo")));
+    if let Some(g) = gaps.get(3) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[4], t::status_style("doing")));
+    if let Some(g) = gaps.get(4) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[5], t::status_style("follow-up")));
+    if let Some(g) = gaps.get(5) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[6], t::status_style("blocked")));
+    if let Some(g) = gaps.get(6) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[7], t::status_style("done")));
+    put_segments(buf, x, y, &segments);
     true
 }
 
@@ -605,30 +620,43 @@ fn paint_task_status_row(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
     if !line.starts_with("T-") {
         return false;
     }
-    let cols = split_table_columns(line);
+    let (cols, gaps) = split_table_columns_with_gaps(line);
     if cols.len() < 7 {
         return false;
     }
-    put_segments(
-        buf,
-        x,
-        y,
-        &[
-            (cols[0], Style::default().fg(t::LAVENDER)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[1], Style::default().fg(t::PURPLE)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[2], Style::default().fg(t::TEXT)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[3], t::status_style(cols[3])),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[4], Style::default().fg(t::TEXT)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[5], Style::default().fg(t::TEXT)),
-            ("   ", Style::default().fg(t::DIM)),
-            (cols[6], Style::default().fg(t::CYAN)),
-        ],
-    );
+    let mut segments: Vec<(&str, Style)> = Vec::new();
+    segments.push((cols[0], Style::default().fg(t::LAVENDER)));
+    if let Some(g) = gaps.first() {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[1], Style::default().fg(t::PURPLE)));
+    if let Some(g) = gaps.get(1) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[2], Style::default().fg(t::TEXT)));
+    if let Some(g) = gaps.get(2) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[3], t::status_style(cols[3])));
+    if let Some(g) = gaps.get(3) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[4], Style::default().fg(t::TEXT)));
+    if let Some(g) = gaps.get(4) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[5], Style::default().fg(t::TEXT)));
+    if let Some(g) = gaps.get(5) {
+        segments.push((g, Style::default().fg(t::DIM)));
+    }
+    segments.push((cols[6], Style::default().fg(t::CYAN)));
+    for (idx, extra) in cols.iter().enumerate().skip(7) {
+        if let Some(g) = gaps.get(idx - 1) {
+            segments.push((g, Style::default().fg(t::DIM)));
+        }
+        segments.push((extra, Style::default().fg(t::TEXT)));
+    }
+    put_segments(buf, x, y, &segments);
     true
 }
 
@@ -703,77 +731,84 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= area.bottom() {
         return;
     }
-    put(
-        buf,
-        area.left(),
-        y,
-        "  KEY    NAME              STATUS        TODO  DOING  FOLLOW-UP  BLOCKED  DONE",
-        Style::default().fg(t::DIM),
+
+    let count_cols = [
+        ("Todo", "todo", 0usize),
+        ("Doing", "doing", 1usize),
+        ("Follow-Up", "follow-up", 2usize),
+        ("Blocked", "blocked", 3usize),
+        ("Done", "done", 4usize),
+    ];
+    let gap = "  ";
+    let key_w = 5usize;
+    let status_w = 10usize;
+    let min_name_w = 8usize;
+    let mut shown_counts = 0usize;
+    let mut used_w = key_w + gap.len() + status_w;
+    let width_budget = area.width.saturating_sub(2) as usize;
+    for (header, _, _) in count_cols {
+        let next = used_w + gap.len() + header.chars().count();
+        if next >= width_budget {
+            break;
+        }
+        shown_counts += 1;
+        used_w = next;
+    }
+    let count_w: usize = count_cols
+        .iter()
+        .take(shown_counts)
+        .map(|(header, _, _)| gap.len() + header.chars().count())
+        .sum();
+    let name_w = width_budget
+        .saturating_sub(key_w + gap.len() + status_w + count_w + gap.len())
+        .max(min_name_w);
+
+    let mut header = format!(
+        "  {:<key_w$}{gap}{:<name_w$}{gap}{:<status_w$}",
+        "KEY",
+        "NAME",
+        "STATUS",
+        key_w = key_w,
+        name_w = name_w,
+        status_w = status_w
     );
+    for (label, _, _) in count_cols.iter().take(shown_counts) {
+        header.push_str(gap);
+        header.push_str(label);
+    }
+    put(buf, area.left(), y, &header, Style::default().fg(t::DIM));
     y += 1;
     for p in &app.data.projects {
         if y >= area.bottom() {
             return;
         }
         let counts = project_counts(app, p.id);
-        // Columns match the header: key@2, name@9, status@27, counts after.
-        put(
-            buf,
-            area.left() + 2,
-            y,
-            &p.project_key,
-            Style::default().fg(t::LAVENDER),
-        );
-        let name: String = p.name.chars().take(17).collect();
-        put(
-            buf,
-            area.left() + 9,
-            y,
-            &format!("{:<17}", name),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 27,
-            y,
-            &format!("{:<14}", p.status),
-            t::project_status_style(&p.status),
-        );
-        put(
-            buf,
-            area.left() + 41,
-            y,
-            &format!("{:<6}", counts[0]),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 47,
-            y,
-            &format!("{:<7}", counts[1]),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 54,
-            y,
-            &format!("{:<11}", counts[2]),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 66,
-            y,
-            &format!("{:<9}", counts[3]),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 76,
-            y,
-            &format!("{:<6}", counts[4]),
-            Style::default().fg(t::TEXT),
-        );
+        let mut x = area.left() + 2;
+        let key = format!("{:<key_w$}", p.project_key, key_w = key_w);
+        put(buf, x, y, &key, Style::default().fg(t::LAVENDER));
+        x += key.chars().count() as u16;
+        put(buf, x, y, gap, Style::default().fg(t::DIM));
+        x += gap.chars().count() as u16;
+
+        let name = truncate_chars(&p.name, name_w);
+        let name_cell = format!("{:<name_w$}", name, name_w = name_w);
+        put(buf, x, y, &name_cell, Style::default().fg(t::TEXT));
+        x += name_cell.chars().count() as u16;
+        put(buf, x, y, gap, Style::default().fg(t::DIM));
+        x += gap.chars().count() as u16;
+
+        let status = truncate_chars(&p.status, status_w);
+        let status_cell = format!("{:<status_w$}", status, status_w = status_w);
+        put(buf, x, y, &status_cell, t::project_status_style(&p.status));
+        x += status_cell.chars().count() as u16;
+
+        for (_, status_name, idx) in count_cols.iter().take(shown_counts) {
+            put(buf, x, y, gap, Style::default().fg(t::DIM));
+            x += gap.chars().count() as u16;
+            let value = counts[*idx].to_string();
+            put(buf, x, y, &value, t::status_style(status_name));
+            x += value.chars().count() as u16;
+        }
         y += 1;
     }
     y += 1;
@@ -788,34 +823,48 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
         Style::default().fg(t::PURPLE),
     );
     y += 1;
+    if y >= area.bottom() {
+        return;
+    }
+    let task_gap = "  ";
+    let task_key_w = 5usize;
+    let project_w = 14usize.min(area.width.saturating_sub(20) as usize).max(8);
+    let status_task_w = 10usize;
+    let task_title_w = area
+        .width
+        .saturating_sub(2 + task_key_w as u16 + task_gap.len() as u16 + project_w as u16
+            + task_gap.len() as u16
+            + status_task_w as u16
+            + task_gap.len() as u16) as usize;
+    let task_title_w = task_title_w.max(8);
     for task in &app.data.tasks {
         if y >= area.bottom() {
             return;
         }
         let proj = project_name(app, task);
-        put(
-            buf,
-            area.left(),
-            y,
-            &format!("  {}   {}  ", task.task_key, proj),
-            Style::default().fg(t::LAVENDER),
-        );
-        let title_w = 34usize.min(task.title.chars().count());
-        let title: String = task.title.chars().take(title_w).collect();
-        put(
-            buf,
-            area.left() + 24,
-            y,
-            &format!("{:<34}", title),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 58,
-            y,
-            &task.status,
-            t::status_style(&task.status),
-        );
+        let mut x = area.left() + 2;
+        let key = format!("{:<task_key_w$}", task.task_key, task_key_w = task_key_w);
+        put(buf, x, y, &key, Style::default().fg(t::LAVENDER));
+        x += key.chars().count() as u16;
+        put(buf, x, y, task_gap, Style::default().fg(t::DIM));
+        x += task_gap.chars().count() as u16;
+
+        let proj = truncate_chars(&proj, project_w);
+        let proj_cell = format!("{:<project_w$}", proj, project_w = project_w);
+        put(buf, x, y, &proj_cell, Style::default().fg(t::PURPLE));
+        x += proj_cell.chars().count() as u16;
+        put(buf, x, y, task_gap, Style::default().fg(t::DIM));
+        x += task_gap.chars().count() as u16;
+
+        let title = truncate_chars(&task.title, task_title_w);
+        let title_cell = format!("{:<task_title_w$}", title, task_title_w = task_title_w);
+        put(buf, x, y, &title_cell, Style::default().fg(t::TEXT));
+        x += title_cell.chars().count() as u16;
+        put(buf, x, y, task_gap, Style::default().fg(t::DIM));
+        x += task_gap.chars().count() as u16;
+
+        let status = truncate_chars(&task.status, status_task_w);
+        put(buf, x, y, &status, t::status_style(&task.status));
         y += 1;
     }
     y += 1;
@@ -853,19 +902,62 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
     if y + 1 >= area.bottom() {
         return;
     }
-    // Five kanban columns side by side.
-    let col_w = (area.width.saturating_sub(8) / 5).max(10);
     let cols = app.data.board_columns(p.id);
     let names = ["Todo", "Doing", "Follow-Up", "Blocked", "Done"];
+
+    let min_side_by_side_width = 72u16;
+    if area.width < min_side_by_side_width {
+        let mut ty = y;
+        for (i, tasks) in cols.iter().enumerate() {
+            if ty >= area.bottom() {
+                break;
+            }
+            put(buf, area.left(), ty, names[i], t::status_style(names[i]));
+            ty += 1;
+            if ty >= area.bottom() {
+                break;
+            }
+            put(
+                buf,
+                area.left(),
+                ty,
+                &"-".repeat(names[i].chars().count()),
+                Style::default().fg(t::MAGENTA),
+            );
+            ty += 1;
+            let title_w = area.width.saturating_sub(8) as usize;
+            for task in tasks {
+                if ty >= area.bottom() {
+                    break;
+                }
+                put(buf, area.left(), ty, &task.task_key, Style::default().fg(t::LAVENDER));
+                let title = truncate_chars(&task.title, title_w);
+                put(buf, area.left() + 8, ty, &title, Style::default().fg(t::TEXT));
+                ty += 1;
+            }
+            if ty < area.bottom() {
+                ty += 1;
+            }
+        }
+        return;
+    }
+
+    // Five kanban columns side by side when there is enough space.
+    let gap = 2u16;
+    let col_w = area
+        .width
+        .saturating_sub(gap * 4)
+        .checked_div(5)
+        .unwrap_or(0)
+        .max(8);
     for (i, tasks) in cols.iter().enumerate() {
-        let x = area.left() + (i as u16) * (col_w + 2);
+        let x = area.left() + (i as u16) * (col_w + gap);
         put(buf, x, y, names[i], t::status_style(names[i]));
         put(
             buf,
             x,
             y + 1,
-            &"-".repeat(names[i].chars().count().min(col_w as usize))
-                .to_string(),
+            &"-".repeat(names[i].chars().count().min(col_w as usize)),
             Style::default().fg(t::MAGENTA),
         );
         let mut ty = y + 2;
@@ -874,7 +966,7 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
                 break;
             }
             put(buf, x, ty, &task.task_key, Style::default().fg(t::LAVENDER));
-            let t: String = task.title.chars().take(col_w as usize - 8).collect();
+            let t = truncate_chars(&task.title, col_w.saturating_sub(8) as usize);
             put(buf, x + 8, ty, &t, Style::default().fg(t::TEXT));
             ty += 1;
         }
@@ -886,6 +978,24 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= area.bottom() {
         return;
     }
+    let base_info_w = 5usize // marker + key + two spaces
+        + 3 // key gap
+        + 2; // status gap
+    let counts_template = "todo 0  doing 0  follow-up 0  blocked 0  done 0";
+    let counts_w = counts_template.chars().count();
+    let min_name_w = 8usize;
+    let min_status_w = 6usize;
+    let total_w = area.width as usize;
+    let mut status_w = 10usize;
+    let name_w = total_w
+        .saturating_sub(base_info_w + status_w + counts_w)
+        .max(min_name_w);
+    if name_w == min_name_w {
+        status_w = total_w
+            .saturating_sub(base_info_w + name_w + counts_w)
+            .max(min_status_w);
+    }
+
     for (i, p) in app.data.projects.iter().enumerate() {
         if y >= area.bottom() {
             return;
@@ -898,33 +1008,37 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
         } else {
             "  "
         };
+        let key_text = format!("{marker}{}  ", p.project_key);
         put(
             buf,
             area.left(),
             y,
-            &format!("{}{}  ", marker, p.project_key),
+            &key_text,
             if i == app.project_selected {
                 Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(t::LAVENDER)
             },
         );
+        let name = truncate_chars(&p.name, name_w);
+        let name_text = format!("{name:<name_w$}   ");
+        let name_x = area.left() + key_text.chars().count() as u16;
+        put(buf, name_x, y, &name_text, Style::default().fg(t::TEXT));
+
+        let status = truncate_chars(&p.status, status_w);
+        let status_text = format!("{status:<status_w$}");
+        let status_x = name_x + name_text.chars().count() as u16;
+        put(buf, status_x, y, &status_text, t::project_status_style(&p.status));
+        let counts_x = status_x + status_text.chars().count() as u16;
         put(
             buf,
-            area.left() + 10,
-            y,
-            &format!("{}   ", p.name),
-            Style::default().fg(t::TEXT),
-        );
-        put(
-            buf,
-            area.left() + 30,
+            counts_x,
             y,
             &format!(
-                "{:<9}todo {}  doing {}  follow-up {}  blocked {}  done {}",
-                p.status, counts[0], counts[1], counts[2], counts[3], counts[4]
+                "  todo {}  doing {}  follow-up {}  blocked {}  done {}",
+                counts[0], counts[1], counts[2], counts[3], counts[4]
             ),
-            t::project_status_style(&p.status),
+            Style::default().fg(t::TEXT),
         );
         y += 1;
     }
@@ -982,7 +1096,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("backspace", "palette line edit, or go back"),
         ("<space> f f", "open finder prompt (`status `)"),
         ("<space> f g", "open text grep prompt (`grep `)"),
-        ("⇧⌘[ / ⇧⌘]", "back / forward through screen history"),
+        ("⌘[ / ⌘]", "back / forward through screen history"),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
         ("/new-task", "open the new-task form"),

@@ -272,19 +272,7 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
         {
             app.go_view_back()
         }
-        KeyCode::Char('{')
-            if key.modifiers.contains(KeyModifiers::SUPER)
-                || key.modifiers.contains(KeyModifiers::META) =>
-        {
-            app.go_view_back()
-        }
         KeyCode::Char(']')
-            if key.modifiers.contains(KeyModifiers::SUPER)
-                || key.modifiers.contains(KeyModifiers::META) =>
-        {
-            app.go_view_forward()
-        }
-        KeyCode::Char('}')
             if key.modifiers.contains(KeyModifiers::SUPER)
                 || key.modifiers.contains(KeyModifiers::META) =>
         {

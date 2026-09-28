@@ -6,12 +6,13 @@
 //! example disagree with each other (9 vs 10 tasks listed for paper-stack);
 //! the per-project example is authoritative, so the fixture mirrors it.
 
+use std::io::{BufReader, Cursor};
 use std::path::PathBuf;
 
 use lun::cli::{
-    create_task, grep_view, log_view, resolve_entity, resolve_project, resolve_task, status_all,
-    status_project, status_project_board, status_target, task_archive, task_complete, task_edit,
-    task_list, task_reopen, task_view, App, EXIT_USAGE,
+    create_task, grep_view, log_view, resolve_entity, resolve_project, resolve_task,
+    run_result_in_reader, status_all, status_project, status_project_board, status_target,
+    task_archive, task_complete, task_edit, task_list, task_reopen, task_view, App, EXIT_USAGE,
 };
 use lun::{Lun, ProjectSpec, TaskSpec};
 
@@ -889,4 +890,14 @@ fn run_status_prints_successfully() {
     let args: Vec<String> = vec!["status".into()];
     assert_eq!(lun::cli::run(&app, &args), std::process::ExitCode::SUCCESS);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn slash_prefixed_query_runs_status_in_cli() {
+    let (_root, lun) = fixture();
+    let app = App { lun };
+    let mut stdin = BufReader::new(Cursor::new(Vec::<u8>::new()));
+    let out = run_result_in_reader(&app, &["/paper-stack".to_string()], &mut stdin, None).unwrap();
+    let expected = status_target(&app, "paper-stack").unwrap();
+    assert_eq!(out, expected);
 }
