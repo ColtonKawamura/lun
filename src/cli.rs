@@ -43,6 +43,250 @@ use crate::db::{
 };
 
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
+const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
+const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
+const TOP_LEVEL_COMMANDS: [&str; 13] = [
+    "new",
+    "add",
+    "task",
+    "proj",
+    "project",
+    "move",
+    "attach",
+    "log",
+    "status",
+    "link",
+    "open-link",
+    "open-uri",
+    "pr",
+];
+const PR_SUBCOMMANDS: [&str; 4] = ["new", "show", "ls", "merge"];
+const TASK_SUBCOMMANDS: [&str; 5] = ["ls", "edit", "complete", "reopen", "archive"];
+
+fn push_unique(out: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    if !out.iter().any(|v| v == &value) {
+        out.push(value);
+    }
+}
+
+fn extend_unique<'a>(out: &mut Vec<String>, values: impl IntoIterator<Item = &'a str>) {
+    for value in values {
+        push_unique(out, value);
+    }
+}
+
+fn task_candidates(app: Option<&App>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(app) = app else {
+        return out;
+    };
+    if let Ok(tasks) = app.lun.list_tasks() {
+        for task in tasks {
+            push_unique(&mut out, task.task_key);
+            push_unique(&mut out, task.title);
+        }
+    }
+    out
+}
+
+fn project_candidates(app: Option<&App>) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(app) = app else {
+        return out;
+    };
+    if let Ok(projects) = app.lun.list_projects() {
+        for project in projects {
+            push_unique(&mut out, project.project_key);
+            push_unique(&mut out, project.name);
+        }
+    }
+    out
+}
+
+fn completion_flags(tokens: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    if tokens.is_empty() {
+        extend_unique(&mut out, ["--help", "--version"]);
+        return out;
+    }
+    match tokens[0].as_str() {
+        "status" => extend_unique(&mut out, ["--board"]),
+        "new" => extend_unique(&mut out, ["--status", "--message"]),
+        "proj" | "project" if tokens.len() >= 2 => {
+            extend_unique(&mut out, ["--status", "--message"]);
+        }
+        "proj" | "project" => {}
+        "task" => match tokens.get(1).map(String::as_str) {
+            Some("ls") => {
+                extend_unique(
+                    &mut out,
+                    ["--all", "--project", "--status", "--priority", "--assignee", "--sort"],
+                );
+            }
+            Some("edit") => {
+                extend_unique(
+                    &mut out,
+                    [
+                        "--title",
+                        "--project",
+                        "--status",
+                        "--priority",
+                        "--assignee",
+                        "--branch",
+                        "--labels",
+                        "--notes",
+                        "--message",
+                    ],
+                );
+            }
+            Some("reopen") => extend_unique(&mut out, ["--status", "--message"]),
+            Some(_) => {}
+            None => {}
+        },
+        "open-uri" => extend_unique(&mut out, ["--on"]),
+        "pr" if tokens.get(1).map(String::as_str) == Some("new") => {
+            extend_unique(&mut out, ["--from", "--to"]);
+        }
+        "pr" => {}
+        _ => {}
+    }
+    out
+}
+
+fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
+    let words = if words.first().map(String::as_str) == Some("lun") {
+        &words[1..]
+    } else {
+        words
+    };
+    let current = words.last().map(String::as_str).unwrap_or("");
+    let tokens = if words.is_empty() {
+        &[][..]
+    } else {
+        &words[..words.len() - 1]
+    };
+    let mut out = Vec::new();
+
+    if let Some(last) = tokens.last().map(String::as_str) {
+        match last {
+            "--status" => {
+                let is_project = match tokens.first().map(String::as_str) {
+                    Some("new") => {
+                        matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
+                    }
+                    Some("proj" | "project") => true,
+                    _ => false,
+                };
+                if is_project {
+                    extend_unique(&mut out, PROJECT_STATUSES);
+                } else {
+                    extend_unique(&mut out, TASK_STATUSES);
+                }
+            }
+            "--sort" => extend_unique(&mut out, TASK_SORT_KEYS),
+            "--project" => out.extend(project_candidates(app)),
+            "--on" => extend_unique(&mut out, ["task", "project"]),
+            "proj" | "project" => {
+                if matches!(tokens.first().map(String::as_str), Some("add")) {
+                    out.extend(project_candidates(app));
+                }
+            }
+            "task"
+                if matches!(
+                    tokens.first().map(String::as_str),
+                    Some("link" | "open-link" | "attach")
+                ) || (tokens.first().map(String::as_str) == Some("open-uri")
+                    && matches!(
+                        tokens.get(tokens.len().saturating_sub(2)).map(String::as_str),
+                        Some("--on")
+                    )) =>
+            {
+                out.extend(task_candidates(app));
+            }
+            "task" => {}
+            _ => {}
+        }
+    }
+
+    if out.is_empty() {
+        if words.len() <= 1 {
+            extend_unique(&mut out, TOP_LEVEL_COMMANDS);
+            extend_unique(&mut out, ["--help", "--version"]);
+        } else {
+            match tokens.first().map(String::as_str) {
+                Some("new") if tokens.len() == 1 => extend_unique(&mut out, ["proj"]),
+                Some("add") if tokens.len() == 1 => extend_unique(&mut out, ["task"]),
+                Some("pr") if tokens.len() == 1 => extend_unique(&mut out, PR_SUBCOMMANDS),
+                Some("task") if tokens.len() == 1 => {
+                    extend_unique(&mut out, TASK_SUBCOMMANDS);
+                    out.extend(task_candidates(app));
+                }
+                Some("task")
+                    if matches!(tokens.get(1).map(String::as_str), Some("edit" | "complete" | "reopen" | "archive"))
+                        && tokens.len() == 2 =>
+                {
+                    out.extend(task_candidates(app));
+                }
+                Some("task")
+                    if tokens.len() == 1
+                        || (tokens.len() == 2 && !tokens[1].starts_with('-')) =>
+                {
+                    out.extend(task_candidates(app));
+                }
+                Some("log") if tokens.len() == 1 => out.extend(task_candidates(app)),
+                Some("pr") if tokens.get(1).map(String::as_str) == Some("new") && tokens.len() == 2 => {
+                    out.extend(task_candidates(app));
+                }
+                Some("proj" | "project") if tokens.len() == 1 => out.extend(project_candidates(app)),
+                Some("link" | "open-link" | "attach")
+                    if matches!(tokens.get(1).map(String::as_str), Some("task")) && tokens.len() == 2 =>
+                {
+                    out.extend(task_candidates(app));
+                }
+                Some("link" | "open-link" | "attach")
+                    if matches!(tokens.get(1).map(String::as_str), Some("project")) && tokens.len() == 2 =>
+                {
+                    out.extend(project_candidates(app));
+                }
+                Some("move") if tokens.len() == 1 => out.extend(task_candidates(app)),
+                Some("move") if tokens.len() == 2 => out.extend(project_candidates(app)),
+                Some("open-uri")
+                    if tokens.get(1).map(String::as_str) == Some("--on")
+                        && tokens.get(2).map(String::as_str) == Some("task")
+                        && tokens.len() == 3 =>
+                {
+                    out.extend(task_candidates(app));
+                }
+                Some("open-uri")
+                    if tokens.get(1).map(String::as_str) == Some("--on")
+                        && tokens.get(2).map(String::as_str) == Some("project")
+                        && tokens.len() == 3 =>
+                {
+                    out.extend(project_candidates(app));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if current.starts_with('-') {
+        for flag in completion_flags(tokens) {
+            push_unique(&mut out, flag);
+        }
+    }
+
+    out.into_iter().filter(|v| v.starts_with(current)).collect()
+}
+
+pub fn complete_output(app: Option<&App>, args: &[String]) -> String {
+    let words = if args.first().map(String::as_str) == Some("--") {
+        &args[1..]
+    } else {
+        args
+    };
+    completion_candidates(app, words).join("\n")
+}
 
 /// CLI exit codes: 2 = usage/resolution error, 1 = runtime (DB/IO) error.
 pub const EXIT_USAGE: u8 = 2;
@@ -2011,6 +2255,7 @@ fn run_pr(app: &App, args: &[String]) -> Result<String> {
 
 fn run_result(app: &App, args: &[String]) -> Result<String> {
     match args.first().map(String::as_str) {
+        Some("complete") => Ok(complete_output(Some(app), &args[1..])),
         Some("status") => match args.get(1) {
             None => status_all(app),
             Some(q) => {
@@ -2292,8 +2537,8 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                 "expected: lun open-link <task|project> <key|title> <label>",
             )),
         },
-        Some("open-uri") => open_uri(app, &args[1..].to_vec()),
-        Some("pr") => run_pr(app, &args[1..].to_vec()),
+        Some("open-uri") => open_uri(app, &args[1..]),
+        Some("pr") => run_pr(app, &args[1..]),
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),

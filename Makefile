@@ -5,13 +5,15 @@
 #   make release    release build, stripped, at target/release/lun
 #   make test       full test suite (cargo test)
 #   make install    install the release binary to $(PREFIX)/bin
+#   make install-completions  install zsh completion script to ~/.zsh/completions
 #   make uninstall  remove the installed binary
 #   make clean      remove build artifacts
 
 PREFIX  ?= $(HOME)/.local
 BIN     := lun
+ZSH_COMPLETIONS_DIR ?= $(HOME)/.zsh/completions
 
-.PHONY: all release test install uninstall clean
+.PHONY: all release test install install-completions uninstall clean
 
 all: release
 
@@ -32,6 +34,14 @@ install: release
 	else \
 		echo "note: make sure $(PREFIX)/bin is on your PATH (e.g. export PATH=\"$(PREFIX)/bin:\$$PATH\" in your shell rc)"; \
 	fi
+
+install-completions:
+	@mkdir -p "$(ZSH_COMPLETIONS_DIR)"
+	@cp completions/_lun "$(ZSH_COMPLETIONS_DIR)/_lun"
+	@echo "installed zsh completion: $(ZSH_COMPLETIONS_DIR)/_lun"
+	@echo "add to ~/.zshrc:"
+	@echo "  fpath=($(ZSH_COMPLETIONS_DIR) \$$fpath)"
+	@echo "  autoload -Uz compinit && compinit"
 
 uninstall:
 	@rm -f "$(PREFIX)/bin/$(BIN)"
