@@ -564,8 +564,7 @@ fn task_view_renders_fields_notes_and_history() {
     assert!(s.contains("Status:"));
     assert!(s.contains("Priority:"));
     assert!(s.contains("Assignee:"));
-    assert!(s.contains("Checklist:"));
-    assert!(s.contains("Notes:"));
+    assert!(s.contains("Description:"));
     assert!(s.contains("Attachments:"));
     assert!(s.contains("mock.png"));
     assert!(s.contains("Links:"));
@@ -597,14 +596,14 @@ fn task_view_insert_mode_shows_draft_lines() {
     app.mode = Mode::Insert;
     app.notes_draft = "first line\nsecond line".into();
     let s = screen(&app, 90, 40);
-    // Each draft line renders as a "- " bullet under Notes:.
-    let notes_idx = s.find("Notes:").expect("Notes: section");
+    // Each draft line renders as a "- " bullet under Description:.
+    let notes_idx = s.find("Description:").expect("Description: section");
     let tail = &s[notes_idx..];
     assert!(tail.contains("- first line"));
     assert!(tail.contains("- second line"));
     // Hint bar switches to the insert-mode hint.
     let last = s.lines().last().unwrap();
-    assert!(last.contains("inserting note"));
+    assert!(last.contains("editing description"));
 }
 
 #[test]

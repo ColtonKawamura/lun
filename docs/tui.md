@@ -57,7 +57,7 @@ their context-relative behavior.
 | Status        | launch                               | projects + status counts + summary |
 | Board         | `/board`                             | kanban columns (todo / doing / follow-up / blocked / done) for the current project |
 | Project       | `/project`                           | project list; `enter` sets the current project |
-| Task          | `t` (current task) / `/task <q>`     | task detail: fields, notes, attachments, links, log history, **PRs** |
+| Task          | `t` (current task) / `/task <q>`     | task detail: fields, description, attachments, links, log history, **PRs** |
 | New Task      | `/new-task`                          | form to create a task (title, project, status, priority, assignee, branch, labels) |
 | New Project   | `/new proj` (or `/new-project`)      | form to create a project in the current workspace |
 | Move Task     | `/move`                              | form to move the current task between projects (including `Unassigned`) |
@@ -73,7 +73,7 @@ their context-relative behavior.
 | `/`       | normal          | open the CLI-equivalent command prompt |
 | `:`       | normal          | open the same command prompt |
 | `j` / `k` / `↑` / `↓` | normal | navigate lists (projects, tasks, board) |
-| `h` / `l` / `←` / `→` | task view | move focus between summary / notes / attachments / links |
+| `h` / `l` / `←` / `→` | task view | move focus between summary / description / attachments / links |
 | `gg` / `G` | normal | jump to the first / last item |
 | `home` / `end` | normal | jump to the first / last item |
 | `page up` / `page down` | normal | move faster through longer lists |
@@ -81,7 +81,7 @@ their context-relative behavior.
 | `t`       | normal          | open the current task's detail view |
 | `o`       | task view       | open the focused note link / attachment / explicit link |
 | `c`       | normal          | toggle the current task complete / reopen |
-| `i` / `e` | task view       | edit the current task's notes |
+| `i` / `e` | task view       | edit the current task's description |
 | `?`       | normal          | open help |
 | `tab`     | command prompt  | apply the selected completion suggestion |
 | `↑` / `↓` | command prompt  | browse command history from the current TUI session |
@@ -90,7 +90,7 @@ their context-relative behavior.
 | `<space> f f` | normal | open task/project finder prompt (`status ` prefilled) |
 | `<space> f g` | normal | open text grep prompt (`grep ` prefilled) |
 | `shift + command + [` / `shift + command + ]` | normal | move backward / forward through screen history |
-| `ctrl-s`  | insert (notes)  | save the notes draft (logs `UPDATE`; default message `update notes for <task>`) |
+| `ctrl-s`  | insert (description)  | save the description draft (logs `UPDATE`; default message `update notes for <task>`) |
 | `q`       | normal          | quit (blocked while notes have unsaved edits) |
 
 Notes editing: `i`/`e` in the task view enters insert mode; type

@@ -89,7 +89,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         // Hint text depends on mode (Phase 6): insert mode advertises the
         // note-editing keys; the statusline shows its own prompt + query.
         let hint: String = if app.mode == super::app::Mode::Insert {
-            "inserting note — esc back to normal, ctrl-s to save".to_string()
+            "editing description — esc back to normal, ctrl-s to save".to_string()
         } else {
             " type \"/\" or \":\" for commands, \"q\" to quit".to_string()
         };
@@ -436,8 +436,16 @@ fn is_rule_line(line: &str) -> bool {
 
 fn section_heading(line: &str) -> Option<String> {
     match line.trim() {
-        "Overview" | "Tasks" | "Checklist" | "Notes:" | "Attachments:" | "Links:" | "History"
-        | "History (log):" | "Last Commit:" | "Tasks by Status:" => {
+        "Overview"
+        | "Tasks"
+        | "Description:"
+        | "Notes:"
+        | "Attachments:"
+        | "Links:"
+        | "History"
+        | "History (log):"
+        | "Last Commit:"
+        | "Tasks by Status:" => {
             Some(line.trim_end_matches(':').to_string())
         }
         _ => None,
@@ -944,7 +952,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("j / k / ↑ / ↓", "navigate lists and focused task details"),
         (
             "h / l / ← / →",
-            "move task-detail focus between summary/notes/attachments/links",
+            "move task-detail focus between summary/description/attachments/links",
         ),
         ("gg / G", "jump to the first / last item"),
         ("PgUp / PgDn", "jump by larger steps"),
@@ -961,7 +969,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("c", "toggle the current task complete/reopen"),
         (
             "i / e",
-            "edit the current task's notes (task view; Esc back, Ctrl-S save)",
+            "edit the current task's description (task view; Esc back, Ctrl-S save)",
         ),
         (
             "↑ / ↓",
@@ -1325,7 +1333,8 @@ fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str, focused: bool) -> 
 }
 
 /// Task detail view (docs/plan.md Phase 6 "Task View and Logs"): fields,
-/// checklist, notes (with the insert-mode draft), attachments, links, and
+/// description text (stored in notes, with the insert-mode draft),
+/// attachments, links, and
 /// history. History lines are the CLI's exact formatting
 /// (`cli::task_view_entry_lines`), rendered here with per-line styles.
 fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
@@ -1459,29 +1468,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         buf,
         x,
         y,
-        "Checklist:",
-        app.task_focus == super::app::TaskFocus::Summary,
-    );
-    if y >= bottom {
-        return;
-    }
-    put(
-        buf,
-        x,
-        y,
-        "- [ ] (checklist editing arrives in a later phase)",
-        Style::default().fg(t::DIM),
-    );
-    y += 2;
-    if y >= bottom {
-        return;
-    }
-
-    y = task_section(
-        buf,
-        x,
-        y,
-        "Notes:",
+        "Description:",
         app.task_focus == super::app::TaskFocus::Notes,
     );
     if y >= bottom {
@@ -1559,7 +1546,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             x,
             y,
-            "- (add notes with 'e' in the task view)",
+            "- (add a description with 'e' in the task view)",
             Style::default().fg(t::DIM),
         );
         y += 1;

@@ -566,14 +566,9 @@ fn task_view_matches_plan_format() {
         "timestamps: {out}"
     );
 
-    // Checklist / notes stubs
     assert!(
-        out.contains("Checklist:\n- [ ] (add checklist items with `lun task edit T-003`)"),
-        "checklist stub: {out}"
-    );
-    assert!(
-        out.contains("Notes:\n- (add notes with `lun task edit T-003`)"),
-        "notes stub: {out}"
+        out.contains("Description:\n- (add a description with `lun task edit T-003 --notes \"...\"`)"),
+        "description stub: {out}"
     );
 
     // History (log): the CREATE entry with compact detail + commit line.
@@ -619,7 +614,7 @@ fn status_for_task_shows_task_data_with_last_commit_only() {
     );
     assert!(out.contains("Status:    follow-up"), "status: {out}");
     assert!(out.contains("Priority:  high"), "priority: {out}");
-    assert!(out.contains("Checklist:\n\n- [ ]"), "checklist: {out}");
+    assert!(out.contains("**Description:**"), "description: {out}");
     assert!(
         out.contains("**Last Commit:**"),
         "last commit section: {out}"

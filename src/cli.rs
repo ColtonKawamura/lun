@@ -1157,11 +1157,9 @@ pub fn status_task(app: &App, query: &str) -> Result<String> {
     out.push_str(&format!("Assignee:  {}\n", t.assignee.unwrap_or_default()));
     out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
     out.push_str(&format!("Created:   {}\n\n", display_ts(&t.created_at)));
-    out.push_str("Checklist:\n\n");
-    out.push_str("- [ ] (checklist editing arrives in a later phase)\n\n");
-    out.push_str("**Notes:**\n\n");
+    out.push_str("**Description:**\n\n");
     if t.notes.trim().is_empty() {
-        out.push_str("- (add notes with 'e' in the task view)\n\n");
+        out.push_str("- (add a description with 'e' in the task view)\n\n");
     } else {
         for line in t.notes.lines() {
             out.push_str(&format!("- {line}\n"));
@@ -1224,18 +1222,13 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     ));
     out.push_str(&format!("Created:   {}\n", display_ts(&t.created_at)));
     out.push_str(&format!("Updated:   {}\n", display_ts(&t.updated_at)));
-    out.push_str("\nChecklist:\n");
-    out.push_str(&format!(
-        "- [ ] (add checklist items with `lun task edit {}`)",
-        t.task_key
-    ));
-    out.push_str("\nNotes:\n");
+    out.push_str("\nDescription:\n");
     // Phase 7: notes are real data (TUI-editable). Show the saved text
     // when present; otherwise the add-hint (editing still lands with a
     // later CLI phase — the TUI edits them today).
     if t.notes.trim().is_empty() {
         out.push_str(&format!(
-            "- (add notes with `lun task edit {}`)",
+            "- (add a description with `lun task edit {} --notes \"...\"`)",
             t.task_key
         ));
     } else {
