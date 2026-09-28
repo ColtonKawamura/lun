@@ -188,15 +188,20 @@ fn command_output_colors_project_status_and_log_action() {
     let (root, _cli, mut tui) = fixture();
     tui.output = Some(CommandOutput {
         command: "demo".into(),
-        text: "Projects\n--------\n\nID      Name         Status   Todo   Doing   Follow-Up   Blocked   Done\nP-001   paper-stack  active   1      0       0           0         0\n\n2026-09-28 19:54  me  CREATE".into(),
+        text: "Projects\n--------\n\nID      Name          Status   Todo   Doing   Follow-Up   Blocked   Done\nP-001   paper-stack   active   1      0       0           0         0\n\n2026-09-28 19:54  me  CREATE".into(),
         is_error: false,
     });
     tui.view = View::Output;
 
-    let (_status_ch, status_fg, _status_bold) = cell(&tui, 100, 24, 22, 8);
+    let frame = screen(&tui, 100, 24);
+    let lines: Vec<&str> = frame.lines().collect();
+    let status_x = lines[8].find("active").unwrap() as u16;
+    let action_x = lines[10].find("CREATE").unwrap() as u16;
+
+    let (_status_ch, status_fg, _status_bold) = cell(&tui, 100, 24, status_x, 8);
     assert_eq!(status_fg, Color::Rgb(90, 220, 180));
 
-    let (_action_ch, action_fg, action_bold) = cell(&tui, 100, 24, 22, 10);
+    let (_action_ch, action_fg, action_bold) = cell(&tui, 100, 24, action_x, 10);
     assert_eq!(action_fg, Color::Rgb(177, 121, 255));
     assert!(action_bold);
 

@@ -450,6 +450,11 @@ fn detail_label_value(line: &str) -> Option<(&str, &str, &str)> {
     }
     let colon = line.find(':')?;
     let label = &line[..=colon];
+    let label_body = label.trim_end_matches(':').trim();
+    let first = label_body.chars().next()?;
+    if !first.is_ascii_alphabetic() && first != '*' {
+        return None;
+    }
     if !label
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | ' ' | '-' | '*'))

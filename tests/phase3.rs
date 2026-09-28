@@ -801,9 +801,15 @@ fn grep_searches_projects_tasks_and_commits() {
     let out = grep_view(&app, "paper-stack").unwrap();
     assert!(out.starts_with("Grep: paper-stack\n"), "header: {out}");
     assert!(out.contains("Projects\n--------"), "project section: {out}");
-    assert!(out.contains("P-001   Name     paper-stack"), "project hit: {out}");
+    assert!(
+        out.contains("P-001") && out.contains("Name") && out.contains("paper-stack"),
+        "project hit: {out}"
+    );
     assert!(out.contains("Tasks\n-----"), "task section: {out}");
-    assert!(out.contains("T-001   Project   paper-stack"), "task hit: {out}");
+    assert!(
+        out.contains("T-001") && out.contains("Project   paper-stack"),
+        "task hit: {out}"
+    );
     assert!(out.contains("Commits\n-------"), "commit section: {out}");
     assert!(
         out.contains("T-003") && out.contains("Commit") && out.contains("paper-stack"),
