@@ -711,6 +711,114 @@ fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+#[test]
+fn new_task_form_creates_tasks_in_selected_projects() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+
+    app.enter_view(View::NewTask, "task on project");
+    for _ in 0..7 {
+        app.form_nav(1);
+    }
+    app.submit_form();
+    let t1 = app.lun.as_ref().unwrap().task_by_key("T-005").unwrap();
+    let p1 = app.lun.as_ref().unwrap().project_by_key("P-001").unwrap();
+    assert_eq!(t1.project_id, Some(p1.id));
+
+    app.enter_view(View::NewTask, "task on unassigned");
+    app.form_nav(1); // Project field
+    app.form_cycle(-1); // Project -> P-000
+    for _ in 0..6 {
+        app.form_nav(1);
+    }
+    app.submit_form();
+    let t2 = app.lun.as_ref().unwrap().task_by_key("T-006").unwrap();
+    let p0 = app.lun.as_ref().unwrap().project_by_key("P-000").unwrap();
+    assert_eq!(t2.project_id, Some(p0.id));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn new_project_form_creates_project_and_selects_it() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+
+    app.enter_view(View::NewProject, "");
+    for ch in "infra".chars() {
+        app.form_type(ch);
+    }
+    app.form_nav(1);
+    app.form_cycle(1); // in-progress
+    app.form_nav(1);
+    app.submit_form();
+
+    let p = app.lun.as_ref().unwrap().project_by_name("infra").unwrap();
+    assert_eq!(p.project_key, "P-002");
+    assert_eq!(p.status, "in-progress");
+    assert_eq!(app.data.projects[app.data.current_project].project_key, "P-002");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn move_form_reassigns_task_and_writes_update_log() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+    app.view = View::Task;
+    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+
+    app.enter_view(View::MoveTask, "");
+    app.form_cycle(-1); // move to P-000 Unassigned
+    app.form_nav(1);
+    app.submit_form();
+
+    let t = app.lun.as_ref().unwrap().task_by_key("T-001").unwrap();
+    let p0 = app.lun.as_ref().unwrap().project_by_key("P-000").unwrap();
+    assert_eq!(t.project_id, Some(p0.id));
+    let logs = app.lun.as_ref().unwrap().logs_for("task", t.id).unwrap();
+    assert!(logs.iter().any(|e| e.message.contains("move T-001 to Unassigned")));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn dropped_paths_support_escaped_quoted_and_file_uri_without_copy() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+    app.view = View::Task;
+
+    let spaced = root.join("My File.pdf");
+    let plain = root.join("second.txt");
+    let local = root.join("third.txt");
+    std::fs::write(&spaced, "a").unwrap();
+    std::fs::write(&plain, "b").unwrap();
+    std::fs::write(&local, "c").unwrap();
+
+    let escaped_spaced = spaced.display().to_string().replace(' ', "\\ ");
+    let drop_text = format!(
+        "{} file://{} file://localhost{}",
+        escaped_spaced,
+        plain.display(),
+        local.display()
+    );
+    app.attach_dropped_file(&drop_text);
+
+    let t = app.lun.as_ref().unwrap().task_by_key("T-001").unwrap();
+    assert!(t.notes.contains("[My File.pdf](file://"));
+    assert!(t.notes.contains("[second.txt](file://"));
+    assert!(t.notes.contains("[third.txt](file://"));
+    assert!(t.notes.contains("My%20File.pdf"));
+    assert!(
+        !root.join(".lun/attachments").join("My File.pdf").exists(),
+        "drop linking must not copy into .lun/attachments"
+    );
+    let links = app.lun.as_ref().unwrap().links_for_task(t.id).unwrap();
+    assert!(links.iter().any(|l| l.uri.starts_with("file://")));
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 // Rendering must never panic on tiny screens (saturating clamps everywhere).
 #[test]
 fn tiny_screen_does_not_panic() {
