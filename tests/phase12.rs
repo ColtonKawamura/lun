@@ -355,3 +355,19 @@ fn tui_external_attach_prompt_accepts_shifted_confirmation() {
     let _ = std::fs::remove_file(&outside);
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn tui_prompt_session_renders_typed_commit_message() {
+    let (root, _cli, mut tui) = fixture();
+    send_command(&mut tui, "add proj myProj");
+    assert!(tui.prompt_session.is_some());
+
+    for ch in "seed alpha".chars() {
+        term::handle_key(&mut tui, &key(KeyCode::Char(ch)));
+    }
+
+    let frame = screen(&tui, 80, 24);
+    assert!(frame.contains("Commit Message: seed alpha_"), "{frame}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
