@@ -142,11 +142,10 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
             None => {}
         },
         "open-uri" => extend_unique(&mut out, ["--on"]),
-        "pr" => {
-            if tokens.get(1).map(String::as_str) == Some("new") {
-                extend_unique(&mut out, ["--from", "--to"]);
-            }
+        "pr" if tokens.get(1).map(String::as_str) == Some("new") => {
+            extend_unique(&mut out, ["--from", "--to"]);
         }
+        "pr" => {}
         _ => {}
     }
     out
@@ -190,16 +189,19 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     out.extend(project_candidates(app));
                 }
             }
-            "task" => {
-                if matches!(tokens.first().map(String::as_str), Some("link" | "open-link" | "attach"))
-                {
-                    out.extend(task_candidates(app));
-                } else if tokens.first().map(String::as_str) == Some("open-uri")
-                    && matches!(tokens.get(tokens.len().saturating_sub(2)).map(String::as_str), Some("--on"))
-                {
-                    out.extend(task_candidates(app));
-                }
+            "task"
+                if matches!(
+                    tokens.first().map(String::as_str),
+                    Some("link" | "open-link" | "attach")
+                ) || (tokens.first().map(String::as_str) == Some("open-uri")
+                    && matches!(
+                        tokens.get(tokens.len().saturating_sub(2)).map(String::as_str),
+                        Some("--on")
+                    )) =>
+            {
+                out.extend(task_candidates(app));
             }
+            "task" => {}
             _ => {}
         }
     }
@@ -2532,8 +2534,8 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                 "expected: lun open-link <task|project> <key|title> <label>",
             )),
         },
-        Some("open-uri") => open_uri(app, &args[1..].to_vec()),
-        Some("pr") => run_pr(app, &args[1..].to_vec()),
+        Some("open-uri") => open_uri(app, &args[1..]),
+        Some("pr") => run_pr(app, &args[1..]),
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),
