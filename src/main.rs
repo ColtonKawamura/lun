@@ -100,19 +100,12 @@ fn open_app() -> Result<cli::App, String> {
 fn init_db() -> Result<(), String> {
     let cwd = env::current_dir().map_err(|e| format!("resolving CWD: {e}"))?;
     let lun = Lun::init(&cwd).map_err(|e| e.to_string())?;
-
-    let version: i64 = {
-        let conn =
-            rusqlite::Connection::open(cwd.join(".lun/lun.db")).map_err(|e| e.to_string())?;
-        conn.query_row("SELECT MAX(version) FROM migrations", [], |r| r.get(0))
-            .map_err(|e| e.to_string())?
-    };
+    let version = lun.schema_version().map_err(|e| e.to_string())?;
 
     if version == db::CURRENT_VERSION {
         println!("lun init: .lun/lun.db ready (schema v{version})");
     }
     println!("lun init: re-run anytime — migrations are idempotent.");
-    drop(lun);
     Ok(())
 }
 
