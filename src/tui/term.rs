@@ -266,6 +266,30 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     }
 
     match key.code {
+        KeyCode::Char('[')
+            if key.modifiers.contains(KeyModifiers::SUPER)
+                || key.modifiers.contains(KeyModifiers::META) =>
+        {
+            app.go_view_back()
+        }
+        KeyCode::Char('{')
+            if key.modifiers.contains(KeyModifiers::SUPER)
+                || key.modifiers.contains(KeyModifiers::META) =>
+        {
+            app.go_view_back()
+        }
+        KeyCode::Char(']')
+            if key.modifiers.contains(KeyModifiers::SUPER)
+                || key.modifiers.contains(KeyModifiers::META) =>
+        {
+            app.go_view_forward()
+        }
+        KeyCode::Char('}')
+            if key.modifiers.contains(KeyModifiers::SUPER)
+                || key.modifiers.contains(KeyModifiers::META) =>
+        {
+            app.go_view_forward()
+        }
         KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
         KeyCode::Char('?') if accepts_shifted_shortcut(key) => app.enter_view(View::Help, ""),
         KeyCode::Char(':') if accepts_shifted_shortcut(key) => app.open_palette(),

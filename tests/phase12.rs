@@ -193,10 +193,10 @@ fn command_output_colors_project_status_and_log_action() {
     });
     tui.view = View::Output;
 
-    let (_status_ch, status_fg, _status_bold) = cell(&tui, 100, 24, 26, 6);
+    let (_status_ch, status_fg, _status_bold) = cell(&tui, 100, 24, 22, 8);
     assert_eq!(status_fg, Color::Rgb(90, 220, 180));
 
-    let (_action_ch, action_fg, action_bold) = cell(&tui, 100, 24, 22, 8);
+    let (_action_ch, action_fg, action_bold) = cell(&tui, 100, 24, 22, 10);
     assert_eq!(action_fg, Color::Rgb(177, 121, 255));
     assert!(action_bold);
 

@@ -440,6 +440,27 @@ fn leader_space_f_g_opens_text_grep_finder() {
 }
 
 #[test]
+fn command_bracket_shortcuts_navigate_screen_history() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.enter_view(View::Project, "");
+    app.enter_view(View::Help, "");
+    assert_eq!(app.view, View::Help);
+
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('{'), KeyModifiers::SUPER | KeyModifiers::SHIFT),
+    );
+    assert_eq!(app.view, View::Project);
+
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('}'), KeyModifiers::SUPER | KeyModifiers::SHIFT),
+    );
+    assert_eq!(app.view, View::Help);
+}
+
+#[test]
 fn backspace_in_command_prompt_edits_query() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
