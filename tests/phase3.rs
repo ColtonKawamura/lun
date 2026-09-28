@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use lun::cli::{
     create_task, log_view, resolve_entity, resolve_project, resolve_task, status_all,
-    status_project, status_project_board, status_target, task_archive, task_complete, task_edit, task_list,
-    task_reopen, task_view, App, EXIT_USAGE,
+    status_project, status_project_board, status_target, task_archive, task_complete, task_edit,
+    task_list, task_reopen, task_view, App, EXIT_USAGE,
 };
 use lun::{Lun, ProjectSpec, TaskSpec};
 
@@ -613,16 +613,25 @@ fn status_for_task_shows_task_data_with_last_commit_only() {
     let out = status_target(&app, "Write methods section draft").unwrap();
     assert!(out.starts_with("**Task T-003**"), "header: {out}");
     assert!(out.contains("Project:   paper-stack"), "project: {out}");
-    assert!(out.contains("Title:     Write methods section draft"), "title: {out}");
+    assert!(
+        out.contains("Title:     Write methods section draft"),
+        "title: {out}"
+    );
     assert!(out.contains("Status:    follow-up"), "status: {out}");
     assert!(out.contains("Priority:  high"), "priority: {out}");
     assert!(out.contains("Checklist:\n\n- [ ]"), "checklist: {out}");
-    assert!(out.contains("**Last Commit:**"), "last commit section: {out}");
+    assert!(
+        out.contains("**Last Commit:**"),
+        "last commit section: {out}"
+    );
     assert!(
         out.contains("  me  CREATE\n    Status: follow-up, Priority: high\n    Commit: add task"),
         "last commit entry: {out}"
     );
-    assert!(!out.contains("History (log):"), "should not show full history: {out}");
+    assert!(
+        !out.contains("History (log):"),
+        "should not show full history: {out}"
+    );
 }
 
 #[test]

@@ -23,7 +23,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.first().map(String::as_str) == Some("complete") {
-        let app = env::current_dir().ok().and_then(|cwd| cli::App::open(&cwd).ok());
+        let app = env::current_dir()
+            .ok()
+            .and_then(|cwd| cli::App::open(&cwd).ok());
         let out = cli::complete_output(app.as_ref(), &args[1..]);
         if !out.is_empty() {
             println!("{out}");
@@ -119,44 +121,5 @@ fn init_db() -> Result<(), String> {
 }
 
 fn print_help() {
-    println!(
-        "lun v{} — CLI-first markdown task & project tracker",
-        env!("CARGO_PKG_VERSION")
-    );
-    println!();
-    println!("Usage:");
-    println!("  lun                     Show banner");
-    println!("  lun init                Create .lun/lun.db in the current directory (idempotent)");
-    println!("  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board");
-    println!("  lun new proj \"<name>\"  Create a project");
-    println!(
-        "  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)"
-    );
-    println!("  lun move \"<task>\" \"<project>\"   Move a task to a project");
-    println!("  lun task <T-00N|title>    View a task (fields, labels, history)");
-    println!("  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status");
-    println!("  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)");
-    println!("  lun task edit <task> [--field value]   Edit task fields");
-    println!("  lun proj <project> --status <active|inactive>   Update project status");
-    println!("  lun task complete|reopen|archive <task>   Update task lifecycle");
-    println!("  lun log <project|task>    Commit-style history for a project or task");
-    println!("  lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");
-    println!("  lun attach ls <task|project> <key|title>   List attachments");
-    println!(
-        "  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments"
-    );
-    println!("  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link");
-    println!("  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`");
-    println!("  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)");
-    println!("  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR (defaults: task's branch -> main)");
-    println!("  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)");
-    println!("  lun pr ls               List open and merged PRs");
-    println!(
-        "  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)"
-    );
-    println!("  lun --version             Print version");
-    println!("  lun --help                Print this help");
-    println!();
-    println!("Planned (later phases):");
-    println!("  lun (no args in TUI mode) Full-screen TUI (Phase 5+)");
+    println!("{}", cli::help_text(env!("CARGO_PKG_VERSION")));
 }

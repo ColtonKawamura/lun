@@ -103,7 +103,7 @@ fn fixture() -> (std::path::PathBuf, Lun) {
 fn app_for(root: &std::path::Path) -> App {
     let lun = Lun::open(root).unwrap();
     let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), None).unwrap();
-    App::new(d)
+    App::with_store(d, root.to_path_buf(), lun)
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +170,8 @@ fn palette_opens_filters_and_executes() {
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     assert!(app.palette_open);
     assert_eq!(app.palette_query, "");
-    assert_eq!(app.filtered_commands().len(), 12);
+    assert!(app.filtered_commands().iter().any(|c| c == "status"));
+    assert!(app.filtered_commands().iter().any(|c| c == "task"));
 
     // Filtering narrows the list (the plan's "/sta" example shape).
     term::handle_key(&mut app, &key(KeyCode::Char('s')));
@@ -179,14 +180,14 @@ fn palette_opens_filters_and_executes() {
     assert_eq!(
         app.filtered_commands()
             .iter()
-            .map(|c| c.name)
+            .map(String::as_str)
             .collect::<Vec<_>>(),
-        vec!["/status"]
+        vec!["status"]
     );
 
     // Backspace restores the wider match ("st" still matches only /status).
     term::handle_key(&mut app, &key(KeyCode::Backspace));
-    assert_eq!(app.filtered_commands().len(), 1); // /status
+    assert_eq!(app.filtered_commands().len(), 1);
 
     // Down then up wraps within the filtered list.
     app.palette_down();
@@ -194,19 +195,16 @@ fn palette_opens_filters_and_executes() {
     app.palette_up();
     assert_eq!(app.palette_selected, 0);
 
-    // Enter runs the selected command: /status -> View::Status, palette closed.
+    term::handle_key(&mut app, &key(KeyCode::Tab));
+    // Enter runs the selected command and shows retained command output.
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(!app.palette_open);
-    assert_eq!(app.view, View::Status);
+    assert_eq!(app.view, View::Output);
+    assert!(app.output.as_ref().unwrap().text.contains("Projects"));
 
     // Re-open and run /quit.
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
-    app.palette_query.clear();
-    for (i, c) in app.filtered_commands().iter().enumerate() {
-        if c.name == "/quit" {
-            app.palette_selected = i;
-        }
-    }
+    app.palette_query = "quit".into();
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(app.quit);
 }
@@ -234,9 +232,10 @@ fn palette_no_match_shows_error_message() {
     }
     assert!(app.filtered_commands().is_empty());
     term::handle_key(&mut app, &key(KeyCode::Enter));
-    let (msg, is_err) = app.message.clone().unwrap();
-    assert!(is_err);
-    assert!(msg.contains("xyz"));
+    assert_eq!(app.view, View::Output);
+    let out = app.output.as_ref().unwrap();
+    assert!(out.is_error);
+    assert!(out.text.contains("xyz"));
     assert!(!app.palette_open);
 }
 
@@ -321,7 +320,7 @@ fn initial_screen_renders_banner_context_and_board() {
 
     // Hint bar on the last row with the purple prompt symbol.
     let last = s.lines().last().unwrap();
-    assert!(last.contains("type \"/\" for commands, \":\" for quick actions, \"q\" to quit"));
+    assert!(last.contains("type \"/\" or \":\" for commands, \"q\" to quit"));
     let (prompt, pfg, ..) = cell(&app, 80, 24, 0, 23);
     assert_eq!(prompt, '\u{203a}');
     assert_eq!(pfg, Color::Rgb(177, 121, 255));
@@ -342,10 +341,7 @@ fn palette_renders_filtered_rows_with_inverted_selection() {
     assert_eq!(app.filtered_commands().len(), 1);
     let s = screen(&app, 80, 24);
     assert!(s.contains("COMMANDS"));
-    assert!(s.contains("/status"));
-    assert!(s.contains("Show global status"));
-    // /board must be filtered out by "st".
-    assert!(!s.contains("/board"));
+    assert!(s.contains("status"));
 
     // Query renders on the bottom prompt line.
     let lines: Vec<&str> = s.lines().collect();
@@ -355,7 +351,7 @@ fn palette_renders_filtered_rows_with_inverted_selection() {
     let sep_y = 24u16 - 2;
     let selected_y = sep_y - 1;
     let (ch, fg, bg, _bold) = cell(&app, 80, 24, 0, selected_y);
-    assert_eq!(ch, '/');
+    assert_eq!(ch, 's');
     assert_eq!(bg, Color::Rgb(177, 121, 255));
     assert_eq!(fg, Color::Rgb(13, 17, 28));
 }
@@ -383,7 +379,7 @@ fn palette_commands_render_above_separator() {
     let sep_y = 24usize - 2;
 
     let heading_y = line_with(&lines, "COMMANDS").unwrap();
-    let row_y = line_with(&lines, "/status").unwrap();
+    let row_y = line_with(&lines, "status").unwrap();
 
     assert!(heading_y < sep_y);
     assert_eq!(row_y, sep_y - 1);
@@ -411,7 +407,7 @@ fn palette_selection_highlight_still_applies() {
     let sep_y = 24u16 - 2;
     let selected_y = sep_y - 1;
     let (ch, fg, bg, _bold) = cell(&app, 80, 24, 0, selected_y);
-    assert_eq!(ch, '/');
+    assert_eq!(ch, 's');
     assert_eq!(bg, Color::Rgb(177, 121, 255));
     assert_eq!(fg, Color::Rgb(13, 17, 28));
 }

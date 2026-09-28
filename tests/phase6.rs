@@ -22,10 +22,6 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
-fn key_mod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
-    KeyEvent::new(code, mods)
-}
-
 /// Render one frame of `app` at w×h and return the screen as lines of text.
 fn screen(app: &App, w: u16, h: u16) -> String {
     let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
@@ -107,13 +103,11 @@ fn fixture() -> (std::path::PathBuf, Lun) {
 fn app_for(root: &std::path::Path) -> App {
     let lun = Lun::open(root).unwrap();
     let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
-    App::new(d)
+    App::with_store(d, root.to_path_buf(), lun)
 }
 
 fn app_with_store(root: &std::path::Path) -> App {
-    let lun = Lun::open(root).unwrap();
-    let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
-    App::with_store(d, root.to_path_buf(), lun)
+    app_for(root)
 }
 
 // ---------------------------------------------------------------------------
@@ -313,11 +307,7 @@ fn unsaved_note_blocks_view_switches_and_quit() {
 
     // q is blocked by the palette-level guard: run /quit with the palette.
     app.open_palette();
-    for (i, c) in app.filtered_commands().iter().enumerate() {
-        if c.name == "/quit" {
-            app.palette_selected = i;
-        }
-    }
+    app.palette_query = "quit".into();
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(!app.quit);
     let (msg, is_err) = app.message.clone().unwrap();
@@ -328,11 +318,7 @@ fn unsaved_note_blocks_view_switches_and_quit() {
     app.mode = Mode::Insert;
     term::handle_key(&mut app, &key(KeyCode::Esc));
     app.open_palette();
-    for (i, c) in app.filtered_commands().iter().enumerate() {
-        if c.name == "/quit" {
-            app.palette_selected = i;
-        }
-    }
+    app.palette_query = "quit".into();
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(app.quit);
 }
@@ -350,42 +336,41 @@ fn h_l_are_reserved_vim_noops() {
 }
 
 // ---------------------------------------------------------------------------
-// Key dispatch: statusline
+// Key dispatch: command prompt
 // ---------------------------------------------------------------------------
 
 #[test]
-fn statusline_status_query_opens_log_view() {
+fn colon_opens_command_prompt_and_executes_status_query() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
-    assert!(app.statusline_open);
+    assert!(app.palette_open);
     for c in "status T-001".chars() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Enter));
-    assert!(!app.statusline_open);
-    assert_eq!(app.view, View::Log);
-    assert!(matches!(app.log_subject, Some(data::LogSubject::Task(0))));
+    assert!(!app.palette_open);
+    assert_eq!(app.view, View::Output);
+    let out = app.output.as_ref().unwrap();
+    assert!(out.text.contains("**Task T-001**"), "{}", out.text);
 }
 
 #[test]
-fn statusline_without_command_defaults_to_status() {
+fn bare_log_command_uses_current_project_context() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
-    term::handle_key(&mut app, &key(KeyCode::Char(':')));
-    for c in "paper-stack".chars() {
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    for c in "log".chars() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Enter));
-    assert_eq!(app.view, View::Log);
-    assert!(matches!(
-        app.log_subject,
-        Some(data::LogSubject::Project(1))
-    ));
+    let out = app.output.as_ref().unwrap();
+    assert!(out.text.contains("paper-stack"));
+    assert!(out.text.contains("CREATE"));
 }
 
 #[test]
-fn statusline_unknown_action_and_bad_target_show_error() {
+fn command_prompt_bad_target_shows_error() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
@@ -393,10 +378,10 @@ fn statusline_unknown_action_and_bad_target_show_error() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Enter));
-    let (msg, is_err) = app.message.clone().unwrap();
-    assert!(is_err);
-    assert!(msg.contains("bogus"));
-    assert_eq!(app.view, View::Initial);
+    let out = app.output.as_ref().unwrap();
+    assert!(out.is_error);
+    assert!(out.text.contains("bogus"));
+    assert_eq!(app.view, View::Output);
 
     // Bad target: stays put, error shown.
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
@@ -404,14 +389,13 @@ fn statusline_unknown_action_and_bad_target_show_error() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Enter));
-    let (msg, is_err) = app.message.clone().unwrap();
-    assert!(is_err);
-    assert!(msg.contains("no-such-task"));
-    assert_eq!(app.view, View::Initial);
+    let out = app.output.as_ref().unwrap();
+    assert!(out.is_error);
+    assert!(out.text.contains("no-such-task"));
 }
 
 #[test]
-fn statusline_esc_closes_without_running() {
+fn command_prompt_esc_closes_without_running() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
@@ -419,13 +403,13 @@ fn statusline_esc_closes_without_running() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Esc));
-    assert!(!app.statusline_open);
-    assert_eq!(app.statusline_query, "");
+    assert!(!app.palette_open);
+    assert_eq!(app.palette_query, "");
     assert_eq!(app.view, View::Initial);
 }
 
 #[test]
-fn backspace_in_statusline_edits_query() {
+fn backspace_in_command_prompt_edits_query() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
@@ -435,7 +419,7 @@ fn backspace_in_statusline_edits_query() {
     for _ in 0..5 {
         term::handle_key(&mut app, &key(KeyCode::Backspace));
     }
-    assert_eq!(app.statusline_query, "status ");
+    assert_eq!(app.palette_query, "status ");
 }
 
 // ---------------------------------------------------------------------------
@@ -455,16 +439,17 @@ fn palette_task_command_line_selects_task() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     open_palette_and_run(&mut app, "task T-003");
-    assert_eq!(app.view, View::Task);
+    assert_eq!(app.view, View::Output);
     assert!(app.current_task().unwrap().task_key == "T-003");
+    assert!(app.output.as_ref().unwrap().text.contains("Task T-003"));
 }
 
 #[test]
 fn palette_task_by_title_selects_task() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
-    open_palette_and_run(&mut app, "task write methods");
-    assert_eq!(app.view, View::Task);
+    open_palette_and_run(&mut app, "task \"write methods\"");
+    assert_eq!(app.view, View::Output);
     assert!(app.current_task().unwrap().task_key == "T-003");
 }
 
@@ -473,10 +458,10 @@ fn palette_task_bad_key_shows_error_and_stays() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     open_palette_and_run(&mut app, "task T-999");
-    assert_ne!(app.view, View::Task);
-    let (msg, is_err) = app.message.clone().unwrap();
-    assert!(is_err);
-    assert!(msg.contains("T-999"));
+    assert_eq!(app.view, View::Output);
+    let out = app.output.as_ref().unwrap();
+    assert!(out.is_error);
+    assert!(out.text.contains("T-999"));
 }
 
 #[test]
@@ -484,8 +469,9 @@ fn palette_log_command_line_selects_subject() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     open_palette_and_run(&mut app, "log T-004");
-    assert_eq!(app.view, View::Log);
-    assert!(matches!(app.log_subject, Some(data::LogSubject::Task(3))));
+    assert_eq!(app.view, View::Output);
+    assert!(app.output.as_ref().unwrap().text.contains("CREATE"));
+    assert!(app.current_task().unwrap().task_key == "T-004");
 }
 
 #[test]
@@ -493,11 +479,8 @@ fn palette_log_default_is_current_project() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root); // current project: paper-stack (idx 1)
     open_palette_and_run(&mut app, "log");
-    assert_eq!(app.view, View::Log);
-    assert!(matches!(
-        app.log_subject,
-        Some(data::LogSubject::Project(1))
-    ));
+    assert_eq!(app.view, View::Output);
+    assert!(app.output.as_ref().unwrap().text.contains("paper-stack"));
 }
 
 #[test]
@@ -506,7 +489,7 @@ fn palette_task_command_with_spaces_between_words() {
     let mut app = app_for(&root);
     // "/task  T-001" (double space) still works: rest is trimmed.
     open_palette_and_run(&mut app, "task  T-001");
-    assert_eq!(app.view, View::Task);
+    assert_eq!(app.view, View::Output);
     assert!(app.current_task().unwrap().task_key == "T-001");
 }
 

@@ -137,35 +137,19 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     }
 
     if app.palette_open {
-        // Note: in the palette j/k are TYPED, not navigation — command
-        // lines like `/task T-001` contain them. Arrow keys navigate.
+        // Note: in the command prompt j/k are TYPED, not navigation.
         if !matches!(key.code, KeyCode::Char('g')) {
             app.pending_g = false;
         }
 
         match key.code {
-            KeyCode::Esc => app.palette_open = false,
-            KeyCode::Enter => app.run_command(app.palette_selected),
+            KeyCode::Esc => app.close_command_prompt(),
+            KeyCode::Enter => app.run_command(),
             KeyCode::Up if key.modifiers == KeyModifiers::NONE => app.palette_up(),
             KeyCode::Down if key.modifiers == KeyModifiers::NONE => app.palette_down(),
+            KeyCode::Tab if key.modifiers == KeyModifiers::NONE => app.apply_selected_suggestion(),
             KeyCode::Backspace => app.palette_backspace(),
             KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.palette_type(c),
-            _ => {}
-        }
-        return;
-    }
-
-    if app.statusline_open {
-        match key.code {
-            KeyCode::Esc => {
-                app.statusline_open = false;
-                app.statusline_query.clear();
-            }
-            KeyCode::Enter => app.run_statusline(),
-            KeyCode::Backspace => {
-                app.statusline_query.pop();
-            }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.statusline_query.push(c),
             _ => {}
         }
         return;
@@ -195,10 +179,7 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     match key.code {
         KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
         KeyCode::Char('?') if key.modifiers == KeyModifiers::NONE => app.enter_view(View::Help, ""),
-        KeyCode::Char(':') if key.modifiers == KeyModifiers::NONE => {
-            app.statusline_open = true;
-            app.statusline_query.clear();
-        }
+        KeyCode::Char(':') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
         KeyCode::Esc | KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => app.go_back(),
         KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => app.quit = true,
         KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => app.open_current_task(),
