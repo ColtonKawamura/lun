@@ -60,6 +60,43 @@ Point `PREFIX` elsewhere (`make install PREFIX=/usr/local`). The release
 binary is stripped; `rusqlite` ships its own SQLite (no system library
 needed). A future Homebrew tap is on the roadmap.
 
+## Shell completion
+
+### zsh (primary)
+
+```sh
+make install-completions
+```
+
+Then add this to `~/.zshrc`:
+
+```sh
+fpath=(~/.zsh/completions $fpath)
+autoload -Uz compinit && compinit
+```
+
+`completions/_lun` uses `lun complete -- ...` and supports task/project
+keys and titles (including spaces). If you want repeated Tab to cycle through
+matches, add:
+
+```sh
+zstyle ':completion:*' menu select
+```
+
+### bash (best effort)
+
+Source the script:
+
+```sh
+source /path/to/lun/completions/lun.bash
+```
+
+To cycle candidates with repeated Tab in bash, add:
+
+```sh
+bind 'TAB:menu-complete'
+```
+
 ## Docs
 
 - [docs/plan.md](docs/plan.md) — the phase-by-phase plan

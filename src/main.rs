@@ -22,6 +22,15 @@ pub use db::{
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
 
+    if args.first().map(String::as_str) == Some("complete") {
+        let app = env::current_dir().ok().and_then(|cwd| cli::App::open(&cwd).ok());
+        let out = cli::complete_output(app.as_ref(), &args[1..]);
+        if !out.is_empty() {
+            println!("{out}");
+        }
+        return ExitCode::SUCCESS;
+    }
+
     if args.contains(&"--version".to_string()) {
         println!("lun v{}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;

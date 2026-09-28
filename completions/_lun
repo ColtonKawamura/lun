@@ -1,0 +1,11 @@
+#compdef lun
+# Add `zstyle ':completion:*' menu select` to ~/.zshrc to cycle candidates on repeated Tab.
+
+_lun() {
+  local -a candidates
+  candidates=("${(@f)$(lun complete -- "${words[@]}" 2>/dev/null)}")
+  (( ${#candidates[@]} )) || return 0
+  compadd -Q -a candidates
+}
+
+compdef _lun lun
