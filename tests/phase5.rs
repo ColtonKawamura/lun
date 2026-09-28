@@ -55,6 +55,10 @@ fn cell(app: &App, w: u16, h: u16, x: u16, y: u16) -> (char, Color, Color, bool)
     )
 }
 
+fn line_with(haystack: &[&str], needle: &str) -> Option<usize> {
+    haystack.iter().position(|line| line.contains(needle))
+}
+
 fn temp_root(name: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -332,20 +336,105 @@ fn palette_renders_filtered_rows_with_inverted_selection() {
     }
     assert_eq!(app.filtered_commands().len(), 1);
     let s = screen(&app, 80, 24);
-    assert!(s.contains("\u{203a} /st"));
     assert!(s.contains("COMMANDS"));
     assert!(s.contains("/status"));
     assert!(s.contains("Show global status"));
     // /board must be filtered out by "st".
     assert!(!s.contains("/board"));
 
-    // Selected row is inverted: purple background.
-    // paint_palette: prompt y=0, "COMMANDS" heading y=2 (underline y=3),
-    // so the first row is y=4.
-    let (ch, fg, bg, _bold) = cell(&app, 80, 24, 0, 4);
+    // Query renders on the bottom prompt line.
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(lines[23].contains("› /st_"));
+
+    // Selected row is inverted: purple background and now bottom-anchored.
+    let sep_y = 24u16 - 2;
+    let selected_y = sep_y - 1;
+    let (ch, fg, bg, _bold) = cell(&app, 80, 24, 0, selected_y);
     assert_eq!(ch, '/');
     assert_eq!(bg, Color::Rgb(177, 121, 255));
     assert_eq!(fg, Color::Rgb(13, 17, 28));
+}
+
+#[test]
+fn palette_query_renders_on_bottom_prompt_line() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.palette_open = true;
+    app.palette_query = "this is me typing".to_string();
+    let s = screen(&app, 80, 24);
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(lines[23].contains("/this is me typing"));
+    assert!(!lines[0].contains("/this is me typing"));
+}
+
+#[test]
+fn palette_commands_render_above_separator() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.palette_open = true;
+    app.palette_query = "st".to_string();
+    let s = screen(&app, 80, 24);
+    let lines: Vec<&str> = s.lines().collect();
+    let sep_y = 24usize - 2;
+
+    let heading_y = line_with(&lines, "COMMANDS").unwrap();
+    let row_y = line_with(&lines, "/status").unwrap();
+
+    assert!(heading_y < sep_y);
+    assert_eq!(row_y, sep_y - 1);
+    assert!(row_y < sep_y);
+}
+
+#[test]
+fn palette_does_not_clobber_content_top() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.view = View::Initial;
+    app.palette_open = true;
+    let s = screen(&app, 80, 24);
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(lines[0].contains("    _                    _"));
+    assert!(lines[1].contains("| |    _   _ _ __"));
+}
+
+#[test]
+fn palette_selection_highlight_still_applies() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.palette_open = true;
+    app.palette_query = "st".to_string();
+    let sep_y = 24u16 - 2;
+    let selected_y = sep_y - 1;
+    let (ch, fg, bg, _bold) = cell(&app, 80, 24, 0, selected_y);
+    assert_eq!(ch, '/');
+    assert_eq!(bg, Color::Rgb(177, 121, 255));
+    assert_eq!(fg, Color::Rgb(13, 17, 28));
+}
+
+#[test]
+fn long_command_list_is_clamped_to_available_rows() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.palette_open = true;
+    app.palette_query.clear();
+    // 80x10 gives only 8 rows above the separator for the palette list.
+    let s = screen(&app, 80, 10);
+    let lines: Vec<&str> = s.lines().collect();
+    assert_eq!(lines.len(), 10);
+    assert!(lines[8].chars().all(|c| c == '-'));
+    assert!(lines[9].contains('›'));
+}
+
+#[test]
+fn statusline_query_renders_on_bottom_prompt_line() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.statusline_open = true;
+    app.statusline_query = "project".to_string();
+    let s = screen(&app, 80, 24);
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(lines[23].contains("status project"));
+    assert!(!lines[0].contains("status project"));
 }
 
 #[test]

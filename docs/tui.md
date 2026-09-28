@@ -35,6 +35,12 @@ Notes editing: `i`/`e` in the task view enters insert mode; type
 markdown; `esc` back to normal; `ctrl-s` to save. Unsaved edits block
 view switches and `q` (a message tells you to `esc` first).
 
+Palette + statusline layout: the prompt composer is always pinned to the
+last row. When `/` is open, the prompt line shows `› /<query>` (with the
+query in cyan) and command suggestions render immediately above the
+separator, growing upward like a shell completion popup. `:` quick
+actions use the same bottom prompt line (`› status <query>`).
+
 ## Drag-and-drop attachments (Phase 7)
 
 Drop a file (or paste a path) while a task is selected: the file is
