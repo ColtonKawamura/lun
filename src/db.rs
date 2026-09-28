@@ -1155,7 +1155,9 @@ impl Lun {
         let now = Self::now();
         let (entity_type, entity_id, task_id, project_id, target_label) = match target {
             AttachmentTarget::Task(task_id) => {
-                let task = self.task_by_id(task_id)?;
+                let task = self
+                    .task_by_id(task_id)
+                    .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
                 ("task", task_id, Some(task_id), None, task.task_key)
             }
             AttachmentTarget::Project(project_id) => {

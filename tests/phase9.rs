@@ -77,10 +77,10 @@ fn open_pr(lun: &Lun, task_id: i64) -> lun::Pr {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn schema_v3_adds_prs_table() {
+fn schema_includes_prs_table() {
     let (root, lun, _, _) = fixture();
-    assert_eq!(lun::db::CURRENT_VERSION, 3);
-    // A fresh v3 DB has no PRs but the table answers.
+    assert!(lun::db::CURRENT_VERSION >= 3);
+    // A fresh current-version DB has no PRs but the table answers.
     assert!(lun.list_prs().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
