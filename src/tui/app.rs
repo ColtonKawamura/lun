@@ -746,7 +746,7 @@ impl App {
 
     pub fn current_command_prompt(&self) -> String {
         if let Some(prompt) = self.current_prompt_label() {
-            prompt
+            format!("{prompt}{}", self.palette_query)
         } else {
             format!("/{}", self.palette_query)
         }

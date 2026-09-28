@@ -468,6 +468,12 @@ fn command_bracket_shortcuts_navigate_screen_history() {
         &key_with_modifiers(KeyCode::Char(']'), KeyModifiers::SUPER),
     );
     assert_eq!(app.view, View::Help);
+
+    term::handle_key(&mut app, &key(KeyCode::Char('[')));
+    assert_eq!(app.view, View::Project);
+
+    term::handle_key(&mut app, &key(KeyCode::Char(']')));
+    assert_eq!(app.view, View::Help);
 }
 
 #[test]
