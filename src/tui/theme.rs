@@ -23,13 +23,14 @@ pub const DONE: Color = Color::Rgb(60, 220, 120);
 /// Bright red — errors.
 pub const ERROR: Color = Color::Rgb(255, 80, 80);
 
-/// `todo` = blue, `in-progress` = bright purple, `review` = magenta,
-/// `done` = bright green.
+/// `todo` = blue, `doing` = bright purple, `follow-up` = magenta,
+/// `blocked` = red, `done` = bright green.
 pub fn status_color(status: &str) -> Color {
     match status {
         "todo" => Color::Rgb(80, 140, 255),
-        "in-progress" => PURPLE,
-        "review" => MAGENTA,
+        "doing" => PURPLE,
+        "follow-up" => MAGENTA,
+        "blocked" => ERROR,
         "done" => DONE,
         _ => TEXT,
     }

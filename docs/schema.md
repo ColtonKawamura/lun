@@ -79,6 +79,12 @@ Version 5 adds soft-archive state to tasks:
 ALTER TABLE tasks ADD COLUMN archived_at TEXT;
 ```
 
+Version 6 normalizes statuses:
+- project statuses become `active` / `inactive` only;
+- task statuses become `todo` / `doing` / `follow-up` / `blocked` / `done`;
+- existing task values are migrated (`in-progress`→`doing`, `review`→`follow-up`);
+- existing project values are migrated (`done`→`inactive`, everything else→`active`).
+
 ## projects
 
 | column        | type    | notes |
@@ -86,7 +92,7 @@ ALTER TABLE tasks ADD COLUMN archived_at TEXT;
 | id            | INTEGER | PK |
 | project_key   | TEXT    | UNIQUE, e.g. `P-001`; `P-000` = Unassigned (seeded) |
 | name          | TEXT    | e.g. `paper-stack` |
-| status        | TEXT    | `planning` \| `active` \| `in-progress` \| `done` (CHECK) |
+| status        | TEXT    | `active` \| `inactive` (CHECK) |
 | created_at    | TEXT    | UTC timestamp |
 | updated_at    | TEXT    | UTC timestamp |
 
@@ -100,7 +106,7 @@ Seed row: `P-000 / "Unassigned" / active`.
 | task_key   | TEXT    | UNIQUE, e.g. `T-008` |
 | project_id | INTEGER | FK → `projects.id`, nullable; tasks without a project are written with an explicit reference to P-000 |
 | title      | TEXT    | |
-| status     | TEXT    | `todo` \| `in-progress` \| `review` \| `done` (CHECK) |
+| status     | TEXT    | `todo` \| `doing` \| `follow-up` \| `blocked` \| `done` (CHECK) |
 | priority   | TEXT    | `low` \| `med` \| `high` (CHECK) |
 | assignee   | TEXT    | nullable |
 | branch     | TEXT    | nullable (git branch name) |

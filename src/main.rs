@@ -1,6 +1,6 @@
 //! lun — CLI-first, markdown-formatted task and project version-control tracker.
 //!
-//! Phase 3: `lun status`, `lun status <project>`, `lun proj add task`,
+//! Phase 3: `lun status`, `lun status <project>`, `lun add task`,
 //! `lun task`, and `lun log` on top of the Phase 2 DB layer.
 //! Phase 4: `lun attach`, `lun link`, `lun open-link` (Mac linking).
 //! Phase 5: bare `lun` launches the full-screen TUI when stdout is a TTY
@@ -125,11 +125,17 @@ fn print_help() {
     println!("Usage:");
     println!("  lun                     Show banner");
     println!("  lun init                Create .lun/lun.db in the current directory (idempotent)");
-    println!("  lun status [name|P-00N] Global overview, or one project's status");
-    println!("  lun proj add task \"<title>\"  Create a task (interactive prompts)");
+    println!("  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board");
+    println!("  lun new proj \"<name>\"  Create a project");
+    println!(
+        "  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)"
+    );
+    println!("  lun move \"<task>\" \"<project>\"   Move a task to a project");
     println!("  lun task <T-00N|title>    View a task (fields, labels, history)");
+    println!("  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status");
     println!("  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)");
     println!("  lun task edit <task> [--field value]   Edit task fields");
+    println!("  lun proj <project> --status <active|inactive>   Update project status");
     println!("  lun task complete|reopen|archive <task>   Update task lifecycle");
     println!("  lun log <project|task>    Commit-style history for a project or task");
     println!("  lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");

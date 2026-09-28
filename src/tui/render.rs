@@ -228,7 +228,7 @@ fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
             return;
         }
         let cols = app.data.board_columns(p.id);
-        let names = ["Todo", "In Progress", "Review", "Done"];
+        let names = ["Todo", "Doing", "Follow-Up", "Blocked", "Done"];
         for (i, tasks) in cols.iter().enumerate() {
             if y >= area.bottom() {
                 return;
@@ -254,20 +254,22 @@ fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
     }
 }
 
-fn project_counts(app: &App, project_id: i64) -> (usize, usize, usize) {
-    let (mut open, mut review, mut done) = (0, 0, 0);
+fn project_counts(app: &App, project_id: i64) -> [usize; 5] {
+    let mut counts = [0; 5];
     for task in &app.data.tasks {
         if task.project_id != Some(project_id) {
             continue;
         }
         match task.status.as_str() {
-            "todo" | "in-progress" => open += 1,
-            "review" => review += 1,
-            "done" => done += 1,
+            "todo" => counts[0] += 1,
+            "doing" => counts[1] += 1,
+            "follow-up" => counts[2] += 1,
+            "blocked" => counts[3] += 1,
+            "done" => counts[4] += 1,
             _ => {}
         }
     }
-    (open, review, done)
+    counts
 }
 
 fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
@@ -290,7 +292,7 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
         buf,
         area.left(),
         y,
-        "  KEY    NAME              STATUS        OPEN  REVIEW  DONE",
+        "  KEY    NAME              STATUS        TODO  DOING  FOLLOW-UP  BLOCKED  DONE",
         Style::default().fg(t::DIM),
     );
     y += 1;
@@ -298,9 +300,8 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
         if y >= area.bottom() {
             return;
         }
-        let (o, r, d) = project_counts(app, p.id);
-        // Columns match the header: key@2, name@9 (17 wide), status@27
-        // (14 wide), open@41, review@47, done@55.
+        let counts = project_counts(app, p.id);
+        // Columns match the header: key@2, name@9, status@27, counts after.
         put(
             buf,
             area.left() + 2,
@@ -327,21 +328,35 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left() + 41,
             y,
-            &format!("{:<6}", o),
+            &format!("{:<6}", counts[0]),
             Style::default().fg(t::TEXT),
         );
         put(
             buf,
             area.left() + 47,
             y,
-            &format!("{:<8}", r),
+            &format!("{:<7}", counts[1]),
             Style::default().fg(t::TEXT),
         );
         put(
             buf,
-            area.left() + 55,
+            area.left() + 54,
             y,
-            &format!("{:<6}", d),
+            &format!("{:<11}", counts[2]),
+            Style::default().fg(t::TEXT),
+        );
+        put(
+            buf,
+            area.left() + 66,
+            y,
+            &format!("{:<9}", counts[3]),
+            Style::default().fg(t::TEXT),
+        );
+        put(
+            buf,
+            area.left() + 76,
+            y,
+            &format!("{:<6}", counts[4]),
             Style::default().fg(t::TEXT),
         );
         y += 1;
@@ -423,10 +438,10 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
     if y + 1 >= area.bottom() {
         return;
     }
-    // Four kanban columns side by side.
-    let col_w = (area.width.saturating_sub(6) / 4).max(12);
+    // Five kanban columns side by side.
+    let col_w = (area.width.saturating_sub(8) / 5).max(10);
     let cols = app.data.board_columns(p.id);
-    let names = ["Todo", "In Progress", "Review", "Done"];
+    let names = ["Todo", "Doing", "Follow-Up", "Blocked", "Done"];
     for (i, tasks) in cols.iter().enumerate() {
         let x = area.left() + (i as u16) * (col_w + 2);
         put(buf, x, y, names[i], t::status_style(names[i]));
@@ -460,7 +475,7 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
         if y >= area.bottom() {
             return;
         }
-        let (o, r, d) = project_counts(app, p.id);
+        let counts = project_counts(app, p.id);
         let marker = if i == app.project_selected {
             "> "
         } else if i == app.data.current_project {
@@ -490,7 +505,10 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left() + 30,
             y,
-            &format!("{:<12}open {}  review {}  done {}", p.status, o, r, d),
+            &format!(
+                "{:<9}todo {}  doing {}  follow-up {}  blocked {}  done {}",
+                p.status, counts[0], counts[1], counts[2], counts[3], counts[4]
+            ),
             t::status_style(&p.status),
         );
         y += 1;
@@ -545,7 +563,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
         ("/new-task", "open the new-task form"),
-        ("/new-project", "open the new-project form"),
+        ("/new proj", "open the new-project form"),
         ("/move", "move the current task to a different project"),
         ("…", "/config remains a placeholder"),
     ];
@@ -619,24 +637,40 @@ fn paint_new_task(buf: &mut Buffer, area: Rect, app: &App) {
         ("Project", project, Style::default().fg(t::PURPLE)),
         (
             "Status",
-            ["todo", "in-progress", "review", "done"][draft.status_index].to_string(),
-            t::status_style(["todo", "in-progress", "review", "done"][draft.status_index]),
+            ["todo", "doing", "follow-up", "blocked", "done"][draft.status_index].to_string(),
+            t::status_style(["todo", "doing", "follow-up", "blocked", "done"][draft.status_index]),
         ),
         (
             "Priority",
             ["low", "med", "high"][draft.priority_index].to_string(),
             Style::default().fg(t::TEXT),
         ),
-        ("Assignee", draft.assignee.clone(), Style::default().fg(t::TEXT)),
+        (
+            "Assignee",
+            draft.assignee.clone(),
+            Style::default().fg(t::TEXT),
+        ),
         ("Branch", draft.branch.clone(), Style::default().fg(t::CYAN)),
         ("Labels", draft.labels.clone(), Style::default().fg(t::TEXT)),
-        ("Create", "press Enter".to_string(), Style::default().fg(t::DONE)),
+        (
+            "Create",
+            "press Enter".to_string(),
+            Style::default().fg(t::DONE),
+        ),
     ];
     for (idx, (label, value, style)) in rows.into_iter().enumerate() {
         if y >= area.bottom() {
             break;
         }
-        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        form_row(
+            buf,
+            area.left(),
+            y,
+            draft.field == idx,
+            label,
+            &value,
+            style,
+        );
         y += 1;
     }
 }
@@ -660,16 +694,28 @@ fn paint_new_project(buf: &mut Buffer, area: Rect, app: &App) {
         ("Name", draft.name.clone(), Style::default().fg(t::TEXT)),
         (
             "Status",
-            ["planning", "active", "in-progress", "done"][draft.status_index].to_string(),
-            t::status_style(["planning", "active", "in-progress", "done"][draft.status_index]),
+            ["active", "inactive"][draft.status_index].to_string(),
+            t::status_style(["active", "inactive"][draft.status_index]),
         ),
-        ("Create", "press Enter".to_string(), Style::default().fg(t::DONE)),
+        (
+            "Create",
+            "press Enter".to_string(),
+            Style::default().fg(t::DONE),
+        ),
     ];
     for (idx, (label, value, style)) in rows.into_iter().enumerate() {
         if y >= area.bottom() {
             break;
         }
-        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        form_row(
+            buf,
+            area.left(),
+            y,
+            draft.field == idx,
+            label,
+            &value,
+            style,
+        );
         y += 1;
     }
 }
@@ -707,13 +753,25 @@ fn paint_move_task(buf: &mut Buffer, area: Rect, app: &App) {
         .unwrap_or_else(|| "Unassigned [P-000]".to_string());
     let rows = [
         ("Project", project, Style::default().fg(t::PURPLE)),
-        ("Move", "press Enter".to_string(), Style::default().fg(t::DONE)),
+        (
+            "Move",
+            "press Enter".to_string(),
+            Style::default().fg(t::DONE),
+        ),
     ];
     for (idx, (label, value, style)) in rows.into_iter().enumerate() {
         if y >= area.bottom() {
             break;
         }
-        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        form_row(
+            buf,
+            area.left(),
+            y,
+            draft.field == idx,
+            label,
+            &value,
+            style,
+        );
         y += 1;
     }
 }

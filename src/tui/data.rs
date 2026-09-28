@@ -50,9 +50,9 @@ impl TuiData {
         }
     }
 
-    /// Board columns for a project: (todo, in-progress, review, done).
-    pub fn board_columns(&self, project_id: i64) -> [Vec<&Task>; 4] {
-        let mut cols: [Vec<&Task>; 4] = [vec![], vec![], vec![], vec![]];
+    /// Board columns for a project: (todo, doing, follow-up, blocked, done).
+    pub fn board_columns(&self, project_id: i64) -> [Vec<&Task>; 5] {
+        let mut cols: [Vec<&Task>; 5] = [vec![], vec![], vec![], vec![], vec![]];
         for t in self
             .tasks
             .iter()
@@ -60,35 +60,38 @@ impl TuiData {
         {
             match t.status.as_str() {
                 "todo" => cols[0].push(t),
-                "in-progress" => cols[1].push(t),
-                "review" => cols[2].push(t),
-                "done" => cols[3].push(t),
+                "doing" => cols[1].push(t),
+                "follow-up" => cols[2].push(t),
+                "blocked" => cols[3].push(t),
+                "done" => cols[4].push(t),
                 _ => {}
             }
         }
         cols
     }
 
-    /// `4 projects · 16 tasks (5 todo, 2 in-progress, 1 review, 8 done)`.
+    /// `4 projects · 16 tasks (5 todo, 2 doing, 1 follow-up, 1 blocked, 7 done)`.
     pub fn summary(&self) -> String {
-        let mut counts = [0usize; 4];
+        let mut counts = [0usize; 5];
         for t in &self.tasks {
             match t.status.as_str() {
                 "todo" => counts[0] += 1,
-                "in-progress" => counts[1] += 1,
-                "review" => counts[2] += 1,
-                "done" => counts[3] += 1,
+                "doing" => counts[1] += 1,
+                "follow-up" => counts[2] += 1,
+                "blocked" => counts[3] += 1,
+                "done" => counts[4] += 1,
                 _ => {}
             }
         }
         format!(
-            "{} projects \u{b7} {} tasks ({} todo, {} in-progress, {} review, {} done)",
+            "{} projects \u{b7} {} tasks ({} todo, {} doing, {} follow-up, {} blocked, {} done)",
             self.projects.len(),
             self.tasks.len(),
             counts[0],
             counts[1],
             counts[2],
-            counts[3]
+            counts[3],
+            counts[4]
         )
     }
 
