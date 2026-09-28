@@ -50,6 +50,26 @@ fn complete_top_level_empty_and_partial_prefix() {
         "{status_partial_with_empty}"
     );
 
+    let init_partial = complete_output(Some(&app), &["--".into(), "lun".into(), "in".into()]);
+    let init_partial_lines = lines(&init_partial);
+    assert!(init_partial_lines.iter().any(|s| s == "init"), "{init_partial}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn complete_task_delete_subcommand() {
+    let root = temp_root("task-delete-subcommand");
+    let _lun = Lun::init(&root).unwrap();
+    let app = App::open(&root).unwrap();
+
+    let out = complete_output(
+        Some(&app),
+        &["--".into(), "lun".into(), "task".into(), "de".into()],
+    );
+    let out_lines = lines(&out);
+    assert!(out_lines.iter().any(|s| s == "delete"), "{out}");
+
     let _ = std::fs::remove_dir_all(&root);
 }
 
