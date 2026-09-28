@@ -845,7 +845,7 @@ fn paint_new_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right choices · type text · enter on create",
+            "up/down field · left/right choices · type text · esc vim j/k · esc esc cancel · enter create",
             Style::default().fg(t::DIM),
         );
         y += 2;
@@ -909,7 +909,7 @@ fn paint_new_project(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right status · type text · enter on create",
+            "up/down field · left/right status · type text · esc vim j/k · esc esc cancel · enter create",
             Style::default().fg(t::DIM),
         );
         y += 2;
@@ -954,7 +954,7 @@ fn paint_move_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right project · enter on move",
+            "up/down field · left/right project · esc vim j/k · esc esc cancel · enter move",
             Style::default().fg(t::DIM),
         );
         y += 2;
@@ -1480,11 +1480,11 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "History:", false);
+    y = task_section(buf, x, y, "Last Commit:", false);
     if y >= bottom {
         return;
     }
-    for entry in app.data.logs_for_task(task.id) {
+    if let Some(entry) = app.data.logs_for_task(task.id).into_iter().next() {
         for line in crate::cli::task_view_entry_lines(entry) {
             if y >= bottom {
                 return;
@@ -1499,6 +1499,8 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             put(buf, x, y, &line, style);
             y += 1;
         }
+    } else {
+        put(buf, x, y, "- (none)", Style::default().fg(t::DIM));
     }
 }
 

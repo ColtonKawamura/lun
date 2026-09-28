@@ -10,6 +10,7 @@
 //! - The palette and the statusline have their own key handling too.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 use std::{io::BufReader, io::Cursor};
 
 use super::data::TuiData;
@@ -78,6 +79,7 @@ pub enum TaskFocus {
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const TASK_PRIORITIES: [&str; 3] = ["low", "med", "high"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
+const FORM_ESC_CANCEL_WINDOW: Duration = Duration::from_millis(450);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewTaskFormDraft {
@@ -228,6 +230,8 @@ pub struct App {
     pub log_subject: Option<super::data::LogSubject>,
     /// Active slash-form state (`/new-task`, `/new-project`, `/move`).
     pub form: Option<FormState>,
+    pub form_vim_nav: bool,
+    pub form_esc_armed_at: Option<Instant>,
     /// Statusline: `:` opens it; the remainder of the line is the query.
     pub statusline_open: bool,
     pub statusline_query: String,
@@ -278,6 +282,8 @@ impl App {
             task_item_selected: 0,
             log_subject: None,
             form: None,
+            form_vim_nav: false,
+            form_esc_armed_at: None,
             statusline_open: false,
             statusline_query: String::new(),
             notes_draft: String::new(),
@@ -310,6 +316,8 @@ impl App {
             .data
             .current_project
             .min(self.data.projects.len().saturating_sub(1));
+        self.form_vim_nav = false;
+        self.form_esc_armed_at = None;
         self.form = Some(FormState::NewTask(NewTaskFormDraft {
             field: 0,
             title: String::new(),
@@ -323,6 +331,8 @@ impl App {
     }
 
     fn begin_new_project_form(&mut self) {
+        self.form_vim_nav = false;
+        self.form_esc_armed_at = None;
         self.form = Some(FormState::NewProject(NewProjectFormDraft {
             field: 0,
             name: String::new(),
@@ -338,6 +348,8 @@ impl App {
             .project_id
             .and_then(|pid| self.data.projects.iter().position(|p| p.id == pid))
             .unwrap_or(self.data.current_project);
+        self.form_vim_nav = false;
+        self.form_esc_armed_at = None;
         self.form = Some(FormState::MoveTask(MoveTaskFormDraft {
             field: 0,
             project_index,
@@ -346,6 +358,7 @@ impl App {
     }
 
     pub fn form_nav(&mut self, dir: i32) {
+        self.form_esc_armed_at = None;
         match self.form.as_mut() {
             Some(FormState::NewTask(d)) => {
                 let n = 8_i32;
@@ -364,6 +377,8 @@ impl App {
     }
 
     pub fn form_type(&mut self, ch: char) {
+        self.form_vim_nav = false;
+        self.form_esc_armed_at = None;
         match self.form.as_mut() {
             Some(FormState::NewTask(d)) => match d.field {
                 0 => d.title.push(ch),
@@ -382,6 +397,7 @@ impl App {
     }
 
     pub fn form_backspace(&mut self) {
+        self.form_esc_armed_at = None;
         match self.form.as_mut() {
             Some(FormState::NewTask(d)) => match d.field {
                 0 => {
@@ -408,6 +424,7 @@ impl App {
     }
 
     pub fn form_cycle(&mut self, dir: i32) {
+        self.form_esc_armed_at = None;
         let cycle = |idx: &mut usize, len: usize, dir: i32| {
             *idx = ((*idx as i32 + dir).rem_euclid(len as i32)) as usize;
         };
@@ -434,10 +451,29 @@ impl App {
 
     pub fn cancel_form(&mut self) {
         self.form = None;
+        self.form_vim_nav = false;
+        self.form_esc_armed_at = None;
         self.go_back();
     }
 
+    pub fn form_escape(&mut self) {
+        if self.form.is_none() {
+            return;
+        }
+        let now = Instant::now();
+        let quick_second = self
+            .form_esc_armed_at
+            .is_some_and(|armed| now.duration_since(armed) <= FORM_ESC_CANCEL_WINDOW);
+        if quick_second {
+            self.cancel_form();
+            return;
+        }
+        self.form_vim_nav = true;
+        self.form_esc_armed_at = Some(now);
+    }
+
     pub fn submit_form(&mut self) {
+        self.form_esc_armed_at = None;
         let Some(form) = self.form.clone() else {
             return;
         };
@@ -509,6 +545,7 @@ impl App {
                             self.project_selected = pos;
                         }
                         self.form = None;
+                        self.form_vim_nav = false;
                         self.view = View::Task;
                         self.task_focus = TaskFocus::Summary;
                         self.task_item_selected = 0;
@@ -555,6 +592,7 @@ impl App {
                             self.project_selected = pos;
                         }
                         self.form = None;
+                        self.form_vim_nav = false;
                         self.view = View::Project;
                         self.message = Some((
                             format!("Created project {} [{}]", project.name, project.project_key),
@@ -607,6 +645,7 @@ impl App {
                             self.project_selected = pos;
                         }
                         self.form = None;
+                        self.form_vim_nav = false;
                         self.view = View::Task;
                         self.message = Some((
                             format!(

@@ -549,12 +549,10 @@ fn task_view_renders_fields_notes_and_history() {
     assert!(s.contains("mock.png"));
     assert!(s.contains("Links:"));
     assert!(s.contains("obsidian"));
-    assert!(s.contains("History:"));
-    // History contains the CLI-format CREATE line and the COMMENT note.
-    // (The DB records action "CREATE" for task creation — the TUI renders
-    // the exact CLI formatting, so the test asserts the real action string.)
+    assert!(s.contains("Last Commit:"));
+    assert!(!s.contains("History:"));
+    // Task view shows only the latest CLI-format entry for the task.
     assert!(s.contains("me"));
-    assert!(s.contains("CREATE"));
     assert!(s.contains("COMMENT"));
     assert!(s.contains("Commit:"));
     assert!(s.contains("watch damping"));
@@ -779,7 +777,7 @@ fn new_project_form_creates_project_and_selects_it() {
 }
 
 #[test]
-fn new_task_form_accepts_shifted_printable_input_and_esc_cancels() {
+fn new_task_form_esc_enters_vim_nav_and_double_esc_cancels() {
     let (root, _lun) = fixture();
     let mut app = app_with_store(&root);
     let starting_tasks = app.data.tasks.len();
@@ -799,6 +797,24 @@ fn new_task_form_accepts_shifted_printable_input_and_esc_cancels() {
         panic!("expected new-task form");
     }
 
+    term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.form().is_some());
+    assert!(app.form_vim_nav);
+    if let Some(lun::tui::app::FormState::NewTask(draft)) = app.form() {
+        assert_eq!(draft.field, 0);
+    } else {
+        panic!("expected new-task form");
+    }
+
+    term::handle_key(&mut app, &key(KeyCode::Char('j')));
+    if let Some(lun::tui::app::FormState::NewTask(draft)) = app.form() {
+        assert_eq!(draft.field, 1);
+    } else {
+        panic!("expected new-task form");
+    }
+
+    term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.form().is_some());
     term::handle_key(&mut app, &key(KeyCode::Esc));
     assert!(app.form().is_none());
     assert_eq!(app.data.tasks.len(), starting_tasks);
