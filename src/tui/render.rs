@@ -72,11 +72,13 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
             area.left() + 2,
             prompt_y,
             hint.as_str(),
-            Style::default().fg(if app.mode == super::app::Mode::Insert {
-                t::CYAN
-            } else {
-                t::DIM
-            }),
+            Style::default().fg(
+                if app.statusline_open || app.mode == super::app::Mode::Insert {
+                    t::CYAN
+                } else {
+                    t::DIM
+                },
+            ),
         );
     }
 
