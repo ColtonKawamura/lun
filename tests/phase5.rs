@@ -27,6 +27,10 @@ fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
 
+fn key_with_modifiers(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
+    KeyEvent::new(code, modifiers)
+}
+
 /// Render one frame of `app` at w×h and return the screen as lines of text.
 fn screen(app: &App, w: u16, h: u16) -> String {
     let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
@@ -246,6 +250,53 @@ fn palette_esc_enables_j_k_suggestion_navigation() {
     term::handle_key(&mut app, &key(KeyCode::Char('k')));
     assert_eq!(app.palette_selected, 0);
     assert_eq!(app.palette_query, "status ");
+}
+
+#[test]
+fn palette_up_down_browse_command_history_and_restore_draft() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    for ch in "status".chars() {
+        term::handle_key(&mut app, &key(KeyCode::Char(ch)));
+    }
+    term::handle_key(&mut app, &key(KeyCode::Enter));
+
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    for ch in "board".chars() {
+        term::handle_key(&mut app, &key(KeyCode::Char(ch)));
+    }
+    term::handle_key(&mut app, &key(KeyCode::Enter));
+
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    for ch in "tas".chars() {
+        term::handle_key(&mut app, &key(KeyCode::Char(ch)));
+    }
+    term::handle_key(&mut app, &key(KeyCode::Up));
+    assert_eq!(app.palette_query, "board");
+    term::handle_key(&mut app, &key(KeyCode::Up));
+    assert_eq!(app.palette_query, "status");
+    term::handle_key(&mut app, &key(KeyCode::Down));
+    assert_eq!(app.palette_query, "board");
+    term::handle_key(&mut app, &key(KeyCode::Down));
+    assert_eq!(app.palette_query, "tas");
+}
+
+#[test]
+fn palette_accepts_shifted_printable_input() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('A'), KeyModifiers::SHIFT),
+    );
+    term::handle_key(
+        &mut app,
+        &key_with_modifiers(KeyCode::Char('?'), KeyModifiers::SHIFT),
+    );
+    assert_eq!(app.palette_query, "A?");
 }
 
 #[test]
@@ -548,6 +599,59 @@ fn message_line_overlays_above_hint_bar() {
     let (_c, fg, _bg, bold) = cell(&app, 80, 24, 0, 21);
     assert_eq!(fg, Color::Rgb(255, 80, 80));
     assert!(bold);
+}
+
+#[test]
+fn output_view_styles_project_detail_sections_and_summary() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.view = View::Output;
+    app.output = Some(lun::tui::app::CommandOutput {
+        command: "status P-001".into(),
+        text: concat!(
+            "Project: paper-stack\n",
+            "====================\n\n",
+            "Overview\n",
+            "--------\n\n",
+            "ID:      P-001\n",
+            "Status:  active\n\n",
+            "Tasks by Status:\n",
+            "- todo:         1\n",
+            "- doing:        0\n\n",
+            "Tasks\n",
+            "-----\n\n",
+            "ID   Project       Title   Status   Priority   Assignee   Branch\n",
+            "T-001 paper-stack  demo    todo     low        me\n",
+            "Summary: 1 project · 1 task (1 todo, 0 doing, 0 follow-up, 0 blocked, 0 done)\n"
+        )
+        .into(),
+        is_error: false,
+    });
+    let s = screen(&app, 90, 30);
+    assert!(s.contains("Project: paper-stack"));
+    assert!(s.contains("Overview"));
+    assert!(s.contains("Tasks by Status"));
+    assert!(s.contains("Summary: 1 project · 1 task"));
+
+    let (_ch, fg, _bg, bold) = cell(&app, 90, 30, 0, 4);
+    assert_eq!(fg, Color::Rgb(177, 121, 255));
+    assert!(bold);
+
+    let lines: Vec<&str> = s.lines().collect();
+    assert!(lines.iter().any(|line| line.chars().all(|c| c == '-')));
+}
+
+#[test]
+fn output_view_project_detail_handles_narrow_widths() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.view = View::Output;
+    app.output = Some(lun::tui::app::CommandOutput {
+        command: "status P-001".into(),
+        text: "Project: paper-stack\n====================\n\nOverview\n--------\n\nSummary: 1 project · 0 tasks (0 todo, 0 doing, 0 follow-up, 0 blocked, 0 done)\n".into(),
+        is_error: false,
+    });
+    let _ = screen(&app, 32, 12);
 }
 
 // Rendering must never panic on tiny screens (saturating clamps everywhere).

@@ -211,6 +211,9 @@ pub struct App {
     pub palette_query: String,
     pub palette_selected: usize,
     pub palette_vim_nav: bool,
+    pub command_history: Vec<String>,
+    pub history_index: Option<usize>,
+    pub history_draft: Option<String>,
     pub output: Option<CommandOutput>,
     pub output_scroll: usize,
     pub output_page_rows: usize,
@@ -262,6 +265,9 @@ impl App {
             palette_query: String::new(),
             palette_selected: 0,
             palette_vim_nav: false,
+            command_history: Vec::new(),
+            history_index: None,
+            history_draft: None,
             output: None,
             output_scroll: 0,
             output_page_rows: 5,
@@ -738,6 +744,7 @@ impl App {
     }
 
     pub fn apply_selected_suggestion(&mut self) {
+        self.stop_history_navigation();
         let suggestions = self.command_suggestions();
         let Some(suggestion) = suggestions.get(self.palette_selected).cloned() else {
             return;
@@ -757,6 +764,58 @@ impl App {
             *last = suggestion;
         }
         self.palette_query = words.join(" ");
+        self.palette_vim_nav = false;
+    }
+
+    fn record_command_history(&mut self, line: &str) {
+        let line = line.trim();
+        if line.is_empty() {
+            return;
+        }
+        if self.command_history.last().map(String::as_str) == Some(line) {
+            return;
+        }
+        self.command_history.push(line.to_string());
+    }
+
+    fn stop_history_navigation(&mut self) {
+        self.history_index = None;
+        self.history_draft = None;
+    }
+
+    pub fn history_prev(&mut self) {
+        if self.command_history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            Some(0) => {}
+            Some(i) => {
+                self.history_index = Some(i - 1);
+                self.palette_query = self.command_history[i - 1].clone();
+            }
+            None => {
+                self.history_draft = Some(self.palette_query.clone());
+                let i = self.command_history.len() - 1;
+                self.history_index = Some(i);
+                self.palette_query = self.command_history[i].clone();
+            }
+        }
+        self.palette_selected = 0;
+        self.palette_vim_nav = false;
+    }
+
+    pub fn history_next(&mut self) {
+        let Some(i) = self.history_index else {
+            return;
+        };
+        if i + 1 < self.command_history.len() {
+            self.history_index = Some(i + 1);
+            self.palette_query = self.command_history[i + 1].clone();
+        } else {
+            self.palette_query = self.history_draft.take().unwrap_or_default();
+            self.history_index = None;
+        }
+        self.palette_selected = 0;
         self.palette_vim_nav = false;
     }
 
@@ -937,6 +996,9 @@ impl App {
     }
 
     fn execute_cli_args(&mut self, args: Vec<String>, command: String) {
+        if self.try_open_native_command(&args) {
+            return;
+        }
         let Some(root) = self.root.as_deref() else {
             self.close_palette();
             self.message = Some((
@@ -978,6 +1040,45 @@ impl App {
         let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
         let result = crate::cli::run_result_in_reader(&cli_app, &args, &mut reader, Some(root));
         self.finish_command(command, &cli_app, &args, result);
+    }
+
+    fn try_open_native_command(&mut self, args: &[String]) -> bool {
+        let [cmd, subcmd, title, rest @ ..] = args else {
+            return false;
+        };
+        if cmd != "add" || subcmd != "task" {
+            return false;
+        }
+        let project_id = match rest {
+            [] => None,
+            [kind, query] if kind == "proj" || kind == "project" => {
+                let Some(lun) = self.lun.as_ref() else {
+                    self.message = Some((
+                        "no store attached — create task unavailable".to_string(),
+                        true,
+                    ));
+                    return true;
+                };
+                match crate::cli::resolve_project(lun, query) {
+                    Ok(project) => Some(project.id),
+                    Err(e) => {
+                        self.close_palette();
+                        self.message = Some((e.to_string(), true));
+                        return true;
+                    }
+                }
+            }
+            _ => return false,
+        };
+        self.enter_view(View::NewTask, title);
+        if let Some(project_id) = project_id {
+            if let Some(FormState::NewTask(draft)) = self.form.as_mut() {
+                if let Some(pos) = self.data.projects.iter().position(|p| p.id == project_id) {
+                    draft.project_index = pos;
+                }
+            }
+        }
+        true
     }
 
     fn finish_command(
@@ -1065,6 +1166,7 @@ impl App {
             }
             return;
         }
+        self.record_command_history(&line);
         if line == "quit" {
             self.close_palette();
             if self.notes_modified() {
@@ -1220,6 +1322,7 @@ impl App {
         }
         self.palette_selected = 0;
         self.palette_vim_nav = false;
+        self.stop_history_navigation();
         self.clear_leader_sequence();
     }
 
@@ -1236,6 +1339,7 @@ impl App {
         self.palette_selected = 0;
         self.palette_vim_nav = false;
         self.prompt_session = None;
+        self.stop_history_navigation();
         self.clear_leader_sequence();
     }
 
@@ -1268,6 +1372,7 @@ impl App {
 
     /// Append a typed character to the palette query; clamp selection.
     pub fn palette_type(&mut self, ch: char) {
+        self.stop_history_navigation();
         self.palette_vim_nav = false;
         self.palette_query.push(ch);
         let n = self.command_suggestions().len();
@@ -1279,6 +1384,7 @@ impl App {
     }
 
     pub fn palette_backspace(&mut self) {
+        self.stop_history_navigation();
         self.palette_vim_nav = false;
         self.palette_query.pop();
         if self.prompt_session.is_some() {
