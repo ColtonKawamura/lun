@@ -665,11 +665,11 @@ fn task_list_edit_complete_reopen_and_archive_work() {
         .unwrap()
         .contains("Status:    done"));
 
-    let reopened = task_reopen(&app, "T-003").unwrap();
+    let reopened = task_reopen(&app, "T-003", &[]).unwrap();
     assert!(reopened.contains("Reopened T-003"));
     assert!(task_view(&app, "T-003")
         .unwrap()
-        .contains("Status:    todo"));
+        .contains("Status:    in-progress"));
 
     let archived = task_archive(&app, "T-003").unwrap();
     assert!(archived.contains("Archived T-003"));

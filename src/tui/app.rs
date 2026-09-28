@@ -128,6 +128,7 @@ pub struct App {
     pub data: TuiData,
     pub view: View,
     pub previous_view: View,
+    pub view_history: Vec<View>,
     pub mode: Mode,
     pub palette_open: bool,
     pub palette_query: String,
@@ -169,6 +170,7 @@ impl App {
             data,
             view: View::Initial,
             previous_view: View::Initial,
+            view_history: Vec::new(),
             mode: Mode::Normal,
             palette_open: false,
             palette_query: String::new(),
@@ -362,6 +364,9 @@ impl App {
         self.statusline_open = false;
         self.statusline_query.clear();
         self.message = None;
+        if self.view != view {
+            self.view_history.push(self.view);
+        }
         self.previous_view = self.view;
         match view {
             View::Task => {
@@ -606,9 +611,10 @@ impl App {
             return;
         }
         if self.view != View::Initial {
-            let prev = self.previous_view;
-            self.previous_view = self.view;
-            self.view = prev;
+            if let Some(prev) = self.view_history.pop() {
+                self.previous_view = self.view;
+                self.view = prev;
+            }
         }
     }
 
@@ -639,7 +645,7 @@ impl App {
             return;
         };
         let result = if done {
-            lun.reopen_task(task_id, None, None)
+            lun.reopen_task(task_id, Some("in-progress"), None, None)
         } else {
             lun.complete_task(task_id, None, None)
         };
@@ -674,6 +680,7 @@ impl App {
         }
         self.mode = Mode::Normal;
         self.previous_view = self.view;
+        self.view_history.push(self.view);
         self.statusline_open = false;
         self.statusline_query.clear();
         self.task_focus = TaskFocus::Summary;

@@ -863,10 +863,24 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         // Esc/Ctrl-S to save, drop a file to insert a link).
         let note_links = app.current_note_links();
         let selected_uri = note_links.get(app.task_item_selected);
+        let mut seen_links = 0usize;
         for line in task.notes.lines() {
             if y >= bottom {
                 return;
             }
+            let links_on_line = note_links
+                .iter()
+                .skip(seen_links)
+                .take_while(|uri| line.contains(uri.as_str()))
+                .count();
+            let line_selected_index = if app.task_focus == super::app::TaskFocus::Notes
+                && selected_uri.is_some()
+                && selected_uri.map(|uri| line.contains(uri)).unwrap_or(false)
+            {
+                Some(app.task_item_selected)
+            } else {
+                None
+            };
             let selected = app.task_focus == super::app::TaskFocus::Notes
                 && selected_uri.is_some()
                 && selected_uri.map(|uri| line.contains(uri)).unwrap_or(false);
@@ -874,7 +888,11 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
                 buf,
                 x,
                 y,
-                if selected { "> " } else { "- " },
+                &if let Some(idx) = line_selected_index {
+                    format!(">{} ", idx + 1)
+                } else {
+                    "- ".to_string()
+                },
                 if selected {
                     t::selected_style().fg(t::BG)
                 } else {
@@ -893,6 +911,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
                 },
             );
             y += 1;
+            seen_links += links_on_line;
         }
     } else {
         put(

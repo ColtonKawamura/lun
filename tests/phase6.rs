@@ -694,6 +694,10 @@ fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
     term::handle_key(&mut app, &key(KeyCode::Right));
     term::handle_key(&mut app, &key(KeyCode::Right));
     std::env::set_var("LUN_OPEN_BIN", "true");
+    term::handle_key(&mut app, &key(KeyCode::Enter));
+    let (msg, is_err) = app.message.clone().unwrap();
+    assert!(!is_err);
+    assert!(msg.contains("Opened:"));
     term::handle_key(&mut app, &key(KeyCode::Char('o')));
     let (msg, is_err) = app.message.clone().unwrap();
     assert!(!is_err);
@@ -702,7 +706,7 @@ fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
     assert_eq!(app.current_task().unwrap().status, "done");
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
-    assert_eq!(app.current_task().unwrap().status, "todo");
+    assert_eq!(app.current_task().unwrap().status, "in-progress");
     std::env::remove_var("LUN_OPEN_BIN");
     let _ = std::fs::remove_dir_all(&root);
 }

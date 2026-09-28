@@ -110,6 +110,10 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.palette_open {
         // Note: in the palette j/k are TYPED, not navigation — command
         // lines like `/task T-001` contain them. Arrow keys navigate.
+        if !matches!(key.code, KeyCode::Char('g')) {
+            app.pending_g = false;
+        }
+
         match key.code {
             KeyCode::Esc => app.palette_open = false,
             KeyCode::Enter => app.run_command(app.palette_selected),

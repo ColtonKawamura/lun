@@ -9,7 +9,7 @@
 //! all log-on-write (`CREATE`/`MERGE` on the PR itself plus a task entry
 //! that maps the PR lifecycle onto the task's log).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::Value, Connection};
 use std::path::Path;
 
 pub const CURRENT_VERSION: i64 = 5;
@@ -639,52 +639,48 @@ impl Lun {
     }
 
     pub fn list_tasks_with(&self, spec: &TaskListSpec) -> Result<Vec<Task>> {
-        let mut stmt = self.conn.prepare(
+        let mut sql = String::from(
             "SELECT id, task_key, project_id, title, status, priority,
-                   assignee, branch, labels, notes, created_at, updated_at, archived_at
-             FROM tasks ORDER BY id",
-        )?;
-        let mut rows = stmt
-            .query_map([], Self::task_from_row)?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+                    assignee, branch, labels, notes, created_at, updated_at, archived_at
+             FROM tasks",
+        );
+        let mut clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
         if !spec.include_archived {
-            rows.retain(|t| t.archived_at.is_none());
+            clauses.push("archived_at IS NULL".to_string());
         }
         if let Some(project_id) = spec.project_id {
-            rows.retain(|t| t.project_id == Some(project_id));
+            clauses.push("project_id = ?".to_string());
+            values.push(Value::Integer(project_id));
         }
         if let Some(status) = &spec.status {
-            rows.retain(|t| &t.status == status);
+            clauses.push("status = ?".to_string());
+            values.push(Value::Text(status.clone()));
         }
         if let Some(priority) = &spec.priority {
-            rows.retain(|t| &t.priority == priority);
+            clauses.push("priority = ?".to_string());
+            values.push(Value::Text(priority.clone()));
         }
         if let Some(assignee) = &spec.assignee {
-            rows.retain(|t| t.assignee.as_deref() == Some(assignee.as_str()));
+            clauses.push("assignee = ?".to_string());
+            values.push(Value::Text(assignee.clone()));
         }
-        match spec.sort {
-            TaskSort::Key => rows.sort_by(|a, b| a.task_key.cmp(&b.task_key)),
-            TaskSort::Title => rows.sort_by(|a, b| {
-                a.title
-                    .cmp(&b.title)
-                    .then_with(|| a.task_key.cmp(&b.task_key))
-            }),
-            TaskSort::Status => rows.sort_by(|a, b| {
-                a.status
-                    .cmp(&b.status)
-                    .then_with(|| a.task_key.cmp(&b.task_key))
-            }),
-            TaskSort::Priority => rows.sort_by(|a, b| {
-                a.priority
-                    .cmp(&b.priority)
-                    .then_with(|| a.task_key.cmp(&b.task_key))
-            }),
-            TaskSort::Updated => rows.sort_by(|a, b| {
-                b.updated_at
-                    .cmp(&a.updated_at)
-                    .then_with(|| a.task_key.cmp(&b.task_key))
-            }),
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
         }
+        sql.push_str(" ORDER BY ");
+        sql.push_str(match spec.sort {
+            TaskSort::Key => "task_key ASC",
+            TaskSort::Title => "title ASC, task_key ASC",
+            TaskSort::Status => "status ASC, task_key ASC",
+            TaskSort::Priority => "priority ASC, task_key ASC",
+            TaskSort::Updated => "updated_at DESC, task_key ASC",
+        });
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(values), Self::task_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
@@ -991,18 +987,20 @@ impl Lun {
     pub fn reopen_task(
         &self,
         task_id: i64,
+        status: Option<&str>,
         message: Option<&str>,
         user: Option<&str>,
     ) -> Result<Task> {
         let task = self.task_by_id(task_id)?;
+        let target_status = status.unwrap_or("in-progress");
         self.update_task(
             task_id,
             TaskUpdateSpec {
-                status: Some("todo".to_string()),
+                status: Some(target_status.to_string()),
                 message: Some(
-                    message
-                        .map(str::to_string)
-                        .unwrap_or_else(|| format!("reopen {}", task.task_key)),
+                    message.map(str::to_string).unwrap_or_else(|| {
+                        format!("reopen {} to {}", task.task_key, target_status)
+                    }),
                 ),
                 user: user.map(str::to_string),
                 ..Default::default()

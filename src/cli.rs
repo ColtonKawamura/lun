@@ -1049,9 +1049,10 @@ pub fn remove_attachment_command(
 ) -> Result<String> {
     let attachment = find_attachment(app, kind, query, needle)?;
     let removed = app.lun.remove_attachment(attachment.id, None, None)?;
-    if Path::new(&removed.stored_path).starts_with(attachments_root(
-        &std::env::current_dir().map_err(|e| DbError::new("io", format!("resolving CWD: {e}")))?,
-    )) {
+    let stored_path = Path::new(&removed.stored_path);
+    let managed_copy = removed.stored_path.contains("/.lun/attachments/")
+        || removed.stored_path.starts_with(".lun/attachments/");
+    if managed_copy || stored_path.starts_with(attachments_root(Path::new("."))) {
         let _ = std::fs::remove_file(&removed.stored_path);
     }
     Ok(format!(
@@ -1237,9 +1238,29 @@ pub fn task_complete(app: &App, query: &str) -> Result<String> {
     ))
 }
 
-pub fn task_reopen(app: &App, query: &str) -> Result<String> {
+pub fn task_reopen(app: &App, query: &str, args: &[String]) -> Result<String> {
     let task = resolve_task(&app.lun, query)?;
-    let updated = app.lun.reopen_task(task.id, None, None)?;
+    let mut status: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--status" => {
+                status = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--status needs a value"))?
+                        .as_str(),
+                );
+                i += 2;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected argument '{other}' for task reopen"),
+                ))
+            }
+        }
+    }
+    let updated = app.lun.reopen_task(task.id, status, None, None)?;
     Ok(format!("Reopened {} ({})", updated.task_key, updated.title))
 }
 
@@ -1755,7 +1776,7 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
                 None => Err(DbError::new("usage", "expected: lun task complete <key|title>")),
             },
             Some(sub) if sub == "reopen" => match args.get(2) {
-                Some(q) => task_reopen(app, q),
+                Some(q) => task_reopen(app, q, &args[3..]),
                 None => Err(DbError::new("usage", "expected: lun task reopen <key|title>")),
             },
             Some(sub) if sub == "archive" || sub == "delete" => match args.get(2) {
