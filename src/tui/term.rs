@@ -140,12 +140,18 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mu
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.form().is_some() {
         match key.code {
-            KeyCode::Esc => app.cancel_form(),
+            KeyCode::Esc => app.form_escape(),
             KeyCode::Up => app.form_nav(-1),
             KeyCode::Down | KeyCode::Tab => app.form_nav(1),
             KeyCode::BackTab => app.form_nav(-1),
             KeyCode::Left => app.form_cycle(-1),
             KeyCode::Right => app.form_cycle(1),
+            KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE && app.form_vim_nav => {
+                app.form_nav(1)
+            }
+            KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE && app.form_vim_nav => {
+                app.form_nav(-1)
+            }
             KeyCode::Backspace => app.form_backspace(),
             KeyCode::Enter => app.submit_form(),
             _ if accepts_text_input(key).is_some() => {

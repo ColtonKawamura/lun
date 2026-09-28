@@ -845,7 +845,7 @@ fn paint_new_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right choices · type text · enter on create",
+            "up/down field · left/right choices · type text · esc vim j/k · esc esc cancel · enter create",
             Style::default().fg(t::DIM),
         );
         y += 2;
@@ -909,7 +909,7 @@ fn paint_new_project(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right status · type text · enter on create",
+            "up/down field · left/right status · type text · esc vim j/k · esc esc cancel · enter create",
             Style::default().fg(t::DIM),
         );
         y += 2;
@@ -954,7 +954,7 @@ fn paint_move_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "up/down field · left/right project · enter on move",
+            "up/down field · left/right project · esc vim j/k · esc esc cancel · enter move",
             Style::default().fg(t::DIM),
         );
         y += 2;
