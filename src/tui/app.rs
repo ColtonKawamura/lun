@@ -821,6 +821,11 @@ impl App {
                     "Commit Message: ".to_string(),
                 ]);
             }
+            Some("add") if matches!(args.get(1).map(String::as_str), Some("proj" | "project")) => {
+                if !args.iter().any(|a| a == "--message") {
+                    prompts.push("Commit Message: ".to_string());
+                }
+            }
             Some("new") if matches!(args.get(1).map(String::as_str), Some("proj" | "project")) => {
                 if !args.iter().any(|a| a == "--message") {
                     prompts.push("Commit Message: ".to_string());

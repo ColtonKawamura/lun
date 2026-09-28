@@ -12,7 +12,7 @@ is a human-facing view rendered from the DB.
 
 All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
-- DB layer + core CLI (`status`, `new proj`, `add task`, `task`, `move`, `log`)
+- DB layer + core CLI (`status`, `add proj`, `add task`, `task`, `move`, `log`)
 - Task workflows (`task ls|edit|complete|reopen|archive`) and project/task attachments
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
@@ -41,7 +41,7 @@ lun                       # full-screen TUI (when run in a terminal)
 Examples:
 
 ```sh
-lun new proj "my new project"
+lun add proj "my new project"
 lun add task "task3" proj "my new project"
 lun task "task3" --status done
 lun proj "my new project" --status inactive

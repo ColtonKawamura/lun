@@ -230,20 +230,22 @@ fn palette_esc_enables_j_k_suggestion_navigation() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
-    term::handle_key(&mut app, &key(KeyCode::Char('n')));
+    for c in "status ".chars() {
+        term::handle_key(&mut app, &key(KeyCode::Char(c)));
+    }
     let suggestions = app.filtered_commands();
     assert!(suggestions.len() > 1);
     assert_eq!(app.palette_selected, 0);
 
     term::handle_key(&mut app, &key(KeyCode::Esc));
     assert!(app.palette_vim_nav);
-    assert_eq!(app.palette_query, "n");
+    assert_eq!(app.palette_query, "status ");
     term::handle_key(&mut app, &key(KeyCode::Char('j')));
     assert_eq!(app.palette_selected, 1);
-    assert_eq!(app.palette_query, "n");
+    assert_eq!(app.palette_query, "status ");
     term::handle_key(&mut app, &key(KeyCode::Char('k')));
     assert_eq!(app.palette_selected, 0);
-    assert_eq!(app.palette_query, "n");
+    assert_eq!(app.palette_query, "status ");
 }
 
 #[test]

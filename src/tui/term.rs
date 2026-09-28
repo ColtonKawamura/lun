@@ -147,7 +147,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
 
         match key.code {
             KeyCode::Esc => {
-                if app.prompt_session.is_some() || app.palette_vim_nav || app.palette_query.is_empty()
+                if app.prompt_session.is_some()
+                    || app.palette_vim_nav
+                    || app.palette_query.is_empty()
                 {
                     app.close_command_prompt()
                 } else {
@@ -159,14 +161,10 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Down if key.modifiers == KeyModifiers::NONE => app.palette_down(),
             KeyCode::Tab if key.modifiers == KeyModifiers::NONE => app.apply_selected_suggestion(),
             KeyCode::Backspace => app.palette_backspace(),
-            KeyCode::Char('j')
-                if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav =>
-            {
+            KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
                 app.palette_down()
             }
-            KeyCode::Char('k')
-                if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav =>
-            {
+            KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
                 app.palette_up()
             }
             KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.palette_type(c),

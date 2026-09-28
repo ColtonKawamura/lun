@@ -1,4 +1,4 @@
-use lun::cli::{complete_output, App};
+use lun::cli::{complete_output, run_result_in_reader, App};
 use lun::{Lun, ProjectSpec, TaskSpec};
 use std::path::PathBuf;
 use std::process::Command;
@@ -31,7 +31,8 @@ fn complete_top_level_empty_and_partial_prefix() {
     let empty = complete_output(Some(&app), &["--".into(), "lun".into(), "".into()]);
     let empty_lines = lines(&empty);
     assert!(empty_lines.iter().any(|s| s == "task"));
-    assert!(empty_lines.iter().any(|s| s == "new"));
+    assert!(empty_lines.iter().any(|s| s == "add"));
+    assert!(!empty_lines.iter().any(|s| s == "new"));
 
     let partial = complete_output(Some(&app), &["--".into(), "lun".into(), "ta".into()]);
     let partial_lines = lines(&partial);
@@ -58,6 +59,49 @@ fn complete_top_level_empty_and_partial_prefix() {
         "{init_partial}"
     );
 
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn complete_add_subcommands_include_task_and_proj() {
+    let root = temp_root("add-subcommands");
+    let _lun = Lun::init(&root).unwrap();
+    let app = App::open(&root).unwrap();
+    let out = complete_output(
+        Some(&app),
+        &["--".into(), "lun".into(), "add".into(), "".into()],
+    );
+    let out_lines = lines(&out);
+    assert!(out_lines.iter().any(|s| s == "task"), "{out}");
+    assert!(out_lines.iter().any(|s| s == "proj"), "{out}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn add_proj_creates_project() {
+    let root = temp_root("add-proj");
+    let _lun = Lun::init(&root).unwrap();
+    let app = App::open(&root).unwrap();
+    let mut input = std::io::Cursor::new(Vec::<u8>::new());
+    let out = run_result_in_reader(
+        &app,
+        &[
+            "add".into(),
+            "proj".into(),
+            "alpha".into(),
+            "--status".into(),
+            "inactive".into(),
+            "--message".into(),
+            "seed alpha".into(),
+        ],
+        &mut input,
+        None,
+    )
+    .unwrap();
+    assert!(out.contains("Created project alpha [P-001]"), "{out}");
+    let projects = app.lun.list_projects().unwrap();
+    let alpha = projects.iter().find(|p| p.name == "alpha").unwrap();
+    assert_eq!(alpha.status, "inactive");
     let _ = std::fs::remove_dir_all(&root);
 }
 
