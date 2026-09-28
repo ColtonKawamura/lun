@@ -40,6 +40,16 @@ fn complete_top_level_empty_and_partial_prefix() {
     assert!(partial_lines.iter().any(|s| s == "task"), "{partial}");
     assert!(partial_lines.iter().all(|s| s.starts_with("ta")), "{partial}");
 
+    let status_partial_with_empty = complete_output(
+        Some(&app),
+        &["--".into(), "lun".into(), "sta".into(), "".into()],
+    );
+    let status_partial_lines = lines(&status_partial_with_empty);
+    assert!(
+        status_partial_lines.iter().any(|s| s == "status"),
+        "{status_partial_with_empty}"
+    );
+
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -92,6 +102,48 @@ fn complete_project_after_proj_command() {
     let out_lines = lines(&out);
     assert!(out_lines.iter().any(|s| s == &project.project_key), "{out}");
     assert!(out_lines.iter().any(|s| s == &project.name), "{out}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn complete_status_and_log_targets_include_projects_and_tasks() {
+    let root = temp_root("status-log-targets");
+    let lun = Lun::init(&root).unwrap();
+    let project = lun
+        .create_project(ProjectSpec {
+            name: "my Project".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let task = lun
+        .create_task(TaskSpec {
+            title: "myTask".into(),
+            project: Some(project.id),
+            ..Default::default()
+        })
+        .unwrap();
+    let app = App::open(&root).unwrap();
+
+    let status_out = complete_output(
+        Some(&app),
+        &["--".into(), "lun".into(), "status".into(), "".into()],
+    );
+    let status_lines = lines(&status_out);
+    assert!(status_lines.iter().any(|s| s == &project.project_key), "{status_out}");
+    assert!(status_lines.iter().any(|s| s == &project.name), "{status_out}");
+    assert!(status_lines.iter().any(|s| s == &task.task_key), "{status_out}");
+    assert!(status_lines.iter().any(|s| s == &task.title), "{status_out}");
+
+    let log_out = complete_output(
+        Some(&app),
+        &["--".into(), "lun".into(), "log".into(), "".into()],
+    );
+    let log_lines = lines(&log_out);
+    assert!(log_lines.iter().any(|s| s == &project.project_key), "{log_out}");
+    assert!(log_lines.iter().any(|s| s == &project.name), "{log_out}");
+    assert!(log_lines.iter().any(|s| s == &task.task_key), "{log_out}");
+    assert!(log_lines.iter().any(|s| s == &task.title), "{log_out}");
 
     let _ = std::fs::remove_dir_all(&root);
 }

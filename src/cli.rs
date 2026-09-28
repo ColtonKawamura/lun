@@ -45,7 +45,8 @@ use crate::db::{
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 13] = [
+const TOP_LEVEL_COMMANDS: [&str; 15] = [
+    "init",
     "new",
     "add",
     "task",
@@ -59,9 +60,10 @@ const TOP_LEVEL_COMMANDS: [&str; 13] = [
     "open-link",
     "open-uri",
     "pr",
+    "help",
 ];
 const PR_SUBCOMMANDS: [&str; 4] = ["new", "show", "ls", "merge"];
-const TASK_SUBCOMMANDS: [&str; 5] = ["ls", "edit", "complete", "reopen", "archive"];
+const TASK_SUBCOMMANDS: [&str; 6] = ["ls", "edit", "complete", "reopen", "archive", "delete"];
 
 fn push_unique(out: &mut Vec<String>, value: impl Into<String>) {
     let value = value.into();
@@ -205,6 +207,14 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                 out.extend(task_candidates(app));
             }
             "task" => {}
+            "status" => {
+                out.extend(project_candidates(app));
+                out.extend(task_candidates(app));
+            }
+            "log" => {
+                out.extend(project_candidates(app));
+                out.extend(task_candidates(app));
+            }
             _ => {}
         }
     }
@@ -234,7 +244,14 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                 {
                     out.extend(task_candidates(app));
                 }
-                Some("log") if tokens.len() == 1 => out.extend(task_candidates(app)),
+                Some("status") if tokens.len() == 1 => {
+                    out.extend(project_candidates(app));
+                    out.extend(task_candidates(app));
+                }
+                Some("log") if tokens.len() == 1 => {
+                    out.extend(project_candidates(app));
+                    out.extend(task_candidates(app));
+                }
                 Some("pr") if tokens.get(1).map(String::as_str) == Some("new") && tokens.len() == 2 => {
                     out.extend(task_candidates(app));
                 }
@@ -266,6 +283,17 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     out.extend(project_candidates(app));
                 }
                 _ => {}
+            }
+        }
+    }
+
+    if out.is_empty() && current.is_empty() && tokens.len() == 1 {
+        let partial = tokens[0].as_str();
+        if !partial.is_empty() && !TOP_LEVEL_COMMANDS.contains(&partial) {
+            for cmd in TOP_LEVEL_COMMANDS {
+                if cmd.starts_with(partial) {
+                    push_unique(&mut out, cmd);
+                }
             }
         }
     }
@@ -805,6 +833,70 @@ pub fn status_project_board(app: &App, query: &str) -> Result<String> {
     Ok(out.trim_end().to_string())
 }
 
+pub fn status_target(app: &App, query: &str) -> Result<String> {
+    match resolve_entity(&app.lun, query)? {
+        Entity::Project(p) => status_project(app, &p.project_key),
+        Entity::Task(t) => status_task(app, &t.task_key),
+    }
+}
+
+pub fn status_task(app: &App, query: &str) -> Result<String> {
+    let t = resolve_task(&app.lun, query)?;
+    let project = app.lun.project_name_for_task(&t);
+    let last = app.lun.logs_for("task", t.id)?.into_iter().next();
+
+    let mut out = String::new();
+    out.push_str(&format!("**Task {}**\n\n", t.task_key));
+    out.push_str("==========\n\n");
+    out.push_str(&format!("Project:   {project}\n"));
+    out.push_str(&format!("Title:     {}\n", t.title));
+    out.push_str(&format!("Status:    {}\n", t.status));
+    out.push_str(&format!("Priority:  {}\n", t.priority));
+    out.push_str(&format!("Assignee:  {}\n", t.assignee.unwrap_or_default()));
+    out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
+    out.push_str(&format!("Created:   {}\n\n", display_ts(&t.created_at)));
+    out.push_str("Checklist:\n\n");
+    out.push_str("- [ ] (checklist editing arrives in a later phase)\n\n");
+    out.push_str("**Notes:**\n\n");
+    if t.notes.trim().is_empty() {
+        out.push_str("- (add notes with 'e' in the task view)\n\n");
+    } else {
+        for line in t.notes.lines() {
+            out.push_str(&format!("- {line}\n"));
+        }
+        out.push('\n');
+    }
+    out.push_str("**Attachments:**\n\n");
+    let attachments = app.lun.attachments_for_task(t.id)?;
+    if attachments.is_empty() {
+        out.push_str("- (drag a file onto the TUI to attach one)\n\n");
+    } else {
+        for a in &attachments {
+            out.push_str(&format!("- {} ({})\n", a.filename, a.stored_path));
+        }
+        out.push('\n');
+    }
+    out.push_str("**Links:**\n\n");
+    let links = app.lun.links_for_task(t.id)?;
+    if links.is_empty() {
+        out.push_str("- (none)\n\n");
+    } else {
+        for l in &links {
+            out.push_str(&format!("- [{}] {}\n", l.label, l.uri));
+        }
+        out.push('\n');
+    }
+    out.push_str("**Last Commit:**\n");
+    if let Some(entry) = last {
+        for line in task_view_entry_lines(&entry) {
+            out.push_str(&format!("{line}\n"));
+        }
+    } else {
+        out.push_str("- (none)\n");
+    }
+    Ok(out)
+}
+
 /// `lun task <key|title>` — fields, labels, timestamps, log history.
 pub fn task_view(app: &App, query: &str) -> Result<String> {
     let t = resolve_task(&app.lun, query)?;
@@ -909,10 +1001,6 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
 /// `lun log <project|task>` — commit-style history, newest first.
 pub fn log_view(app: &App, query: &str) -> Result<String> {
     let entity = resolve_entity(&app.lun, query)?;
-    let (header, is_project) = match &entity {
-        Entity::Project(p) => (format!("Log: {}", p.name), true),
-        Entity::Task(t) => (format!("Log: Task {} \"{}\"", t.task_key, t.title), false),
-    };
     let entries: Vec<LogEntry> = match entity {
         Entity::Project(p) => {
             let mut all = app.lun.logs_for("project", p.id)?;
@@ -924,22 +1012,14 @@ pub fn log_view(app: &App, query: &str) -> Result<String> {
     };
 
     let mut out = String::new();
-    out.push_str(&header);
-    out.push('\n');
-    out.push_str(&"=".repeat(header.chars().count()));
-    out.push('\n');
     for e in &entries {
-        out.push('\n');
-        let lines = if is_project {
-            project_log_entry_lines(e)
-        } else {
-            task_log_entry_lines(e)
-        };
+        let lines = task_view_entry_lines(e);
         for line in lines {
             out.push_str(&format!("{line}\n"));
         }
+        out.push('\n');
     }
-    Ok(out)
+    Ok(out.trim_end().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -2263,7 +2343,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                 if board {
                     status_project_board(app, q)
                 } else {
-                    status_project(app, q)
+                    status_target(app, q)
                 }
             }
         },
