@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::db::{
-    DbError, Link, LinkTarget, LogEntry, Lun, Project, Task, TaskSpec,
+    DbError, Link, LinkTarget, LogEntry, Lun, Pr, PrSpec, Project, Task, TaskSpec,
 };
 use crate::db::Result;
 
@@ -581,6 +581,29 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
             out.push_str(&format!("{line}\n"));
         }
     }
+    out.push_str("\nPRs:\n");
+    let prs = app.lun.prs_for_task(t.id)?;
+    if prs.is_empty() {
+        out.push_str(&format!(
+            "- (no PRs - open one with `lun pr new {} --from <branch> --to main`)",
+            t.task_key
+        ));
+    } else {
+        for pr in &prs {
+            out.push_str(&format!(
+                "- {}  {} -> {}  [{}]  opened {}",
+                pr.pr_key,
+                pr.source_branch,
+                pr.target_branch,
+                pr.status,
+                display_ts(&pr.created_at)
+            ));
+            if let Some(merged) = &pr.merged_at {
+                out.push_str(&format!("  merged {}", display_ts(merged)));
+            }
+            out.push('\n');
+        }
+    }
     Ok(out)
 }
 
@@ -1008,8 +1031,342 @@ pub fn create_task(app: &App, title: &str, stdin: &mut dyn BufRead) -> Result<St
 }
 
 // ---------------------------------------------------------------------------
+// Phase 9: PRs (GitHub-style workflow + git glue)
+// ---------------------------------------------------------------------------
+
+fn is_pr_key(s: &str) -> bool {
+    let rest = s.strip_prefix("PR-").unwrap_or("");
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `lun pr new T-008 --from feature/branch --to main`.
+///
+/// `--from` defaults to the task's recorded `branch` field (the kanban
+/// tracks the branch per task, so most PRs need no flag); `--to` defaults
+/// to `main`. The DB layer enforces one open PR per task and rejects
+/// source == target.
+pub fn pr_new(app: &App, task_query: &str, from: Option<&str>, to: Option<&str>) -> Result<String> {
+    let t = resolve_task(&app.lun, task_query)?;
+    let pr = app.lun.create_pr(PrSpec {
+        task_id: t.id,
+        source_branch: from.map(|s| s.to_string()),
+        target_branch: to.map(|s| s.to_string()),
+        message: None,
+        user: None,
+    })?;
+    Ok(format!(
+        "Opened {} for {} ({} -> {})\nCommitted: open {} from {} into {} for {}",
+        pr.pr_key,
+        t.task_key,
+        pr.source_branch,
+        pr.target_branch,
+        pr.pr_key,
+        pr.source_branch,
+        pr.target_branch,
+        t.task_key
+    ))
+}
+
+/// Resolve a `lun pr show`/`merge` argument: a `PR-00N` key, or a task
+/// key/title (which must have exactly one open PR — more than one is
+/// ambiguous, zero is a clean error).
+pub fn resolve_pr(app: &App, query: &str) -> Result<Pr> {
+    if is_pr_key(query) {
+        return app.lun.pr_by_key(query);
+    }
+    let t = resolve_task(&app.lun, query)?;
+    let open = app
+        .lun
+        .prs_for_task(t.id)?
+        .into_iter()
+        .filter(|p| p.status == "open")
+        .collect::<Vec<_>>();
+    match open.as_slice() {
+        [pr] => Ok(pr.clone()),
+        [] => Err(DbError::new(
+            "not-found",
+            format!(
+                "{} has no open PR (open one with `lun pr new {} --from <branch> --to main`)",
+                t.task_key, t.task_key
+            ),
+        )),
+        many => Err(DbError::new(
+            "ambiguous",
+            format!(
+                "{} has {} open PRs: {} — use the PR key",
+                t.task_key,
+                many.len(),
+                many
+                    .iter()
+                    .map(|p| p.pr_key.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        )),
+    }
+}
+
+/// `lun pr show PR-001` (or a task key/title with one open PR).
+pub fn pr_show(app: &App, query: &str) -> Result<String> {
+    let pr = resolve_pr(app, query)?;
+    let task = app.lun.task_by_id(pr.task_id)?;
+    let header = format!("PR {}", pr.pr_key);
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push_str("\n\n");
+    out.push_str(&format!("Task:      {} \"{}\"\n", task.task_key, task.title));
+    out.push_str(&format!("Source:    {}\n", pr.source_branch));
+    out.push_str(&format!("Target:    {}\n", pr.target_branch));
+    out.push_str(&format!("Status:    {}\n", pr.status));
+    out.push_str(&format!("Opened:    {}\n", display_ts(&pr.created_at)));
+    if let Some(merged) = &pr.merged_at {
+        out.push_str(&format!("Merged:    {}\n", display_ts(merged)));
+    }
+    out.push('\n');
+    // The PR's lifecycle in the task's log: the entries whose details
+    // carry this PR's key (the CREATE/UPDATE on open, the MERGE on merge).
+    out.push_str("History (log):\n");
+    let entries = app.lun.logs_for("task", pr.task_id)?;
+    let mine: Vec<_> = entries
+        .iter()
+        .filter(|e| json_str(&e.details, "pr").as_deref() == Some(pr.pr_key.as_str()))
+        .collect();
+    if mine.is_empty() {
+        out.push_str("- (no PR log entries)");
+    } else {
+        for e in &mine {
+            for line in task_view_entry_lines(e) {
+                out.push_str(&format!("{line}\n"));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `lun pr ls` — open PRs first (the working set), then merged, newest
+/// first within each group.
+pub fn pr_ls(app: &App) -> Result<String> {
+    let prs = app.lun.list_prs()?;
+    let tasks = app.lun.list_tasks()?;
+    let task_key = |id: i64| {
+        tasks
+            .iter()
+            .find(|t| t.id == id)
+            .map(|t| t.task_key.clone())
+            .unwrap_or_else(|| format!("<task {}>", id))
+    };
+    // Newest first within each group (rowid order is creation order).
+    let open: Vec<&Pr> = prs.iter().filter(|p| p.status == "open").rev().collect();
+    let merged: Vec<&Pr> = prs.iter().filter(|p| p.status == "merged").rev().collect();
+
+    let mut out = String::new();
+    if open.is_empty() && merged.is_empty() {
+        out.push_str("No PRs yet (open one with `lun pr new <T-00N|title> --from <branch> --to main`).");
+        return Ok(out);
+    }
+    if !open.is_empty() {
+        out.push_str("Open PRs\n--------\n\n");
+        for pr in &open {
+            out.push_str(&format!(
+                "{}  {}  {} -> {}  opened {}\n",
+                pr.pr_key,
+                task_key(pr.task_id),
+                pr.source_branch,
+                pr.target_branch,
+                display_ts(&pr.created_at)
+            ));
+        }
+    }
+    if !merged.is_empty() {
+        if !open.is_empty() {
+            out.push('\n');
+        }
+        out.push_str("Merged PRs\n----------\n\n");
+        for pr in &merged {
+            let merged_ts = pr
+                .merged_at
+                .as_deref()
+                .map(display_ts)
+                .unwrap_or_else(|| "?".to_string());
+            out.push_str(&format!(
+                "{}  {}  {} -> {}  merged {}\n",
+                pr.pr_key,
+                task_key(pr.task_id),
+                pr.source_branch,
+                pr.target_branch,
+                merged_ts
+            ));
+        }
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// `lun pr merge PR-001` (or a task key/title with one open PR).
+///
+/// The logical merge (DB row -> `merged`, task -> `done`, `MERGE` log
+/// entry) always happens first; the optional `git merge` glue runs
+/// after, and a git failure is reported but does NOT undo the logical
+/// merge (lun's log is the canonical record — the plan keeps git
+/// integration explicitly optional).
+pub fn pr_merge(app: &App, query: &str, root: &Path) -> Result<String> {
+    let pr = resolve_pr(app, query)?;
+    let merged = app.lun.merge_pr(pr.id, None, None)?;
+    let mut out = format!(
+        "Merged {} ({} -> {}); task {} is now done\nCommitted: merge {} ({} -> {})",
+        merged.pr_key,
+        merged.source_branch,
+        merged.target_branch,
+        app.lun
+            .task_by_id(merged.task_id)?
+            .task_key,
+        merged.pr_key,
+        merged.source_branch,
+        merged.target_branch
+    );
+
+    // Optional git glue: only when `root` is a git repo and both
+    // branches exist locally. Never fails the command — reports instead.
+    if let Some(note) = git_merge_note(root, &merged.source_branch, &merged.target_branch) {
+        out.push('\n');
+        out.push_str(&note);
+    }
+    Ok(out)
+}
+
+/// Run the optional `git merge` glue for a merged PR. Returns a report
+/// line, or `None` when glue doesn't apply (not a git repo / missing
+/// branch).
+fn git_merge_note(root: &Path, source: &str, target: &str) -> Option<String> {
+    let is_repo = std::process::Command::new("git")
+        .args(["-C", &root.to_string_lossy(), "rev-parse", "--is-inside-work-tree"])
+        .output()
+        .ok()
+        .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
+        .unwrap_or(false);
+    if !is_repo {
+        return None;
+    }
+    // Does the source branch exist locally?
+    let has_source = std::process::Command::new("git")
+        .args(["-C", &root.to_string_lossy(), "rev-parse", "--verify", "--quiet", source])
+        .output()
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+    if !has_source {
+        return Some(format!(
+            "(git: branch '{source}' not found in this repo — logical merge recorded only)"
+        ));
+    }
+    let on_target = std::process::Command::new("git")
+        .args(["-C", &root.to_string_lossy(), "branch", "--show-current"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    if on_target != target {
+        return Some(format!(
+            "(git: currently on '{on_target}', not '{target}' — run `git checkout {target} && git merge {source}` to finish)"
+        ));
+    }
+    let merge = std::process::Command::new("git")
+        .args(["-C", &root.to_string_lossy(), "merge", "--no-edit", source])
+        .output();
+    match merge {
+        Ok(o) if o.status.success() => Some(format!(
+            "git: merged {source} into {target} (--no-edit; commit message from git)"
+        )),
+        Ok(o) => Some(format!(
+            "(git merge failed: {} — logical merge still recorded; resolve with `git merge {source}`)",
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Err(e) => Some(format!("(git merge could not run: {e} — logical merge still recorded)")),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch (used by the binary)
 // ---------------------------------------------------------------------------
+
+/// `lun pr` subcommand dispatch: `new` (with `--from`/`--to` flags),
+/// `show`, `ls`, `merge`.
+fn run_pr(app: &App, args: &[String]) -> Result<String> {
+    let Some(sub) = args.first() else {
+        return Err(DbError::new(
+            "usage",
+            "expected: lun pr <new|show|ls|merge> (see `lun --help`)",
+        ));
+    };
+    match sub.as_str() {
+        "ls" => {
+            if args.len() > 1 {
+                return Err(DbError::new("usage", "`lun pr ls` takes no arguments"));
+            }
+            pr_ls(app)
+        }
+        "new" => {
+            let mut task: Option<&str> = None;
+            let mut from: Option<String> = None;
+            let mut to: Option<String> = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--from" => {
+                        from = Some(args.get(i + 1).ok_or_else(|| {
+                            DbError::new("usage", "`--from` needs <branch>")
+                        })?.clone());
+                        i += 2;
+                    }
+                    "--to" => {
+                        to = Some(args.get(i + 1).ok_or_else(|| {
+                            DbError::new("usage", "`--to` needs <branch>")
+                        })?.clone());
+                        i += 2;
+                    }
+                    other if task.is_none() && !other.starts_with("--") => {
+                        task = Some(other);
+                        i += 1;
+                    }
+                    other => {
+                        return Err(DbError::new(
+                            "usage",
+                            format!("unexpected argument '{other}'"),
+                        ));
+                    }
+                }
+            }
+            let Some(task) = task else {
+                return Err(DbError::new(
+                    "usage",
+                    "expected: lun pr new <T-00N|title> [--from <branch>] [--to <branch>]",
+                ));
+            };
+            pr_new(app, task, from.as_deref(), to.as_deref())
+        }
+        "show" | "merge" => {
+            if args.len() != 2 {
+                return Err(DbError::new(
+                    "usage",
+                    format!("expected: lun pr {sub} <PR-00N|T-00N|title>"),
+                ));
+            }
+            match sub.as_str() {
+                "show" => pr_show(app, &args[1]),
+                "merge" => match std::env::current_dir() {
+                    Ok(root) => pr_merge(app, &args[1], &root),
+                    Err(e) => Err(DbError::new("io", format!("resolving CWD: {e}"))),
+                },
+                _ => unreachable!(),
+            }
+        }
+        _ => Err(DbError::new(
+            "usage",
+            format!("unknown subcommand 'lun pr {sub}' (expected new, show, ls, or merge)"),
+        )),
+    }
+}
 
 /// Dispatch already-split argv (without the program name) to a command.
 /// Prints the result to stdout, errors to stderr, and returns the exit code.
@@ -1070,6 +1427,7 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
             )),
         },
         Some("open-uri") => open_uri(app, &args[1..].to_vec()),
+        Some("pr") => run_pr(app, &args[1..].to_vec()),
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),

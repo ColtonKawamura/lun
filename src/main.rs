@@ -5,6 +5,7 @@
 //! Phase 4: `lun attach`, `lun link`, `lun open-link` (Mac linking).
 //! Phase 5: bare `lun` launches the full-screen TUI when stdout is a TTY
 //! (piped output keeps the plain banner).
+//! Phase 9: `lun pr new/show/ls/merge` (GitHub-style PRs + git glue).
 
 use std::env;
 use std::process::ExitCode;
@@ -13,7 +14,7 @@ pub mod cli;
 pub mod db;
 pub mod tui;
 
-pub use db::{Lun, LinkTarget, LogEntry, Project, ProjectSpec, Task, TaskSpec};
+pub use db::{Lun, LinkTarget, LogEntry, Pr, Project, ProjectSpec, Task, TaskSpec};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -128,6 +129,10 @@ fn print_help() {
     println!("  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link");
     println!("  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`");
     println!("  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)");
+    println!("  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR (defaults: task's branch -> main)");
+    println!("  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)");
+    println!("  lun pr ls               List open and merged PRs");
+    println!("  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)");
     println!("  lun --version             Print version");
     println!("  lun --help                Print this help");
     println!();

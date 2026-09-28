@@ -38,6 +38,22 @@ Version 2 (Phase 7) adds `tasks.notes` (see `tasks` below):
 ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
 ```
 
+Version 3 (Phase 9) adds the `prs` table (see `prs` below):
+
+```sql
+CREATE TABLE prs (
+    id            INTEGER PRIMARY KEY,
+    pr_key        TEXT NOT NULL UNIQUE,
+    task_id       INTEGER NOT NULL REFERENCES tasks(id),
+    source_branch TEXT NOT NULL,
+    target_branch TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'merged')),
+    created_at    TEXT NOT NULL,
+    merged_at     TEXT
+);
+```
+
 ## projects
 
 | column        | type    | notes |
@@ -112,6 +128,24 @@ logged (`user = system`).
 CHECK constraint: exactly one of `task_id` / `project_id` is set
 (`(task_id IS NULL) <> (project_id IS NULL)`).
 
+## prs
+
+| column        | type    | notes |
+| ------------- | ------- | ----- |
+| id            | INTEGER | PK |
+| pr_key        | TEXT    | unique, `PR-00N` style (MAX(id)-based, auto-increment) |
+| task_id       | INTEGER | FK → `tasks.id` (a PR is always about one task) |
+| source_branch | TEXT    | branch being merged in |
+| target_branch | TEXT    | merge target (defaults to `main`) |
+| status        | TEXT    | `open` \| `merged` (CHECK-constrained) |
+| created_at    | TEXT    | UTC timestamp |
+| merged_at     | TEXT    | UTC timestamp, set when status → `merged` |
+
+Phase 9 (GitHub-style PRs). One open PR per task. The PR lifecycle is
+recorded in the owning task's `logs` (the PR's `UPDATE`/`MERGE` entries
+carry the `pr` key in `details`) because `logs.entity_type` is
+CHECK-constrained to `project`/`task`.
+
 ## Data-access guarantees (Phase 2)
 
 - `Lun::init(root)` — create `.lun/`, open `lun.db`, run migrations,
@@ -135,3 +169,27 @@ CHECK constraint: exactly one of `task_id` / `project_id` is set
   `notes: <old> -> <new>` as a line-count description (`empty`,
   `1 line`, `2 lines`, …) — the notes text itself lives in the column,
   not in `details`.
+
+## Phase 9 additions
+
+- `Lun::create_pr(PrSpec)` — opens a PR for a task. `source_branch`
+  defaults to the task's `branch` column (a task with no branch and no
+  explicit `--from` is a `usage` error); `target_branch` defaults to
+  `main`. `source == target` and a second open PR on the same task are
+  `usage` errors. Key is `PR-{:03}` from MAX(id) (empty table → `PR-001`;
+  numbering never reuses, even after merges). Logs `UPDATE` on the task
+  with `details` = `{"pr", "source", "target"}`.
+- `Lun::merge_pr(pr_id, message, user)` — flips an open PR to `merged`,
+  stamps `merged_at`, moves the task to `done` (a merged PR means the
+  task is done), and logs `MERGE` on the task with `details` =
+  `{"changes", "pr", "source", "target"}`. Merging a non-open PR is a
+  `usage` error (`already merged`); an unknown id is `not-found`.
+- `list_prs` / `list_open_prs` / `pr_by_key` / `prs_for_task` /
+  `open_pr_for_task` — read models. `pr_by_key` maps a missing key to
+  `not-found`.
+- CLI: `lun pr new|show|ls|merge` (see `main.rs` help). `pr merge` runs
+  the logical merge first and then, only when the CWD is a git repo on
+  the target branch and the source branch exists locally, `git merge
+  --no-edit <source>`; a missing branch / wrong branch / merge failure
+  is *reported* in the output but never undoes the logical merge (the DB
+  log is the canonical record — the plan keeps git integration optional).
