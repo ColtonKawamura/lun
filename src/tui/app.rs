@@ -210,6 +210,7 @@ pub struct App {
     pub palette_open: bool,
     pub palette_query: String,
     pub palette_selected: usize,
+    pub palette_vim_nav: bool,
     pub output: Option<CommandOutput>,
     pub output_scroll: usize,
     pub output_page_rows: usize,
@@ -232,6 +233,8 @@ pub struct App {
     /// Whether the draft differs from the last-committed notes text.
     pub notes_dirty: bool,
     pub pending_g: bool,
+    pub pending_space: bool,
+    pub pending_space_f: bool,
     /// (text, is_error) shown on the message line above the hint bar.
     pub message: Option<(String, bool)>,
     pub quit: bool,
@@ -258,6 +261,7 @@ impl App {
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
+            palette_vim_nav: false,
             output: None,
             output_scroll: 0,
             output_page_rows: 5,
@@ -273,6 +277,8 @@ impl App {
             notes_draft: String::new(),
             notes_dirty: false,
             pending_g: false,
+            pending_space: false,
+            pending_space_f: false,
             message: None,
             quit: false,
             root: None,
@@ -751,6 +757,7 @@ impl App {
             *last = suggestion;
         }
         self.palette_query = words.join(" ");
+        self.palette_vim_nav = false;
     }
 
     fn current_context_project_key(&self) -> Option<String> {
@@ -1207,6 +1214,8 @@ impl App {
             self.palette_query.clear();
         }
         self.palette_selected = 0;
+        self.palette_vim_nav = false;
+        self.clear_leader_sequence();
     }
 
     pub fn close_command_prompt(&mut self) {
@@ -1220,11 +1229,41 @@ impl App {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_selected = 0;
+        self.palette_vim_nav = false;
         self.prompt_session = None;
+        self.clear_leader_sequence();
+    }
+
+    pub fn enter_palette_vim_nav(&mut self) {
+        if self.prompt_session.is_none() {
+            self.palette_vim_nav = true;
+        }
+    }
+
+    pub fn exit_palette_vim_nav(&mut self) {
+        self.palette_vim_nav = false;
+    }
+
+    pub fn clear_leader_sequence(&mut self) {
+        self.pending_space = false;
+        self.pending_space_f = false;
+    }
+
+    pub fn open_task_project_finder(&mut self) {
+        self.open_palette();
+        self.palette_query = "status ".to_string();
+        self.palette_selected = 0;
+    }
+
+    pub fn open_log_finder(&mut self) {
+        self.open_palette();
+        self.palette_query = "log ".to_string();
+        self.palette_selected = 0;
     }
 
     /// Append a typed character to the palette query; clamp selection.
     pub fn palette_type(&mut self, ch: char) {
+        self.palette_vim_nav = false;
         self.palette_query.push(ch);
         let n = self.command_suggestions().len();
         if n == 0 {
@@ -1235,6 +1274,7 @@ impl App {
     }
 
     pub fn palette_backspace(&mut self) {
+        self.palette_vim_nav = false;
         self.palette_query.pop();
         if self.prompt_session.is_some() {
             return;

@@ -217,9 +217,33 @@ fn palette_esc_closes_without_running() {
     term::handle_key(&mut app, &key(KeyCode::Char('q'))); // filters to /quit
     assert!(!app.quit); // typing must not execute
     term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.palette_open);
+    assert!(app.palette_vim_nav);
+    term::handle_key(&mut app, &key(KeyCode::Esc));
     assert!(!app.palette_open);
     assert!(!app.quit);
     assert_eq!(app.view, View::Initial);
+}
+
+#[test]
+fn palette_esc_enables_j_k_suggestion_navigation() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    term::handle_key(&mut app, &key(KeyCode::Char('/')));
+    term::handle_key(&mut app, &key(KeyCode::Char('n')));
+    let suggestions = app.filtered_commands();
+    assert!(suggestions.len() > 1);
+    assert_eq!(app.palette_selected, 0);
+
+    term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.palette_vim_nav);
+    assert_eq!(app.palette_query, "n");
+    term::handle_key(&mut app, &key(KeyCode::Char('j')));
+    assert_eq!(app.palette_selected, 1);
+    assert_eq!(app.palette_query, "n");
+    term::handle_key(&mut app, &key(KeyCode::Char('k')));
+    assert_eq!(app.palette_selected, 0);
+    assert_eq!(app.palette_query, "n");
 }
 
 #[test]
