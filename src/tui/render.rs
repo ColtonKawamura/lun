@@ -563,7 +563,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 20] = [
+    let rows: [(&str, &str); 23] = [
         ("/", "open the command palette"),
         ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
@@ -590,9 +590,12 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
             "edit the current task's notes (task view; Esc back, Ctrl-S save)",
         ),
         (
-            "esc / backspace",
-            "close the palette/statusline, or go back",
+            "esc",
+            "palette: vim prompt-nav mode / close; elsewhere: go back",
         ),
+        ("backspace", "palette line edit, or go back"),
+        ("<space> f f", "open finder prompt (`status `)"),
+        ("<space> f g", "open log finder prompt (`log `)"),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
         ("/new-task", "open the new-task form"),

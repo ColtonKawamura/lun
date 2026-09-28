@@ -82,7 +82,10 @@ their context-relative behavior.
 | `i` / `e` | task view       | edit the current task's notes |
 | `?`       | normal          | open help |
 | `tab`     | command prompt  | apply the selected completion suggestion |
-| `esc` / `backspace` | command prompt / insert / detail views | close the command prompt, edit the line, or go back |
+| `esc`     | command prompt  | after typing, enter vim prompt-nav mode (`j`/`k` cycle suggestions); press `esc` again to close |
+| `backspace` | command prompt / insert / detail views | edit the line, delete notes chars, or go back |
+| `<space> f f` | normal | open task/project finder prompt (`status ` prefilled) |
+| `<space> f g` | normal | open log finder prompt (`log ` prefilled) |
 | `ctrl-s`  | insert (notes)  | save the notes draft (logs `UPDATE`; default message `update notes for <task>`) |
 | `q`       | normal          | quit (blocked while notes have unsaved edits) |
 

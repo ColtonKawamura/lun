@@ -113,12 +113,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mu
 
 /// Pure key dispatch — the whole keyboard map of the TUI in one place.
 ///
-/// Palette (open): printable chars filter (j/k are typed, so command
-/// lines like `/task T-001` work), arrows move, Enter runs, Esc closes. Statusline (open): printable chars append, Backspace
+/// Palette (open): printable chars filter, arrows move, Enter runs; Esc
+/// enters vim-style prompt navigation (j/k cycle suggestions), Esc again
+/// closes. Statusline (open): printable chars append, Backspace
 /// removes, Enter runs, Esc closes. Insert mode: typing appends to the
 /// notes draft, Enter is a newline, Esc returns to normal mode. Outside
 /// all of that (normal mode): `/` opens the palette, `:` opens the
-/// statusline, `q` quits, `t` opens the current task, and in the
+/// statusline, `<space> f f` opens finder (`status `), `<space> f g`
+/// opens log finder (`log `), `q` quits, `t` opens the current task, and in the
 /// project view j/k/Enter navigate and select.
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.form().is_some() {
@@ -138,18 +140,33 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     }
 
     if app.palette_open {
-        // Note: in the command prompt j/k are TYPED, not navigation.
+        app.clear_leader_sequence();
         if !matches!(key.code, KeyCode::Char('g')) {
             app.pending_g = false;
         }
 
         match key.code {
-            KeyCode::Esc => app.close_command_prompt(),
+            KeyCode::Esc => {
+                if app.prompt_session.is_some()
+                    || app.palette_vim_nav
+                    || app.palette_query.is_empty()
+                {
+                    app.close_command_prompt()
+                } else {
+                    app.enter_palette_vim_nav()
+                }
+            }
             KeyCode::Enter => app.run_command(),
             KeyCode::Up if key.modifiers == KeyModifiers::NONE => app.palette_up(),
             KeyCode::Down if key.modifiers == KeyModifiers::NONE => app.palette_down(),
             KeyCode::Tab if key.modifiers == KeyModifiers::NONE => app.apply_selected_suggestion(),
             KeyCode::Backspace => app.palette_backspace(),
+            KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
+                app.palette_down()
+            }
+            KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE && app.palette_vim_nav => {
+                app.palette_up()
+            }
             KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.palette_type(c),
             _ => {}
         }
@@ -157,6 +174,7 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     }
 
     if app.mode == super::app::Mode::Insert {
+        app.clear_leader_sequence();
         match key.code {
             KeyCode::Esc => app.exit_insert(),
             KeyCode::Enter => app.notes_newline(),
@@ -175,6 +193,40 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             _ => {}
         }
         return;
+    }
+
+    if key.modifiers != KeyModifiers::NONE {
+        app.clear_leader_sequence();
+    } else {
+        if matches!(key.code, KeyCode::Char(' ')) {
+            app.pending_space = true;
+            app.pending_space_f = false;
+            app.pending_g = false;
+            return;
+        }
+        if app.pending_space {
+            if matches!(key.code, KeyCode::Char('f')) {
+                app.pending_space = false;
+                app.pending_space_f = true;
+                app.pending_g = false;
+                return;
+            }
+            app.clear_leader_sequence();
+        } else if app.pending_space_f {
+            if matches!(key.code, KeyCode::Char('f')) {
+                app.clear_leader_sequence();
+                app.pending_g = false;
+                app.open_task_project_finder();
+                return;
+            }
+            if matches!(key.code, KeyCode::Char('g')) {
+                app.clear_leader_sequence();
+                app.pending_g = false;
+                app.open_log_finder();
+                return;
+            }
+            app.clear_leader_sequence();
+        }
     }
 
     match key.code {

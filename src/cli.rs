@@ -46,9 +46,8 @@ use crate::db::{
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 15] = [
+const TOP_LEVEL_COMMANDS: [&str; 14] = [
     "init",
-    "new",
     "add",
     "task",
     "proj",
@@ -116,6 +115,9 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
     match tokens[0].as_str() {
         "status" => extend_unique(&mut out, ["--board"]),
         "new" => extend_unique(&mut out, ["--status", "--message"]),
+        "add" if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project")) => {
+            extend_unique(&mut out, ["--status", "--message"]);
+        }
         "proj" | "project" if tokens.len() >= 2 => {
             extend_unique(&mut out, ["--status", "--message"]);
         }
@@ -185,6 +187,9 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     Some("new") => {
                         matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
                     }
+                    Some("add") => {
+                        matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
+                    }
                     Some("proj" | "project") => true,
                     _ => false,
                 };
@@ -236,7 +241,7 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
         } else {
             match tokens.first().map(String::as_str) {
                 Some("new") if tokens.len() == 1 => extend_unique(&mut out, ["proj"]),
-                Some("add") if tokens.len() == 1 => extend_unique(&mut out, ["task"]),
+                Some("add") if tokens.len() == 1 => extend_unique(&mut out, ["task", "proj"]),
                 Some("pr") if tokens.len() == 1 => extend_unique(&mut out, PR_SUBCOMMANDS),
                 Some("task") if tokens.len() == 1 => {
                     extend_unique(&mut out, TASK_SUBCOMMANDS);
@@ -422,7 +427,7 @@ Usage:\n\
   lun                     Show banner\n\
   lun init                Create .lun/lun.db in the current directory (idempotent)\n\
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\
-  lun new proj \"<name>\"  Create a project\n\
+  lun add proj \"<name>\" [--status active|inactive]  Create a project\n\
   lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\
   lun move \"<task>\" \"<project>\"   Move a task to a project\n\
   lun task <T-00N|title>    View a task (fields, labels, history)\n\
@@ -2484,7 +2489,7 @@ pub fn run_result_in_reader(
             Some("proj") | Some("project") => {
                 let name = args
                     .get(2)
-                    .ok_or_else(|| DbError::new("usage", "expected: lun new proj \"<name>\""))?;
+                    .ok_or_else(|| DbError::new("usage", "expected: lun add proj \"<name>\""))?;
                 let (filtered, message) = parse_message_flag(&args[3..])?;
                 let mut status: Option<&str> = None;
                 let mut i = 0;
@@ -2501,7 +2506,7 @@ pub fn run_result_in_reader(
                         other => {
                             return Err(DbError::new(
                                 "usage",
-                                format!("unexpected argument '{other}' for lun new proj"),
+                                format!("unexpected argument '{other}' for lun add proj"),
                             ))
                         }
                     }
@@ -2510,10 +2515,37 @@ pub fn run_result_in_reader(
             }
             _ => Err(DbError::new(
                 "usage",
-                "expected: lun new proj \"<name>\" [--status active|inactive] [--message \"...\"]",
+                "expected: lun add proj \"<name>\" [--status active|inactive] [--message \"...\"]",
             )),
         },
         Some("add") => match args.get(1).map(String::as_str) {
+            Some("proj") | Some("project") => {
+                let name = args
+                    .get(2)
+                    .ok_or_else(|| DbError::new("usage", "expected: lun add proj \"<name>\""))?;
+                let (filtered, message) = parse_message_flag(&args[3..])?;
+                let mut status: Option<&str> = None;
+                let mut i = 0;
+                while i < filtered.len() {
+                    match filtered[i].as_str() {
+                        "--status" => {
+                            status = Some(
+                                filtered
+                                    .get(i + 1)
+                                    .ok_or_else(|| DbError::new("usage", "--status needs a value"))?,
+                            );
+                            i += 2;
+                        }
+                        other => {
+                            return Err(DbError::new(
+                                "usage",
+                                format!("unexpected argument '{other}' for lun add proj"),
+                            ))
+                        }
+                    }
+                }
+                create_project_command(app, name, status, message, stdin)
+            }
             Some("task") => {
                 let title = args
                     .get(2)
@@ -2543,7 +2575,7 @@ pub fn run_result_in_reader(
             }
             _ => Err(DbError::new(
                 "usage",
-                "expected: lun add task \"<title>\" [proj \"<project>\"]",
+                "expected: lun add task \"<title>\" [proj \"<project>\"] | add proj \"<name>\" [--status active|inactive]",
             )),
         },
         Some("proj") => match (args.get(1), args.get(2), args.get(3)) {

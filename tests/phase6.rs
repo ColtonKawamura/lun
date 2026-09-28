@@ -403,9 +403,36 @@ fn command_prompt_esc_closes_without_running() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Esc));
+    assert!(app.palette_open);
+    assert!(app.palette_vim_nav);
+    term::handle_key(&mut app, &key(KeyCode::Esc));
     assert!(!app.palette_open);
     assert_eq!(app.palette_query, "");
     assert_eq!(app.view, View::Initial);
+}
+
+#[test]
+fn leader_space_f_f_opens_status_finder() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    term::handle_key(&mut app, &key(KeyCode::Char(' ')));
+    term::handle_key(&mut app, &key(KeyCode::Char('f')));
+    term::handle_key(&mut app, &key(KeyCode::Char('f')));
+    assert!(app.palette_open);
+    assert_eq!(app.palette_query, "status ");
+    assert!(!app.palette_vim_nav);
+}
+
+#[test]
+fn leader_space_f_g_opens_log_finder() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    term::handle_key(&mut app, &key(KeyCode::Char(' ')));
+    term::handle_key(&mut app, &key(KeyCode::Char('f')));
+    term::handle_key(&mut app, &key(KeyCode::Char('g')));
+    assert!(app.palette_open);
+    assert_eq!(app.palette_query, "log ");
+    assert!(!app.palette_vim_nav);
 }
 
 #[test]
