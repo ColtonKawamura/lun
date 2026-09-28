@@ -790,16 +790,24 @@ fn dropped_paths_support_escaped_quoted_and_file_uri_without_copy() {
 
     let spaced = root.join("My File.pdf");
     let plain = root.join("second.txt");
+    let local = root.join("third.txt");
     std::fs::write(&spaced, "a").unwrap();
     std::fs::write(&plain, "b").unwrap();
+    std::fs::write(&local, "c").unwrap();
 
     let escaped_spaced = spaced.display().to_string().replace(' ', "\\ ");
-    let drop_text = format!("{} file://{}", escaped_spaced, plain.display());
+    let drop_text = format!(
+        "{} file://{} file://localhost{}",
+        escaped_spaced,
+        plain.display(),
+        local.display()
+    );
     app.attach_dropped_file(&drop_text);
 
     let t = app.lun.as_ref().unwrap().task_by_key("T-001").unwrap();
     assert!(t.notes.contains("[My File.pdf](file://"));
     assert!(t.notes.contains("[second.txt](file://"));
+    assert!(t.notes.contains("[third.txt](file://"));
     assert!(t.notes.contains("My%20File.pdf"));
     assert!(
         !root.join(".lun/attachments").join("My File.pdf").exists(),

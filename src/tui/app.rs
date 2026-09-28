@@ -1229,23 +1229,18 @@ impl App {
             } else {
                 task.notes.trim_end().to_string()
             };
-            {
-                for path in &paths {
-                    let filename = path
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| path.display().to_string());
-                    let uri = Self::file_uri_from_path(path);
-                    if let Err(e) = lun.add_link(LinkTarget::Task(task_id), &filename, &uri, None, None)
-                    {
-                        self.message = Some((format!("link failed: {e}"), true));
-                        return;
-                    }
-                    if !notes.is_empty() {
-                        notes.push('\n');
-                    }
-                    notes.push_str(&format!("- [{filename}]({uri})"));
+            let links = match Self::add_file_links(lun, LinkTarget::Task(task_id), &paths) {
+                Ok(v) => v,
+                Err(e) => {
+                    self.message = Some((e, true));
+                    return;
                 }
+            };
+            for (filename, uri) in links {
+                if !notes.is_empty() {
+                    notes.push('\n');
+                }
+                notes.push_str(&format!("- [{filename}]({uri})"));
             }
             self.notes_draft = notes;
             self.notes_dirty = true;
@@ -1261,26 +1256,34 @@ impl App {
             self.message = Some(("no current project to link files onto".to_string(), true));
             return;
         };
-        {
-            for path in &paths {
-                let filename = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| path.display().to_string());
-                let uri = Self::file_uri_from_path(path);
-                if let Err(e) =
-                    lun.add_link(LinkTarget::Project(project.id), &filename, &uri, None, None)
-                {
-                    self.message = Some((format!("link failed: {e}"), true));
-                    return;
-                }
-            }
+        if let Err(e) = Self::add_file_links(lun, LinkTarget::Project(project.id), &paths) {
+            self.message = Some((e, true));
+            return;
         }
         let _ = self.refresh_from_store();
         self.message = Some((
             format!("Linked {} file path(s) on project {}", paths.len(), project.project_key),
             false,
         ));
+    }
+
+    fn add_file_links(
+        lun: &Lun,
+        target: LinkTarget,
+        paths: &[std::path::PathBuf],
+    ) -> Result<Vec<(String, String)>, String> {
+        let mut out = Vec::with_capacity(paths.len());
+        for path in paths {
+            let filename = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let uri = Self::file_uri_from_path(path);
+            lun.add_link(target, &filename, &uri, None, None)
+                .map_err(|e| format!("link failed: {e}"))?;
+            out.push((filename, uri));
+        }
+        Ok(out)
     }
 
     /// `:status <query>` — run the statusline query against the log
@@ -1312,15 +1315,18 @@ impl App {
         }
     }
 
-    fn decode_file_uri(uri: &str) -> Option<String> {
+    fn decode_file_uri(uri: &str) -> Option<std::path::PathBuf> {
         let rest = uri.strip_prefix("file://")?;
-        let path = if let Some(r) = rest.strip_prefix('/') {
-            format!("/{r}")
-        } else if let Some(r) = rest.strip_prefix("localhost/") {
-            format!("/{r}")
+        let path = if let Some(r) = rest.strip_prefix("localhost") {
+            r
+        } else if rest.starts_with('/') {
+            rest
         } else {
             return None;
         };
+        if !path.starts_with('/') {
+            return None;
+        }
         let mut bytes = Vec::with_capacity(path.len());
         let mut i = 0;
         let b = path.as_bytes();
@@ -1336,7 +1342,15 @@ impl App {
             bytes.push(b[i]);
             i += 1;
         }
-        String::from_utf8(bytes).ok()
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+        }
+        #[cfg(not(unix))]
+        {
+            String::from_utf8(bytes).ok().map(std::path::PathBuf::from)
+        }
     }
 
     fn split_shell_like(input: &str) -> Vec<String> {
@@ -1370,9 +1384,15 @@ impl App {
 
     fn file_uri_from_path(path: &std::path::Path) -> String {
         let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        let raw = abs.to_string_lossy();
+        #[cfg(unix)]
+        let raw: Vec<u8> = {
+            use std::os::unix::ffi::OsStrExt;
+            abs.as_os_str().as_bytes().to_vec()
+        };
+        #[cfg(not(unix))]
+        let raw: Vec<u8> = abs.to_string_lossy().into_owned().into_bytes();
         let mut encoded = String::with_capacity(raw.len() + 8);
-        for b in raw.bytes() {
+        for b in raw {
             match b {
                 b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
                     encoded.push(b as char)
@@ -1390,8 +1410,10 @@ impl App {
                 if token.trim().is_empty() {
                     return None;
                 }
-                let decoded = Self::decode_file_uri(&token).unwrap_or(token);
-                Some(std::path::PathBuf::from(decoded))
+                if let Some(path) = Self::decode_file_uri(&token) {
+                    return Some(path);
+                }
+                Some(std::path::PathBuf::from(token))
             })
             .collect()
     }
