@@ -16,10 +16,11 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 - Task workflows (`task ls|edit|complete|reopen|archive`) and project/task attachments
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
-  views, task detail with vim-style keys, in-TUI logs, and focused link opening
+  views, task detail with vim-style keys, in-TUI logs, `/new-task`,
+  `/new-project`, `/move`, and focused link opening
   ([docs/tui.md](docs/tui.md))
-- Drag-and-drop file attachments into the TUI (paste a path) and notes
-  editing with log-on-write (`e`/`i` to edit, `Esc` to save)
+- Drag-and-drop file-path linking in the TUI (escaped/quoted/file URI paths,
+  no file copy) and notes editing with log-on-write (`e`/`i` to edit, `Esc` to save)
 - PRs & git glue (`lun pr new|show|ls|merge`): GitHub-style PRs over tasks,
   with optional best-effort `git merge` when the CWD is on the target branch
 - nvim plugin: `:Lun` and `⌘⇧L` to open the link under the cursor

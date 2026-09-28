@@ -14,7 +14,10 @@ use std::io::stdout;
 use std::path::Path;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -44,12 +47,22 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
 
     enable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
+    execute!(
+        terminal.backend_mut(),
+        EnterAlternateScreen,
+        EnableBracketedPaste
+    )
+    .map_err(|e| e.to_string())?;
 
     let code = run_loop(&mut terminal, &mut app);
 
     disable_raw_mode().ok();
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).ok();
+    execute!(
+        terminal.backend_mut(),
+        DisableBracketedPaste,
+        LeaveAlternateScreen
+    )
+    .ok();
     let _ = terminal.flush();
     Ok(code)
 }
@@ -107,6 +120,22 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mu
 /// statusline, `q` quits, `t` opens the current task, and in the
 /// project view j/k/Enter navigate and select.
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
+    if app.form().is_some() {
+        match key.code {
+            KeyCode::Esc => app.cancel_form(),
+            KeyCode::Up => app.form_nav(-1),
+            KeyCode::Down | KeyCode::Tab => app.form_nav(1),
+            KeyCode::BackTab => app.form_nav(-1),
+            KeyCode::Left => app.form_cycle(-1),
+            KeyCode::Right => app.form_cycle(1),
+            KeyCode::Backspace => app.form_backspace(),
+            KeyCode::Enter => app.submit_form(),
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.form_type(c),
+            _ => {}
+        }
+        return;
+    }
+
     if app.palette_open {
         // Note: in the palette j/k are TYPED, not navigation — command
         // lines like `/task T-001` contain them. Arrow keys navigate.

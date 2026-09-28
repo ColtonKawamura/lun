@@ -7,8 +7,8 @@
 //!
 //! Views: initial screen (banner, context, board preview, hint bar),
 //! slash command palette (`/`), `/status`, `/board`, `/project`, `/help`,
-//! and placeholders for `/task`, `/new-task`, `/log`, `/config` (later
-//! phases). No editing in Phase 5.
+//! plus task/log/detail flows and forms like `/new-task`, `/new-project`,
+//! and `/move` in later phases.
 
 pub mod app;
 pub mod data;

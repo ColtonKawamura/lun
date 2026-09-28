@@ -11,11 +11,13 @@
 | Board         | `/board`                             | kanban columns (todo / in-progress / review / done) for the current project |
 | Project       | `/project`                           | project list; `enter` sets the current project |
 | Task          | `t` (current task) / `/task <q>`     | task detail: fields, notes, attachments, links, log history, **PRs** |
+| New Task      | `/new-task`                          | form to create a task (title, project, status, priority, assignee, branch, labels) |
+| New Project   | `/new-project`                       | form to create a project in the current workspace |
+| Move Task     | `/move`                              | form to move the current task between projects (including `Unassigned`) |
 | Log           | `/log <project\|task>`               | commit-style history (newest first) |
 | Help          | `/help`                              | this keybinding reference |
 
-`/new-task` and `/config` exist in the palette but are placeholders for
-later phases.
+`/config` is still a placeholder for a later phase.
 
 ## Keybindings
 
@@ -51,9 +53,14 @@ actions use the same bottom prompt line (`› status <query>`).
 ## Drag-and-drop attachments (Phase 7)
 
 Drop a file (or paste a path) while a task is selected: the file is
-copied into `.lun/attachments/` and an `ATTACH` log entry is written.
-A copy failure rolls the file back (no dangling copy without a DB
-record).
+linked (not copied) as markdown in task notes, using `file:///absolute/path`
+URIs that work with `lun open-uri` / the nvim `⌘⇧L` flow.
+
+Accepted drop/paste formats include:
+- shell-escaped paths (`/Users/me/My\ File.pdf`)
+- quoted paths (`"/Users/me/My File.pdf"`)
+- `file://` URIs (`file:///Users/me/My%20File.pdf`)
+- multiple paths in one paste
 
 Focused items in the **Task** view can also be opened directly from the
 TUI: move focus to **Notes**, **Attachments**, or **Links** with `h`/`l`,

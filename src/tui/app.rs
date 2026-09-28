@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 
 use super::data::TuiData;
-use crate::db::Lun;
+use crate::db::{LinkTarget, Lun, ProjectSpec, TaskSpec, TaskUpdateSpec};
 
 /// Where the app is looking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,8 +25,14 @@ pub enum View {
     Task,
     /// Log view for one task or project (newest first).
     Log,
+    /// Form to create a task.
+    NewTask,
+    /// Form to create a project.
+    NewProject,
+    /// Form to move current task to another project.
+    MoveTask,
     Help,
-    /// /new-task, /config — "planned for a later phase".
+    /// /config — "planned for a later phase".
     Placeholder,
 }
 
@@ -39,6 +45,9 @@ impl View {
             View::Project => "Project",
             View::Task => "Task",
             View::Log => "Log",
+            View::NewTask => "New Task",
+            View::NewProject => "New Project",
+            View::MoveTask => "Move Task",
             View::Help => "Help",
             View::Placeholder => "Coming Soon",
         }
@@ -61,6 +70,42 @@ pub enum TaskFocus {
     Notes,
     Attachments,
     Links,
+}
+
+const TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "review", "done"];
+const TASK_PRIORITIES: [&str; 3] = ["low", "med", "high"];
+const PROJECT_STATUSES: [&str; 4] = ["planning", "active", "in-progress", "done"];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewTaskFormDraft {
+    pub field: usize,
+    pub title: String,
+    pub project_index: usize,
+    pub status_index: usize,
+    pub priority_index: usize,
+    pub assignee: String,
+    pub branch: String,
+    pub labels: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewProjectFormDraft {
+    pub field: usize,
+    pub name: String,
+    pub status_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MoveTaskFormDraft {
+    pub field: usize,
+    pub project_index: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FormState {
+    NewTask(NewTaskFormDraft),
+    NewProject(NewProjectFormDraft),
+    MoveTask(MoveTaskFormDraft),
 }
 
 /// A slash command in the palette.
@@ -97,8 +142,18 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/new-task",
-        description: "Create a new task in current project (planned: later)",
-        view: Some(View::Placeholder),
+        description: "Create a new task",
+        view: Some(View::NewTask),
+    },
+    SlashCommand {
+        name: "/new-project",
+        description: "Create a new project",
+        view: Some(View::NewProject),
+    },
+    SlashCommand {
+        name: "/move",
+        description: "Move current task to a different project",
+        view: Some(View::MoveTask),
     },
     SlashCommand {
         name: "/log",
@@ -141,6 +196,8 @@ pub struct App {
     pub task_item_selected: usize,
     /// What the log view shows (set by `/log`, `:status <q>`, `/log` default).
     pub log_subject: Option<super::data::LogSubject>,
+    /// Active slash-form state (`/new-task`, `/new-project`, `/move`).
+    pub form: Option<FormState>,
     /// Statusline: `:` opens it; the remainder of the line is the query.
     pub statusline_open: bool,
     pub statusline_query: String,
@@ -180,6 +237,7 @@ impl App {
             task_focus: TaskFocus::Summary,
             task_item_selected: 0,
             log_subject: None,
+            form: None,
             statusline_open: false,
             statusline_query: String::new(),
             notes_draft: String::new(),
@@ -199,6 +257,313 @@ impl App {
         app.root = Some(root);
         app.lun = Some(lun);
         app
+    }
+
+    pub fn form(&self) -> Option<&FormState> {
+        self.form.as_ref()
+    }
+
+    fn begin_new_task_form(&mut self) {
+        let project_index = self
+            .data
+            .current_project
+            .min(self.data.projects.len().saturating_sub(1));
+        self.form = Some(FormState::NewTask(NewTaskFormDraft {
+            field: 0,
+            title: String::new(),
+            project_index,
+            status_index: 0,
+            priority_index: 0,
+            assignee: "me".to_string(),
+            branch: String::new(),
+            labels: String::new(),
+        }));
+    }
+
+    fn begin_new_project_form(&mut self) {
+        self.form = Some(FormState::NewProject(NewProjectFormDraft {
+            field: 0,
+            name: String::new(),
+            status_index: 1, // active
+        }));
+    }
+
+    fn begin_move_task_form(&mut self) -> Result<(), String> {
+        let task = self
+            .current_task()
+            .ok_or_else(|| "no current task to move".to_string())?;
+        let project_index = task
+            .project_id
+            .and_then(|pid| self.data.projects.iter().position(|p| p.id == pid))
+            .unwrap_or(self.data.current_project);
+        self.form = Some(FormState::MoveTask(MoveTaskFormDraft {
+            field: 0,
+            project_index,
+        }));
+        Ok(())
+    }
+
+    pub fn form_nav(&mut self, dir: i32) {
+        match self.form.as_mut() {
+            Some(FormState::NewTask(d)) => {
+                let n = 8_i32;
+                d.field = ((d.field as i32 + dir).rem_euclid(n)) as usize;
+            }
+            Some(FormState::NewProject(d)) => {
+                let n = 3_i32;
+                d.field = ((d.field as i32 + dir).rem_euclid(n)) as usize;
+            }
+            Some(FormState::MoveTask(d)) => {
+                let n = 2_i32;
+                d.field = ((d.field as i32 + dir).rem_euclid(n)) as usize;
+            }
+            None => {}
+        }
+    }
+
+    pub fn form_type(&mut self, ch: char) {
+        match self.form.as_mut() {
+            Some(FormState::NewTask(d)) => match d.field {
+                0 => d.title.push(ch),
+                4 => d.assignee.push(ch),
+                5 => d.branch.push(ch),
+                6 => d.labels.push(ch),
+                _ => {}
+            },
+            Some(FormState::NewProject(d)) => {
+                if d.field == 0 {
+                    d.name.push(ch);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn form_backspace(&mut self) {
+        match self.form.as_mut() {
+            Some(FormState::NewTask(d)) => match d.field {
+                0 => {
+                    d.title.pop();
+                }
+                4 => {
+                    d.assignee.pop();
+                }
+                5 => {
+                    d.branch.pop();
+                }
+                6 => {
+                    d.labels.pop();
+                }
+                _ => {}
+            },
+            Some(FormState::NewProject(d)) => {
+                if d.field == 0 {
+                    d.name.pop();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub fn form_cycle(&mut self, dir: i32) {
+        let cycle = |idx: &mut usize, len: usize, dir: i32| {
+            *idx = ((*idx as i32 + dir).rem_euclid(len as i32)) as usize;
+        };
+        match self.form.as_mut() {
+            Some(FormState::NewTask(d)) => match d.field {
+                1 => cycle(&mut d.project_index, self.data.projects.len().max(1), dir),
+                2 => cycle(&mut d.status_index, TASK_STATUSES.len(), dir),
+                3 => cycle(&mut d.priority_index, TASK_PRIORITIES.len(), dir),
+                _ => {}
+            },
+            Some(FormState::NewProject(d)) => {
+                if d.field == 1 {
+                    cycle(&mut d.status_index, PROJECT_STATUSES.len(), dir);
+                }
+            }
+            Some(FormState::MoveTask(d)) => {
+                if d.field == 0 {
+                    cycle(&mut d.project_index, self.data.projects.len().max(1), dir);
+                }
+            }
+            None => {}
+        }
+    }
+
+    pub fn cancel_form(&mut self) {
+        self.form = None;
+        self.go_back();
+    }
+
+    pub fn submit_form(&mut self) {
+        let Some(form) = self.form.clone() else {
+            return;
+        };
+        match form {
+            FormState::NewTask(d) => {
+                if d.field != 7 {
+                    self.form_nav(1);
+                    return;
+                }
+                let title = d.title.trim().to_string();
+                if title.is_empty() {
+                    self.message = Some(("title is required".to_string(), true));
+                    return;
+                }
+                let Some(lun) = self.lun.as_ref() else {
+                    self.message = Some(("no store attached — create task unavailable".to_string(), true));
+                    return;
+                };
+                let Some(project) = self.data.projects.get(d.project_index) else {
+                    self.message = Some(("invalid project selection".to_string(), true));
+                    return;
+                };
+                let project_id = project.id;
+                let project_name = project.name.clone();
+                let project_key = project.project_key.clone();
+                let labels = d
+                    .labels
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+                    .collect::<Vec<_>>();
+                let spec = TaskSpec {
+                    title: title.clone(),
+                    project: Some(project_id),
+                    status: Some(TASK_STATUSES[d.status_index].to_string()),
+                    priority: Some(TASK_PRIORITIES[d.priority_index].to_string()),
+                    assignee: if d.assignee.trim().is_empty() {
+                        None
+                    } else {
+                        Some(d.assignee.trim().to_string())
+                    },
+                    branch: if d.branch.trim().is_empty() {
+                        None
+                    } else {
+                        Some(d.branch.trim().to_string())
+                    },
+                    labels: if labels.is_empty() {
+                        None
+                    } else {
+                        Some(format!("[{}]", labels.join(", ")))
+                    },
+                    message: None,
+                    user: None,
+                };
+                match lun.create_task(spec) {
+                    Ok(task) => {
+                        let _ = self.refresh_from_store();
+                        if let Some(pos) = self.data.tasks.iter().position(|t| t.id == task.id) {
+                            self.task_selected = pos;
+                        }
+                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == project_id) {
+                            self.data.current_project = pos;
+                            self.project_selected = pos;
+                        }
+                        self.form = None;
+                        self.view = View::Task;
+                        self.task_focus = TaskFocus::Summary;
+                        self.task_item_selected = 0;
+                        self.message = Some((
+                            format!(
+                                "Created task {} in project {} [{}]",
+                                task.task_key, project_name, project_key
+                            ),
+                            false,
+                        ));
+                    }
+                    Err(e) => self.message = Some((format!("create failed: {e}"), true)),
+                }
+            }
+            FormState::NewProject(d) => {
+                if d.field != 2 {
+                    self.form_nav(1);
+                    return;
+                }
+                let name = d.name.trim().to_string();
+                if name.is_empty() {
+                    self.message = Some(("project name is required".to_string(), true));
+                    return;
+                }
+                let Some(lun) = self.lun.as_ref() else {
+                    self.message = Some(("no store attached — create project unavailable".to_string(), true));
+                    return;
+                };
+                match lun.create_project(ProjectSpec {
+                    name,
+                    status: Some(PROJECT_STATUSES[d.status_index].to_string()),
+                    message: None,
+                    user: None,
+                }) {
+                    Ok(project) => {
+                        let _ = self.refresh_from_store();
+                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == project.id) {
+                            self.data.current_project = pos;
+                            self.project_selected = pos;
+                        }
+                        self.form = None;
+                        self.view = View::Project;
+                        self.message = Some((
+                            format!("Created project {} [{}]", project.name, project.project_key),
+                            false,
+                        ));
+                    }
+                    Err(e) => self.message = Some((format!("create failed: {e}"), true)),
+                }
+            }
+            FormState::MoveTask(d) => {
+                if d.field != 1 {
+                    self.form_nav(1);
+                    return;
+                }
+                let Some((task_id, task_key, current_pid)) = self
+                    .current_task()
+                    .map(|t| (t.id, t.task_key.clone(), t.project_id))
+                else {
+                    self.message = Some(("no current task to move".to_string(), true));
+                    return;
+                };
+                let Some(target) = self.data.projects.get(d.project_index).cloned() else {
+                    self.message = Some(("invalid project selection".to_string(), true));
+                    return;
+                };
+                if current_pid == Some(target.id) {
+                    self.message = Some((format!("{task_key} already in {}", target.name), false));
+                    return;
+                }
+                let Some(lun) = self.lun.as_ref() else {
+                    self.message = Some(("no store attached — move unavailable".to_string(), true));
+                    return;
+                };
+                match lun.update_task(
+                    task_id,
+                    TaskUpdateSpec {
+                        project_id: Some(target.id),
+                        message: Some(format!("move {task_key} to {}", target.name)),
+                        ..Default::default()
+                    },
+                ) {
+                    Ok(updated) => {
+                        let _ = self.refresh_from_store();
+                        if let Some(pos) = self.data.tasks.iter().position(|t| t.id == updated.id) {
+                            self.task_selected = pos;
+                        }
+                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == target.id) {
+                            self.data.current_project = pos;
+                            self.project_selected = pos;
+                        }
+                        self.form = None;
+                        self.view = View::Task;
+                        self.message = Some((
+                            format!("Moved {} to {} [{}]", task_key, target.name, target.project_key),
+                            false,
+                        ));
+                    }
+                    Err(e) => self.message = Some((format!("move failed: {e}"), true)),
+                }
+            }
+        }
     }
 
     /// The current task (selection clamped into range).
@@ -263,7 +628,7 @@ impl App {
     }
 
     fn refresh_from_store(&mut self) -> Result<(), String> {
-        let Some(lun) = self.lun.as_mut() else {
+        let Some(lun) = self.lun.as_ref() else {
             return Ok(());
         };
         let sel = self.task_selected;
@@ -399,6 +764,23 @@ impl App {
                 }
                 self.view = View::Log;
             }
+            View::NewTask => {
+                self.begin_new_task_form();
+                if let Some(FormState::NewTask(d)) = self.form.as_mut() {
+                    if !rest.trim().is_empty() {
+                        d.title = rest.trim().to_string();
+                    }
+                }
+                self.view = View::NewTask;
+            }
+            View::NewProject => {
+                self.begin_new_project_form();
+                self.view = View::NewProject;
+            }
+            View::MoveTask => match self.begin_move_task_form() {
+                Ok(()) => self.view = View::MoveTask,
+                Err(e) => self.message = Some((e, true)),
+            },
             _ => self.view = view,
         }
     }
@@ -637,7 +1019,7 @@ impl App {
             self.message = Some(("no current task".to_string(), true));
             return;
         };
-        let Some(lun) = self.lun.as_mut() else {
+        let Some(lun) = self.lun.as_ref() else {
             self.message = Some((
                 "no store attached — completion unavailable".to_string(),
                 true,
@@ -766,7 +1148,7 @@ impl App {
             self.notes_dirty = false;
             return;
         };
-        let Some(lun) = self.lun.as_mut() else {
+        let Some(lun) = self.lun.as_ref() else {
             // Headless app (tests): no store to write through.
             self.message = Some((
                 "no store attached — notes cannot be saved".to_string(),
@@ -816,96 +1198,87 @@ impl App {
 
     /// Drop/paste a file into the TUI (Phase 7, docs/plan.md): the
     /// terminal delivers the dropped path as crossterm `Event::Paste`.
-    /// The file must exist; it is copied into `.lun/attachments/` (same
-    /// collision-suffixing as `lun attach`), an `ATTACH` log entry is
-    /// written, and a markdown link line is appended to the current
-    /// task's notes (the drop IS the edit — the notes are saved
-    /// immediately, so nothing is lost if the TUI exits right away).
+    /// Existing local file paths (quoted, escaped, and/or `file://` URI)
+    /// are turned into markdown links with `file:///...` URIs and stored
+    /// via `links` rows (no copy into `.lun/attachments/`).
     pub fn attach_dropped_file(&mut self, text: &str) {
-        // Terminals paste the path verbatim; strip stray whitespace/quotes.
-        let path = text.trim().trim_matches('\'').trim_matches('"');
-        if path.is_empty() {
+        let paths = Self::parse_dropped_paths(text)
+            .into_iter()
+            .filter(|p| p.is_file())
+            .collect::<Vec<_>>();
+        if paths.is_empty() {
             self.message = Some((
-                "drop a file to attach it (empty paste ignored)".to_string(),
+                "drop one or more existing file paths to link them".to_string(),
+                true,
+            ));
+            return;
+        }
+        let Some(lun) = self.lun.as_ref() else {
+            self.message = Some((
+                "no store attached — drop/paste linking is unavailable".to_string(),
+                true,
+            ));
+            return;
+        };
+
+        if let Some(task) = self.current_task() {
+            let task_id = task.id;
+            let task_key = task.task_key.clone();
+            let mut notes = if self.mode == Mode::Insert {
+                self.notes_draft.trim_end().to_string()
+            } else {
+                task.notes.trim_end().to_string()
+            };
+            {
+                for path in &paths {
+                    let filename = path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| path.display().to_string());
+                    let uri = Self::file_uri_from_path(path);
+                    if let Err(e) = lun.add_link(LinkTarget::Task(task_id), &filename, &uri, None, None)
+                    {
+                        self.message = Some((format!("link failed: {e}"), true));
+                        return;
+                    }
+                    if !notes.is_empty() {
+                        notes.push('\n');
+                    }
+                    notes.push_str(&format!("- [{filename}]({uri})"));
+                }
+            }
+            self.notes_draft = notes;
+            self.notes_dirty = true;
+            self.save_notes_draft(None);
+            self.message = Some((
+                format!("Linked {} file path(s) on {task_key}", paths.len()),
                 false,
             ));
             return;
         }
-        let src = std::path::Path::new(path);
-        if !src.is_file() {
-            self.message = Some((
-                format!("no such file: {path} (attach needs a path to an existing file)"),
-                true,
-            ));
-            return;
-        }
-        let Some(task) = self.current_task() else {
-            self.message = Some((
-                "no current task — select one (j/k, t) before dropping".to_string(),
-                true,
-            ));
+
+        let Some(project) = self.data.current().cloned() else {
+            self.message = Some(("no current project to link files onto".to_string(), true));
             return;
         };
-        let task_key = task.task_key.clone();
-        let task_id = task.id;
-        let _ = task;
-
-        // Phase 7 writes need the store + the `.lun/` root; a headless
-        // app (tests without a store) reports instead of panicking.
-        let Some((lun, root)) = self.lun.as_mut().zip(self.root.as_ref()) else {
-            self.message = Some((
-                "no store attached — drop/paste attach is unavailable".to_string(),
-                true,
-            ));
-            return;
-        };
-
-        let stored = match crate::cli::copy_into_attachments(root, src) {
-            Ok(p) => p,
-            Err(e) => {
-                self.message = Some((format!("attach failed: {e}"), true));
-                return;
+        {
+            for path in &paths {
+                let filename = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| path.display().to_string());
+                let uri = Self::file_uri_from_path(path);
+                if let Err(e) =
+                    lun.add_link(LinkTarget::Project(project.id), &filename, &uri, None, None)
+                {
+                    self.message = Some((format!("link failed: {e}"), true));
+                    return;
+                }
             }
-        };
-        let filename = stored
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        if let Err(e) = lun.add_attachment(
-            task_id,
-            &filename,
-            stored.to_str().unwrap_or_default(),
-            None,
-            None,
-        ) {
-            // Roll the copy back: no dangling file without a DB record.
-            let _ = std::fs::remove_file(&stored);
-            self.message = Some((format!("attach failed: {e}"), true));
-            return;
         }
-
-        // Link line appended to the notes (the drop inserts the link at
-        // the end of the buffer — the cursor position in the Phase 7
-        // plan; the buffer is a whole-text draft, so end == cursor for
-        // a fresh/pasted note).
-        let rel = stored
-            .strip_prefix(root)
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| stored.display().to_string());
-        let mut notes = self.notes_draft.trim_end().to_string();
-        if !notes.is_empty() {
-            notes.push('\n');
-        }
-        notes.push_str(&format!("- [{filename}]({rel})"));
-        self.notes_draft = notes;
-        self.notes_dirty = true;
-        // Save immediately: the plan shows the commit happening as part
-        // of the drop (default: `attach "<filename>" to <task>`).
-        self.save_notes_draft(None);
+        let _ = self.refresh_from_store();
         self.message = Some((
-            format!(
-                "Dropped {path} — saved as {rel}, link inserted in notes (Committed: attach \"{filename}\" to {task_key})"
-            ),
+            format!("Linked {} file path(s) on project {}", paths.len(), project.project_key),
             false,
         ));
     }
@@ -937,5 +1310,89 @@ impl App {
             }
             Err(e) => self.message = Some((e, true)),
         }
+    }
+
+    fn decode_file_uri(uri: &str) -> Option<String> {
+        let rest = uri.strip_prefix("file://")?;
+        let path = if let Some(r) = rest.strip_prefix('/') {
+            format!("/{r}")
+        } else if let Some(r) = rest.strip_prefix("localhost/") {
+            format!("/{r}")
+        } else {
+            return None;
+        };
+        let mut bytes = Vec::with_capacity(path.len());
+        let mut i = 0;
+        let b = path.as_bytes();
+        while i < b.len() {
+            if b[i] == b'%' && i + 2 < b.len() {
+                let hex = &path[i + 1..i + 3];
+                if let Ok(v) = u8::from_str_radix(hex, 16) {
+                    bytes.push(v);
+                    i += 3;
+                    continue;
+                }
+            }
+            bytes.push(b[i]);
+            i += 1;
+        }
+        String::from_utf8(bytes).ok()
+    }
+
+    fn split_shell_like(input: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut cur = String::new();
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut chars = input.trim().chars().peekable();
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => {
+                    if let Some(next) = chars.next() {
+                        cur.push(next);
+                    }
+                }
+                '\'' if !in_double => in_single = !in_single,
+                '"' if !in_single => in_double = !in_double,
+                c if c.is_whitespace() && !in_single && !in_double => {
+                    if !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                }
+                c => cur.push(c),
+            }
+        }
+        if !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    fn file_uri_from_path(path: &std::path::Path) -> String {
+        let abs = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let raw = abs.to_string_lossy();
+        let mut encoded = String::with_capacity(raw.len() + 8);
+        for b in raw.bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                    encoded.push(b as char)
+                }
+                _ => encoded.push_str(&format!("%{b:02X}")),
+            }
+        }
+        format!("file://{encoded}")
+    }
+
+    pub(crate) fn parse_dropped_paths(text: &str) -> Vec<std::path::PathBuf> {
+        Self::split_shell_like(text)
+            .into_iter()
+            .filter_map(|token| {
+                if token.trim().is_empty() {
+                    return None;
+                }
+                let decoded = Self::decode_file_uri(&token).unwrap_or(token);
+                Some(std::path::PathBuf::from(decoded))
+            })
+            .collect()
     }
 }

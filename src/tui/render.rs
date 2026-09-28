@@ -33,6 +33,9 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         View::Project => paint_project(buf, content, app),
         View::Task => paint_task(buf, content, app),
         View::Log => paint_log(buf, content, app),
+        View::NewTask => paint_new_task(buf, content, app),
+        View::NewProject => paint_new_project(buf, content, app),
+        View::MoveTask => paint_move_task(buf, content, app),
         View::Help => paint_help(buf, content),
         View::Placeholder => paint_placeholder(buf, content, app),
     }
@@ -509,7 +512,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 17] = [
+    let rows: [(&str, &str); 20] = [
         ("/", "open the command palette"),
         ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
@@ -541,7 +544,10 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
-        ("…", "/new-task and /config arrive in a later phase"),
+        ("/new-task", "open the new-task form"),
+        ("/new-project", "open the new-project form"),
+        ("/move", "move the current task to a different project"),
+        ("…", "/config remains a placeholder"),
     ];
     for (key, desc) in rows {
         if y >= area.bottom() {
@@ -553,8 +559,167 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     }
 }
 
+fn form_row(
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    selected: bool,
+    label: &str,
+    value: &str,
+    value_style: Style,
+) {
+    let marker = if selected { "> " } else { "  " };
+    put(
+        buf,
+        x,
+        y,
+        &format!("{marker}{label:<10}"),
+        if selected {
+            t::selected_style().fg(t::BG)
+        } else {
+            Style::default().fg(t::DIM)
+        },
+    );
+    put(
+        buf,
+        x + 13,
+        y,
+        value,
+        if selected {
+            t::selected_style().fg(t::BG)
+        } else {
+            value_style
+        },
+    );
+}
+
+fn paint_new_task(buf: &mut Buffer, area: Rect, app: &App) {
+    let mut y = heading(buf, area.left(), area.top(), "New Task");
+    let Some(super::app::FormState::NewTask(draft)) = app.form() else {
+        return;
+    };
+    if y < area.bottom() {
+        put(
+            buf,
+            area.left(),
+            y,
+            "up/down field · left/right choices · type text · enter on create",
+            Style::default().fg(t::DIM),
+        );
+        y += 2;
+    }
+    let project = app
+        .data
+        .projects
+        .get(draft.project_index)
+        .map(|p| format!("{} [{}]", p.name, p.project_key))
+        .unwrap_or_else(|| "Unassigned [P-000]".to_string());
+    let rows = [
+        ("Title", draft.title.clone(), Style::default().fg(t::TEXT)),
+        ("Project", project, Style::default().fg(t::PURPLE)),
+        (
+            "Status",
+            ["todo", "in-progress", "review", "done"][draft.status_index].to_string(),
+            t::status_style(["todo", "in-progress", "review", "done"][draft.status_index]),
+        ),
+        (
+            "Priority",
+            ["low", "med", "high"][draft.priority_index].to_string(),
+            Style::default().fg(t::TEXT),
+        ),
+        ("Assignee", draft.assignee.clone(), Style::default().fg(t::TEXT)),
+        ("Branch", draft.branch.clone(), Style::default().fg(t::CYAN)),
+        ("Labels", draft.labels.clone(), Style::default().fg(t::TEXT)),
+        ("Create", "press Enter".to_string(), Style::default().fg(t::DONE)),
+    ];
+    for (idx, (label, value, style)) in rows.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        y += 1;
+    }
+}
+
+fn paint_new_project(buf: &mut Buffer, area: Rect, app: &App) {
+    let mut y = heading(buf, area.left(), area.top(), "New Project");
+    let Some(super::app::FormState::NewProject(draft)) = app.form() else {
+        return;
+    };
+    if y < area.bottom() {
+        put(
+            buf,
+            area.left(),
+            y,
+            "up/down field · left/right status · type text · enter on create",
+            Style::default().fg(t::DIM),
+        );
+        y += 2;
+    }
+    let rows = [
+        ("Name", draft.name.clone(), Style::default().fg(t::TEXT)),
+        (
+            "Status",
+            ["planning", "active", "in-progress", "done"][draft.status_index].to_string(),
+            t::status_style(["planning", "active", "in-progress", "done"][draft.status_index]),
+        ),
+        ("Create", "press Enter".to_string(), Style::default().fg(t::DONE)),
+    ];
+    for (idx, (label, value, style)) in rows.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        y += 1;
+    }
+}
+
+fn paint_move_task(buf: &mut Buffer, area: Rect, app: &App) {
+    let mut y = heading(buf, area.left(), area.top(), "Move Task");
+    let Some(super::app::FormState::MoveTask(draft)) = app.form() else {
+        return;
+    };
+    if y < area.bottom() {
+        put(
+            buf,
+            area.left(),
+            y,
+            "up/down field · left/right project · enter on move",
+            Style::default().fg(t::DIM),
+        );
+        y += 2;
+    }
+    if let Some(task) = app.current_task() {
+        put(
+            buf,
+            area.left(),
+            y,
+            &format!("Task: {} {}", task.task_key, task.title),
+            Style::default().fg(t::TEXT),
+        );
+        y += 2;
+    }
+    let project = app
+        .data
+        .projects
+        .get(draft.project_index)
+        .map(|p| format!("{} [{}]", p.name, p.project_key))
+        .unwrap_or_else(|| "Unassigned [P-000]".to_string());
+    let rows = [
+        ("Project", project, Style::default().fg(t::PURPLE)),
+        ("Move", "press Enter".to_string(), Style::default().fg(t::DONE)),
+    ];
+    for (idx, (label, value, style)) in rows.into_iter().enumerate() {
+        if y >= area.bottom() {
+            break;
+        }
+        form_row(buf, area.left(), y, draft.field == idx, label, &value, style);
+        y += 1;
+    }
+}
+
 fn paint_placeholder(buf: &mut Buffer, area: Rect, app: &App) {
-    let mut y = heading(buf, area.left(), area.top(), "Coming Soon");
+    let mut y = heading(buf, area.left(), area.top(), "Config (Coming Soon)");
     if y >= area.bottom() {
         return;
     }
@@ -828,7 +993,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         buf,
         x,
         y,
-        "- [ ] (add checklist items with /new-task — planned later)",
+        "- [ ] (checklist editing arrives in a later phase)",
         Style::default().fg(t::DIM),
     );
     y += 2;

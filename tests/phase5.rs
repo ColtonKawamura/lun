@@ -169,7 +169,7 @@ fn palette_opens_filters_and_executes() {
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     assert!(app.palette_open);
     assert_eq!(app.palette_query, "");
-    assert_eq!(app.filtered_commands().len(), 9);
+    assert_eq!(app.filtered_commands().len(), 11);
 
     // Filtering narrows the list (the plan's "/sta" example shape).
     term::handle_key(&mut app, &key(KeyCode::Char('s')));
