@@ -42,7 +42,9 @@ pub fn status_style(status: &str) -> Style {
 
 /// Section heading: ALL CAPS bold purple with a magenta underline row.
 pub fn heading_style() -> Style {
-    Style::default().fg(PURPLE).add_modifier(ratatui::style::Modifier::BOLD)
+    Style::default()
+        .fg(PURPLE)
+        .add_modifier(ratatui::style::Modifier::BOLD)
 }
 
 /// The selected palette row: inverted (bright purple background).

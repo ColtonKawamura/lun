@@ -14,7 +14,10 @@ pub mod cli;
 pub mod db;
 pub mod tui;
 
-pub use db::{Lun, LinkTarget, LogEntry, Pr, Project, ProjectSpec, Task, TaskSpec};
+pub use db::{
+    AttachmentTarget, LinkTarget, LogEntry, Lun, Pr, Project, ProjectSpec, Task, TaskListSpec,
+    TaskSort, TaskSpec, TaskUpdateSpec,
+};
 
 fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -74,7 +77,10 @@ fn main() -> ExitCode {
    \\____/ \\__,_|_| |_|\\__,_|\\___/|_| |_|
 "
             );
-            println!("lun v{} — CLI-first markdown task & project tracker", env!("CARGO_PKG_VERSION"));
+            println!(
+                "lun v{} — CLI-first markdown task & project tracker",
+                env!("CARGO_PKG_VERSION")
+            );
             println!("-----------------------------------------------------------");
             println!("Run `lun` in a terminal for the full-screen TUI (Phase 5);");
             println!("`lun --help` for CLI commands.");
@@ -96,12 +102,10 @@ fn init_db() -> Result<(), String> {
     let lun = Lun::init(&cwd).map_err(|e| e.to_string())?;
 
     let version: i64 = {
-        let conn = rusqlite::Connection::open(cwd.join(".lun/lun.db"))
-            .map_err(|e| e.to_string())?;
-        conn.query_row("SELECT MAX(version) FROM migrations", [], |r| {
-            r.get(0)
-        })
-        .map_err(|e| e.to_string())?
+        let conn =
+            rusqlite::Connection::open(cwd.join(".lun/lun.db")).map_err(|e| e.to_string())?;
+        conn.query_row("SELECT MAX(version) FROM migrations", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?
     };
 
     if version == db::CURRENT_VERSION {
@@ -124,15 +128,24 @@ fn print_help() {
     println!("  lun status [name|P-00N] Global overview, or one project's status");
     println!("  lun proj add task \"<title>\"  Create a task (interactive prompts)");
     println!("  lun task <T-00N|title>    View a task (fields, labels, history)");
+    println!("  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)");
+    println!("  lun task edit <task> [--field value]   Edit task fields");
+    println!("  lun task complete|reopen|archive <task>   Update task lifecycle");
     println!("  lun log <project|task>    Commit-style history for a project or task");
-    println!("  lun attach task <T-00N|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");
+    println!("  lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)");
+    println!("  lun attach ls <task|project> <key|title>   List attachments");
+    println!(
+        "  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments"
+    );
     println!("  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link");
     println!("  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`");
     println!("  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)");
     println!("  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR (defaults: task's branch -> main)");
     println!("  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)");
     println!("  lun pr ls               List open and merged PRs");
-    println!("  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)");
+    println!(
+        "  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)"
+    );
     println!("  lun --version             Print version");
     println!("  lun --help                Print this help");
     println!();

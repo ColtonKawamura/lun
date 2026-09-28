@@ -1,4 +1,4 @@
-# lun schema (Phase 2)
+# lun schema
 
 Canonical storage is a single SQLite file at `.lun/lun.db` in the current
 working directory (one DB per tracked project/repo). Markdown is a view,
@@ -54,6 +54,31 @@ CREATE TABLE prs (
 );
 ```
 
+Version 4 rebuilds `attachments` so they can belong to either a task or a
+project:
+
+```sql
+ALTER TABLE attachments RENAME TO attachments_v1;
+CREATE TABLE attachments (
+    id          INTEGER PRIMARY KEY,
+    task_id     INTEGER REFERENCES tasks(id),
+    project_id  INTEGER REFERENCES projects(id),
+    filename    TEXT NOT NULL,
+    stored_path TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    CHECK ((task_id IS NULL) <> (project_id IS NULL))
+);
+INSERT INTO attachments (...)
+SELECT ... FROM attachments_v1;
+DROP TABLE attachments_v1;
+```
+
+Version 5 adds soft-archive state to tasks:
+
+```sql
+ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+```
+
 ## projects
 
 | column        | type    | notes |
@@ -83,6 +108,7 @@ Seed row: `P-000 / "Unassigned" / active`.
 | notes      | TEXT    | free-form markdown notes, default `''` (Phase 7: editable in the TUI; saved via `Lun::set_notes`, which logs `UPDATE`) |
 | created_at | TEXT    | UTC timestamp |
 | updated_at | TEXT    | UTC timestamp |
+| archived_at | TEXT   | nullable UTC timestamp; archived tasks are hidden from normal task lists |
 
 ## logs
 
@@ -109,10 +135,14 @@ logged (`user = system`).
 | column      | type    | notes |
 | ----------- | ------- | ----- |
 | id          | INTEGER | PK |
-| task_id     | INTEGER | FK → `tasks.id` |
+| task_id     | INTEGER | FK → `tasks.id`, nullable |
+| project_id  | INTEGER | FK → `projects.id`, nullable |
 | filename    | TEXT    | original file name |
 | stored_path | TEXT    | path where the copy lives (`.lun/attachments/...` from Phase 4) |
 | created_at  | TEXT    | UTC timestamp |
+
+CHECK constraint: exactly one of `task_id` / `project_id` is set
+(`(task_id IS NULL) <> (project_id IS NULL)`).
 
 ## links
 

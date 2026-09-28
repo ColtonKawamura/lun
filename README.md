@@ -13,9 +13,10 @@ is a human-facing view rendered from the DB.
 All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
 - DB layer + core CLI (`status`, `proj add task`, `task`, `log`)
+- Task workflows (`task ls|edit|complete|reopen|archive`) and project/task attachments
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
-  views, task detail with vim-style keys, in-TUI logs
+  views, task detail with vim-style keys, in-TUI logs, and focused link opening
   ([docs/tui.md](docs/tui.md))
 - Drag-and-drop file attachments into the TUI (paste a path) and notes
   editing with log-on-write (`e`/`i` to edit, `Esc` to save)
@@ -31,6 +32,16 @@ make                      # release build -> target/release/lun
 lun init                  # create .lun/lun.db in the current directory
 lun status                # projects + tasks overview
 lun                       # full-screen TUI (when run in a terminal)
+```
+
+Examples:
+
+```sh
+lun task ls --status review --sort updated
+lun task edit T-003 --status in-progress --priority high --branch feat/foo
+lun task complete T-003
+lun attach project P-001 ./roadmap.md
+lun attach open task T-003 mock.png
 ```
 
 `lun --help` lists all CLI commands.
@@ -50,7 +61,7 @@ needed). A future Homebrew tap is on the roadmap.
 
 - [docs/plan.md](docs/plan.md) — the phase-by-phase plan
 - [docs/architecture.md](docs/architecture.md) — design notes
-- [docs/schema.md](docs/schema.md) — SQLite schema (v1→v3) reference
+- [docs/schema.md](docs/schema.md) — SQLite schema (v1→v5) reference
 - [docs/tui.md](docs/tui.md) — TUI views & keybindings
 - [docs/nvim.md](docs/nvim.md) — the nvim plugin
 

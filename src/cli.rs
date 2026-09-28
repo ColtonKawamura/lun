@@ -34,12 +34,13 @@
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
 
-use crate::db::{
-    DbError, Link, LinkTarget, LogEntry, Lun, Pr, PrSpec, Project, Task, TaskSpec,
-};
 use crate::db::Result;
+use crate::db::{
+    Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr, PrSpec, Project,
+    Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec,
+};
 
 /// CLI exit codes: 2 = usage/resolution error, 1 = runtime (DB/IO) error.
 pub const EXIT_USAGE: u8 = 2;
@@ -55,7 +56,9 @@ impl App {
     /// Open an existing, already-initialized DB under `root` (no migration
     /// side effects beyond what `Lun::open` does — it requires the file).
     pub fn open(root: &Path) -> Result<Self> {
-        Ok(Self { lun: Lun::open(root)? })
+        Ok(Self {
+            lun: Lun::open(root)?,
+        })
     }
 }
 
@@ -85,9 +88,7 @@ pub fn resolve_project(lun: &Lun, query: &str) -> Result<Project> {
     if is_task_key(query) {
         return Err(DbError::new(
             "not-found",
-            format!(
-                "'{query}' is a task key — use `lun task {query}` or `lun log {query}`"
-            ),
+            format!("'{query}' is a task key — use `lun task {query}` or `lun log {query}`"),
         ));
     }
     Err(DbError::new(
@@ -459,10 +460,7 @@ pub fn status_all(app: &App) -> Result<String> {
         ]);
     }
 
-    let trow: Vec<Vec<String>> = tasks
-        .iter()
-        .map(|t| task_row(&app.lun, t, true))
-        .collect();
+    let trow: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, true)).collect();
 
     let mut out = String::new();
     out.push_str("Projects\n--------\n\n");
@@ -472,7 +470,9 @@ pub fn status_all(app: &App) -> Result<String> {
     ));
     out.push_str("\n\n\nTasks\n-----\n\n");
     out.push_str(&render_table(
-        &["ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch"],
+        &[
+            "ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch",
+        ],
         &trow,
     ));
     out.push('\n');
@@ -529,9 +529,13 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     out.push_str(&format!("Assignee:  {}\n", t.assignee.unwrap_or_default()));
     out.push_str(&format!("Labels:    {}\n", t.labels));
     out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
+    out.push_str(&format!(
+        "Archived:  {}\n",
+        if t.archived_at.is_some() { "yes" } else { "no" }
+    ));
     out.push_str(&format!("Created:   {}\n", display_ts(&t.created_at)));
     out.push_str(&format!("Updated:   {}\n", display_ts(&t.updated_at)));
-        out.push_str("\nChecklist:\n");
+    out.push_str("\nChecklist:\n");
     out.push_str(&format!(
         "- [ ] (add checklist items with `lun task edit {}`)",
         t.task_key
@@ -560,7 +564,7 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
         ));
     } else {
         for a in &attachments {
-            out.push_str(&format!("- {} ({})", a.filename, a.stored_path));
+            out.push_str(&format!("- {} ({})\n", a.filename, a.stored_path));
         }
     }
     out.push_str("\nLinks:\n");
@@ -572,7 +576,7 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
         ));
     } else {
         for l in &links {
-            out.push_str(&format!("- [{}] {}", l.label, l.uri));
+            out.push_str(&format!("- [{}] {}\n", l.label, l.uri));
         }
     }
     out.push_str("\nHistory (log):\n");
@@ -678,9 +682,92 @@ pub(crate) fn copy_into_attachments(root: &Path, src: &Path) -> Result<PathBuf> 
         dest = dir.join(suffixed);
         n += 1;
     }
-    std::fs::copy(src, &dest)
-        .map_err(|e| DbError::new("io", format!("copying {} to {}: {e}", src.display(), dest.display())))?;
+    std::fs::copy(src, &dest).map_err(|e| {
+        DbError::new(
+            "io",
+            format!("copying {} to {}: {e}", src.display(), dest.display()),
+        )
+    })?;
     Ok(dest)
+}
+
+fn resolve_attachment_target(
+    app: &App,
+    kind: &str,
+    query: &str,
+) -> Result<(AttachmentTarget, String)> {
+    match kind {
+        "task" => {
+            let task = resolve_task(&app.lun, query)?;
+            Ok((AttachmentTarget::Task(task.id), task.task_key))
+        }
+        "project" => {
+            let project = resolve_project(&app.lun, query)?;
+            Ok((AttachmentTarget::Project(project.id), project.project_key))
+        }
+        _ => Err(DbError::new("usage", "expected <task|project> target")),
+    }
+}
+
+fn validate_open_target(target: &str) -> Result<()> {
+    if target.trim().is_empty() {
+        return Err(DbError::new("usage", "open target must not be empty"));
+    }
+    if target.chars().any(|c| c.is_control()) {
+        return Err(DbError::new(
+            "invalid",
+            "open target contains control characters",
+        ));
+    }
+    Ok(())
+}
+
+pub fn open_target(target: &str) -> Result<()> {
+    validate_open_target(target)?;
+    let opener = std::env::var("LUN_OPEN_BIN").unwrap_or_else(|_| "open".to_string());
+    let status = Command::new(&opener)
+        .arg(target)
+        .status()
+        .map_err(|e| DbError::new("io", format!("spawning `{opener}`: {e}")))?;
+    if !status.success() {
+        return Err(DbError::new(
+            "io",
+            format!("`{opener} {target}` exited with {status}"),
+        ));
+    }
+    Ok(())
+}
+
+fn find_attachment(app: &App, kind: &str, query: &str, needle: &str) -> Result<Attachment> {
+    let attachments = match kind {
+        "task" => app
+            .lun
+            .attachments_for_task(resolve_task(&app.lun, query)?.id)?,
+        "project" => app
+            .lun
+            .attachments_for_project(resolve_project(&app.lun, query)?.id)?,
+        _ => {
+            return Err(DbError::new(
+                "usage",
+                "expected: lun attach <task|project> ...",
+            ))
+        }
+    };
+    let matches: Vec<Attachment> = attachments
+        .into_iter()
+        .filter(|a| a.filename == needle.trim() || a.id.to_string() == needle.trim())
+        .collect();
+    match matches.as_slice() {
+        [attachment] => Ok(attachment.clone()),
+        [] => Err(DbError::new(
+            "not-found",
+            format!("no attachment '{needle}' on {kind} '{query}'"),
+        )),
+        many => Err(DbError::new(
+            "ambiguous",
+            format!("ambiguous attachment '{needle}': {} matches", many.len()),
+        )),
+    }
 }
 
 /// `lun attach task <key|title> /path/to/file`.
@@ -695,7 +782,18 @@ pub fn attach_file(
     file_path: &str,
     stdin: &mut dyn BufRead,
 ) -> Result<String> {
-    let t = resolve_task(&app.lun, task_query)?;
+    attach_entity_file(app, root, "task", task_query, file_path, stdin)
+}
+
+pub fn attach_entity_file(
+    app: &App,
+    root: &Path,
+    kind: &str,
+    task_query: &str,
+    file_path: &str,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let (target, key) = resolve_attachment_target(app, kind, task_query)?;
     let src = Path::new(file_path);
     if !src.is_file() {
         return Err(DbError::new(
@@ -734,9 +832,19 @@ pub fn attach_file(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    app.lun
-        .add_attachment(t.id, &filename, stored.to_str().unwrap_or_default(), None, None)?;
-    Ok(format!("Attached {} to {} (stored: {})", filename, t.task_key, stored.display()))
+    app.lun.add_attachment_to(
+        target,
+        &filename,
+        stored.to_str().unwrap_or_default(),
+        None,
+        None,
+    )?;
+    Ok(format!(
+        "Attached {} to {} (stored: {})",
+        filename,
+        key,
+        stored.display()
+    ))
 }
 
 /// `lun link <task|project> <key|title> "<label>" "<uri>"`.
@@ -780,7 +888,9 @@ pub fn add_link_command(
 pub fn resolve_link(app: &App, kind: &str, query: &str, label: &str) -> Result<String> {
     let links = match kind {
         "task" => app.lun.links_for_task(resolve_task(&app.lun, query)?.id)?,
-        "project" => app.lun.links_for_project(resolve_project(&app.lun, query)?.id)?,
+        "project" => app
+            .lun
+            .links_for_project(resolve_project(&app.lun, query)?.id)?,
         _ => {
             return Err(DbError::new(
                 "usage",
@@ -812,16 +922,7 @@ pub fn resolve_link(app: &App, kind: &str, query: &str, label: &str) -> Result<S
 /// hand the URI to macOS `open`.
 pub fn open_link(app: &App, kind: &str, query: &str, label: &str) -> Result<String> {
     let uri = resolve_link(app, kind, query, label)?;
-    let status = std::process::Command::new("open")
-        .arg(&uri)
-        .status()
-        .map_err(|e| DbError::new("io", format!("spawning `open`: {e}")))?;
-    if !status.success() {
-        return Err(DbError::new(
-            "io",
-            format!("`open {uri}` exited with {status}"),
-        ));
-    }
+    open_target(&uri)?;
     Ok(format!("Opened: {uri}"))
 }
 
@@ -874,13 +975,7 @@ pub fn open_uri(app: &App, args: &[String]) -> Result<String> {
         ));
     };
 
-    let status = std::process::Command::new("open")
-        .arg(uri)
-        .status()
-        .map_err(|e| DbError::new("io", format!("spawning `open`: {e}")))?;
-    if !status.success() {
-        return Err(DbError::new("io", format!("`open {uri}` exited with {status}")));
-    }
+    open_target(uri)?;
 
     match on {
         Some((kind, q)) => {
@@ -907,6 +1002,272 @@ pub fn open_uri(app: &App, args: &[String]) -> Result<String> {
         }
         None => Ok(format!("Opened: {uri}")),
     }
+}
+
+pub fn list_attachments(app: &App, kind: &str, query: &str) -> Result<String> {
+    let (label, attachments) = match kind {
+        "task" => {
+            let task = resolve_task(&app.lun, query)?;
+            (task.task_key, app.lun.attachments_for_task(task.id)?)
+        }
+        "project" => {
+            let project = resolve_project(&app.lun, query)?;
+            (
+                project.project_key,
+                app.lun.attachments_for_project(project.id)?,
+            )
+        }
+        _ => {
+            return Err(DbError::new(
+                "usage",
+                "expected: lun attach ls <task|project> <key|title>",
+            ))
+        }
+    };
+    let mut out = format!(
+        "Attachments for {label}\n{}\n",
+        "=".repeat(16 + label.len())
+    );
+    if attachments.is_empty() {
+        out.push_str("- (none)");
+        return Ok(out);
+    }
+    for attachment in attachments {
+        out.push_str(&format!(
+            "- [{}] {} ({})\n",
+            attachment.id, attachment.filename, attachment.stored_path
+        ));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+pub fn remove_attachment_command(
+    app: &App,
+    kind: &str,
+    query: &str,
+    needle: &str,
+) -> Result<String> {
+    let attachment = find_attachment(app, kind, query, needle)?;
+    let removed = app.lun.remove_attachment(attachment.id, None, None)?;
+    let stored_path = Path::new(&removed.stored_path);
+    let managed_copy = removed.stored_path.contains("/.lun/attachments/")
+        || removed.stored_path.starts_with(".lun/attachments/");
+    if managed_copy || stored_path.starts_with(attachments_root(Path::new("."))) {
+        let _ = std::fs::remove_file(&removed.stored_path);
+    }
+    Ok(format!(
+        "Removed attachment {} ({})",
+        removed.filename, removed.stored_path
+    ))
+}
+
+pub fn open_attachment_command(app: &App, kind: &str, query: &str, needle: &str) -> Result<String> {
+    let attachment = find_attachment(app, kind, query, needle)?;
+    open_target(&attachment.stored_path)?;
+    Ok(format!("Opened: {}", attachment.stored_path))
+}
+
+fn parse_sort(value: &str) -> Result<TaskSort> {
+    match value {
+        "key" => Ok(TaskSort::Key),
+        "title" => Ok(TaskSort::Title),
+        "status" => Ok(TaskSort::Status),
+        "priority" => Ok(TaskSort::Priority),
+        "updated" => Ok(TaskSort::Updated),
+        other => Err(DbError::new(
+            "usage",
+            format!("invalid --sort '{other}' (expected key, title, status, priority, updated)"),
+        )),
+    }
+}
+
+pub fn task_list(app: &App, args: &[String]) -> Result<String> {
+    let mut spec = TaskListSpec::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--all" => {
+                spec.include_archived = true;
+                i += 1;
+            }
+            "--project" => {
+                let q = args
+                    .get(i + 1)
+                    .ok_or_else(|| DbError::new("usage", "--project needs a value"))?;
+                spec.project_id = Some(resolve_project(&app.lun, q)?.id);
+                i += 2;
+            }
+            "--status" => {
+                spec.status = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--status needs a value"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--priority" => {
+                spec.priority = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--priority needs a value"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--assignee" => {
+                spec.assignee = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--assignee needs a value"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--sort" => {
+                spec.sort = parse_sort(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--sort needs a value"))?,
+                )?;
+                i += 2;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected argument '{other}' (expected task ls filters)"),
+                ))
+            }
+        }
+    }
+    let tasks = app.lun.list_tasks_with(&spec)?;
+    let rows: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, true)).collect();
+    let mut out = String::new();
+    out.push_str("Tasks\n=====\n\n");
+    out.push_str(&render_table(
+        &[
+            "ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch",
+        ],
+        &rows,
+    ));
+    if !tasks.is_empty() {
+        out.push('\n');
+    }
+    out.push_str(&format!("\nTotal: {}", tasks.len()));
+    Ok(out)
+}
+
+pub fn task_edit(app: &App, query: &str, args: &[String]) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let mut spec = TaskUpdateSpec::default();
+    let mut i = 0;
+    while i < args.len() {
+        let value = |i: usize, flag: &str, args: &[String]| {
+            args.get(i + 1)
+                .cloned()
+                .ok_or_else(|| DbError::new("usage", format!("{flag} needs a value")))
+        };
+        match args[i].as_str() {
+            "--title" => {
+                spec.title = Some(value(i, "--title", args)?);
+                i += 2;
+            }
+            "--project" => {
+                spec.project_id =
+                    Some(resolve_project(&app.lun, &value(i, "--project", args)?)?.id);
+                i += 2;
+            }
+            "--status" => {
+                spec.status = Some(value(i, "--status", args)?);
+                i += 2;
+            }
+            "--priority" => {
+                spec.priority = Some(value(i, "--priority", args)?);
+                i += 2;
+            }
+            "--assignee" => {
+                let value = value(i, "--assignee", args)?;
+                spec.assignee = Some(if value == "none" { None } else { Some(value) });
+                i += 2;
+            }
+            "--branch" => {
+                let value = value(i, "--branch", args)?;
+                spec.branch = Some(if value == "none" { None } else { Some(value) });
+                i += 2;
+            }
+            "--labels" => {
+                let value = value(i, "--labels", args)?;
+                spec.labels = Some(if value == "none" {
+                    "[]".to_string()
+                } else {
+                    let labels: Vec<String> = value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(|s| format!("\"{}\"", s))
+                        .collect();
+                    format!("[{}]", labels.join(", "))
+                });
+                i += 2;
+            }
+            "--notes" => {
+                spec.notes = Some(value(i, "--notes", args)?);
+                i += 2;
+            }
+            "--message" => {
+                spec.message = Some(value(i, "--message", args)?);
+                i += 2;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected flag '{other}' for task edit"),
+                ))
+            }
+        }
+    }
+    let updated = app.lun.update_task(task.id, spec)?;
+    Ok(format!(
+        "Updated {}: {} [{} / {}]",
+        updated.task_key, updated.title, updated.status, updated.priority
+    ))
+}
+
+pub fn task_complete(app: &App, query: &str) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let updated = app.lun.complete_task(task.id, None, None)?;
+    Ok(format!(
+        "Completed {} ({})",
+        updated.task_key, updated.title
+    ))
+}
+
+pub fn task_reopen(app: &App, query: &str, args: &[String]) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let mut status: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--status" => {
+                status = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--status needs a value"))?
+                        .as_str(),
+                );
+                i += 2;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected argument '{other}' for task reopen"),
+                ))
+            }
+        }
+    }
+    let updated = app.lun.reopen_task(task.id, status, None, None)?;
+    Ok(format!("Reopened {} ({})", updated.task_key, updated.title))
+}
+
+pub fn task_archive(app: &App, query: &str) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let updated = app.lun.archive_task(task.id, None, None)?;
+    Ok(format!("Archived {} ({})", updated.task_key, updated.title))
 }
 
 // ---------------------------------------------------------------------------
@@ -972,9 +1333,7 @@ pub fn create_task(app: &App, title: &str, stdin: &mut dyn BufRead) -> Result<St
         if !valid_task_status(&status) {
             return Err(DbError::new(
                 "invalid",
-                format!(
-                    "invalid status '{status}' (expected todo, in-progress, review, or done)"
-                ),
+                format!("invalid status '{status}' (expected todo, in-progress, review, or done)"),
             ));
         }
         status
@@ -1096,8 +1455,7 @@ pub fn resolve_pr(app: &App, query: &str) -> Result<Pr> {
                 "{} has {} open PRs: {} — use the PR key",
                 t.task_key,
                 many.len(),
-                many
-                    .iter()
+                many.iter()
                     .map(|p| p.pr_key.clone())
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -1116,7 +1474,10 @@ pub fn pr_show(app: &App, query: &str) -> Result<String> {
     out.push('\n');
     out.push_str(&"=".repeat(header.chars().count()));
     out.push_str("\n\n");
-    out.push_str(&format!("Task:      {} \"{}\"\n", task.task_key, task.title));
+    out.push_str(&format!(
+        "Task:      {} \"{}\"\n",
+        task.task_key, task.title
+    ));
     out.push_str(&format!("Source:    {}\n", pr.source_branch));
     out.push_str(&format!("Target:    {}\n", pr.target_branch));
     out.push_str(&format!("Status:    {}\n", pr.status));
@@ -1163,7 +1524,9 @@ pub fn pr_ls(app: &App) -> Result<String> {
 
     let mut out = String::new();
     if open.is_empty() && merged.is_empty() {
-        out.push_str("No PRs yet (open one with `lun pr new <T-00N|title> --from <branch> --to main`).");
+        out.push_str(
+            "No PRs yet (open one with `lun pr new <T-00N|title> --from <branch> --to main`).",
+        );
         return Ok(out);
     }
     if !open.is_empty() {
@@ -1218,9 +1581,7 @@ pub fn pr_merge(app: &App, query: &str, root: &Path) -> Result<String> {
         merged.pr_key,
         merged.source_branch,
         merged.target_branch,
-        app.lun
-            .task_by_id(merged.task_id)?
-            .task_key,
+        app.lun.task_by_id(merged.task_id)?.task_key,
         merged.pr_key,
         merged.source_branch,
         merged.target_branch
@@ -1240,7 +1601,12 @@ pub fn pr_merge(app: &App, query: &str, root: &Path) -> Result<String> {
 /// branch).
 fn git_merge_note(root: &Path, source: &str, target: &str) -> Option<String> {
     let is_repo = std::process::Command::new("git")
-        .args(["-C", &root.to_string_lossy(), "rev-parse", "--is-inside-work-tree"])
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "rev-parse",
+            "--is-inside-work-tree",
+        ])
         .output()
         .ok()
         .map(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).trim() == "true")
@@ -1250,7 +1616,14 @@ fn git_merge_note(root: &Path, source: &str, target: &str) -> Option<String> {
     }
     // Does the source branch exist locally?
     let has_source = std::process::Command::new("git")
-        .args(["-C", &root.to_string_lossy(), "rev-parse", "--verify", "--quiet", source])
+        .args([
+            "-C",
+            &root.to_string_lossy(),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            source,
+        ])
         .output()
         .ok()
         .map(|o| o.status.success())
@@ -1314,15 +1687,19 @@ fn run_pr(app: &App, args: &[String]) -> Result<String> {
             while i < args.len() {
                 match args[i].as_str() {
                     "--from" => {
-                        from = Some(args.get(i + 1).ok_or_else(|| {
-                            DbError::new("usage", "`--from` needs <branch>")
-                        })?.clone());
+                        from = Some(
+                            args.get(i + 1)
+                                .ok_or_else(|| DbError::new("usage", "`--from` needs <branch>"))?
+                                .clone(),
+                        );
                         i += 2;
                     }
                     "--to" => {
-                        to = Some(args.get(i + 1).ok_or_else(|| {
-                            DbError::new("usage", "`--to` needs <branch>")
-                        })?.clone());
+                        to = Some(
+                            args.get(i + 1)
+                                .ok_or_else(|| DbError::new("usage", "`--to` needs <branch>"))?
+                                .clone(),
+                        );
                         i += 2;
                     }
                     other if task.is_none() && !other.starts_with("--") => {
@@ -1389,25 +1766,72 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
             )),
         },
         Some("task") => match args.get(1) {
+            Some(sub) if sub == "ls" => task_list(app, &args[2..]),
+            Some(sub) if sub == "edit" => match args.get(2) {
+                Some(q) => task_edit(app, q, &args[3..]),
+                None => Err(DbError::new("usage", "expected: lun task edit <key|title> [flags]")),
+            },
+            Some(sub) if sub == "complete" => match args.get(2) {
+                Some(q) => task_complete(app, q),
+                None => Err(DbError::new("usage", "expected: lun task complete <key|title>")),
+            },
+            Some(sub) if sub == "reopen" => match args.get(2) {
+                Some(q) => task_reopen(app, q, &args[3..]),
+                None => Err(DbError::new("usage", "expected: lun task reopen <key|title>")),
+            },
+            Some(sub) if sub == "archive" || sub == "delete" => match args.get(2) {
+                Some(q) => task_archive(app, q),
+                None => Err(DbError::new("usage", "expected: lun task archive <key|title>")),
+            },
             Some(q) => task_view(app, q),
-            None => Err(DbError::new("usage", "expected: lun task <key|title>")),
+            None => Err(DbError::new(
+                "usage",
+                "expected: lun task <key|title> | task ls | task edit | task complete | task reopen | task archive",
+            )),
         },
         Some("log") => match args.get(1) {
             Some(q) => log_view(app, q),
             None => Err(DbError::new("usage", "expected: lun log <project|task>")),
         },
-        Some("attach") => match (args.get(1), args.get(2), args.get(3)) {
-            (Some(kind), Some(q), Some(file)) if kind == "task" => {
+        Some("attach") => match args.get(1).map(String::as_str) {
+            Some("ls") => match (args.get(2), args.get(3)) {
+                (Some(kind), Some(q)) => list_attachments(app, kind, q),
+                _ => Err(DbError::new(
+                    "usage",
+                    "expected: lun attach ls <task|project> <key|title>",
+                )),
+            },
+            Some("rm") => match (args.get(2), args.get(3), args.get(4)) {
+                (Some(kind), Some(q), Some(needle)) => remove_attachment_command(app, kind, q, needle),
+                _ => Err(DbError::new(
+                    "usage",
+                    "expected: lun attach rm <task|project> <key|title> <filename|id>",
+                )),
+            },
+            Some("open") => match (args.get(2), args.get(3), args.get(4)) {
+                (Some(kind), Some(q), Some(needle)) => open_attachment_command(app, kind, q, needle),
+                _ => Err(DbError::new(
+                    "usage",
+                    "expected: lun attach open <task|project> <key|title> <filename|id>",
+                )),
+            },
+            Some(kind) if kind == "task" || kind == "project" => match (args.get(1), args.get(2), args.get(3)) {
+                (Some(kind), Some(q), Some(file)) => {
                 let stdin = std::io::stdin();
                 let mut reader = std::io::BufReader::new(stdin.lock());
                 match std::env::current_dir() {
-                    Ok(root) => attach_file(app, &root, q, file, &mut reader),
+                    Ok(root) => attach_entity_file(app, &root, kind, q, file, &mut reader),
                     Err(e) => Err(DbError::new("io", format!("resolving CWD: {e}"))),
                 }
             }
+                _ => Err(DbError::new(
+                    "usage",
+                    "expected: lun attach <task|project> <key|title> /path/to/file",
+                )),
+            },
             _ => Err(DbError::new(
                 "usage",
-                "expected: lun attach task <T-00N|title> /path/to/file",
+                "expected: lun attach <task|project> <key|title> /path/to/file | attach ls | attach rm | attach open",
             )),
         },
         Some("link") => match (args.get(1), args.get(2), args.get(3), args.get(4)) {

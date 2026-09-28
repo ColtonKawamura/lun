@@ -41,12 +41,10 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
     .map_err(|e| e.to_string())?;
     let mut app = App::with_store(data, root.to_path_buf(), lun);
 
-    let mut terminal =
-        Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout())).map_err(|e| e.to_string())?;
 
     enable_raw_mode().map_err(|e| e.to_string())?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)
-        .map_err(|e| e.to_string())?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen).map_err(|e| e.to_string())?;
 
     let code = run_loop(&mut terminal, &mut app);
 
@@ -57,10 +55,7 @@ pub fn launch(root: &Path, version: &str) -> Result<i32, String> {
 }
 
 /// The event loop: poll with a short timeout, dispatch, repaint.
-fn run_loop(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
-    app: &mut App,
-) -> i32 {
+fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mut App) -> i32 {
     let repaint = |terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
                    app: &App|
      -> Result<(), std::io::Error> {
@@ -115,19 +110,17 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.palette_open {
         // Note: in the palette j/k are TYPED, not navigation — command
         // lines like `/task T-001` contain them. Arrow keys navigate.
+        if !matches!(key.code, KeyCode::Char('g')) {
+            app.pending_g = false;
+        }
+
         match key.code {
             KeyCode::Esc => app.palette_open = false,
             KeyCode::Enter => app.run_command(app.palette_selected),
-            KeyCode::Up if key.modifiers == KeyModifiers::NONE => {
-                app.palette_up()
-            }
-            KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
-                app.palette_down()
-            }
+            KeyCode::Up if key.modifiers == KeyModifiers::NONE => app.palette_up(),
+            KeyCode::Down if key.modifiers == KeyModifiers::NONE => app.palette_down(),
             KeyCode::Backspace => app.palette_backspace(),
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
-                app.palette_type(c)
-            }
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.palette_type(c),
             _ => {}
         }
         return;
@@ -139,15 +132,11 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
                 app.statusline_open = false;
                 app.statusline_query.clear();
             }
-            KeyCode::Enter => {
-                app.run_statusline()
-            }
+            KeyCode::Enter => app.run_statusline(),
             KeyCode::Backspace => {
                 app.statusline_query.pop();
             }
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
-                app.statusline_query.push(c)
-            }
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.statusline_query.push(c),
             _ => {}
         }
         return;
@@ -158,9 +147,7 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
             KeyCode::Esc => app.exit_insert(),
             KeyCode::Enter => app.notes_newline(),
             KeyCode::Backspace => app.notes_backspace(),
-            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
-                app.notes_type(c)
-            }
+            KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => app.notes_type(c),
             // Ctrl-S: save the notes draft to the DB (Phase 7), with the
             // default commit message filled in for the current task.
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
@@ -178,12 +165,20 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
 
     match key.code {
         KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => app.open_palette(),
+        KeyCode::Char('?') if key.modifiers == KeyModifiers::NONE => app.enter_view(View::Help, ""),
         KeyCode::Char(':') if key.modifiers == KeyModifiers::NONE => {
             app.statusline_open = true;
             app.statusline_query.clear();
         }
+        KeyCode::Esc | KeyCode::Backspace if key.modifiers == KeyModifiers::NONE => app.go_back(),
         KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => app.quit = true,
         KeyCode::Char('t') if key.modifiers == KeyModifiers::NONE => app.open_current_task(),
+        KeyCode::Char('o') if key.modifiers == KeyModifiers::NONE && app.view == View::Task => {
+            app.open_current_item()
+        }
+        KeyCode::Char('c') if key.modifiers == KeyModifiers::NONE => {
+            app.toggle_complete_current_task()
+        }
         KeyCode::Char('e') if key.modifiers == KeyModifiers::NONE && app.view == View::Task => {
             app.enter_notes_edit()
         }
@@ -193,16 +188,56 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
         }
         // `h`/`l` are reserved horizontal vim motions: lun's views are
         // vertical, so they are no-ops (the plan keeps the keymap vim-shaped).
-        KeyCode::Char('h') | KeyCode::Char('l') if key.modifiers == KeyModifiers::NONE => {}
-        KeyCode::Char('j') if key.modifiers == KeyModifiers::NONE => match app.view {
-            View::Project => app.project_nav(1, false),
-            _ => app.task_nav(1),
-        },
-        KeyCode::Char('k') if key.modifiers == KeyModifiers::NONE => match app.view {
+        KeyCode::Char('h') | KeyCode::Left if key.modifiers == KeyModifiers::NONE => {
+            if app.view == View::Task {
+                app.task_focus_prev()
+            }
+        }
+        KeyCode::Char('l') | KeyCode::Right if key.modifiers == KeyModifiers::NONE => {
+            if app.view == View::Task {
+                app.task_focus_next()
+            }
+        }
+        KeyCode::Char('j') | KeyCode::Down if key.modifiers == KeyModifiers::NONE => {
+            match app.view {
+                View::Project => app.project_nav(1, false),
+                View::Task => {
+                    if !app.task_item_nav(1) {
+                        app.task_nav(1);
+                    }
+                }
+                _ => app.task_nav(1),
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up if key.modifiers == KeyModifiers::NONE => match app.view {
             View::Project => app.project_nav(-1, false),
+            View::Task => {
+                if !app.task_item_nav(-1) {
+                    app.task_nav(-1);
+                }
+            }
             _ => app.task_nav(-1),
         },
+        KeyCode::PageDown if key.modifiers == KeyModifiers::NONE => app.page_nav(1),
+        KeyCode::PageUp if key.modifiers == KeyModifiers::NONE => app.page_nav(-1),
+        KeyCode::Home if key.modifiers == KeyModifiers::NONE => app.jump_top(),
+        KeyCode::End if key.modifiers == KeyModifiers::NONE => app.jump_bottom(),
+        KeyCode::Char('g') if key.modifiers == KeyModifiers::NONE => {
+            if app.pending_g {
+                app.jump_top();
+                app.pending_g = false;
+            } else {
+                app.pending_g = true;
+            }
+        }
+        KeyCode::Char('G')
+            if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+        {
+            app.jump_bottom()
+        }
         KeyCode::Enter if app.view == View::Project => app.project_nav(0, true),
+        KeyCode::Enter if matches!(app.view, View::Status | View::Board) => app.open_current_task(),
+        KeyCode::Enter if app.view == View::Task => app.open_current_item(),
         _ => {}
     }
 }

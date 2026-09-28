@@ -7,7 +7,8 @@
 //! the Attachments/Links sections of the `lun task` view.
 
 use lun::cli::{
-    add_link_command, attach_file, attachments_root, log_view, resolve_link, task_view, App,
+    add_link_command, attach_entity_file, attach_file, attachments_root, list_attachments,
+    log_view, open_attachment_command, remove_attachment_command, resolve_link, task_view, App,
 };
 use lun::{Lun, ProjectSpec, TaskSpec};
 use std::io::{BufRead, BufReader};
@@ -25,11 +26,7 @@ fn prompt_reader(lines: &[&str]) -> BufReader<std::io::Cursor<Vec<u8>>> {
 fn temp_root(name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p4-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("lun-p4-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -80,7 +77,10 @@ fn attach_in_repo_file_copies_it() {
         "hello attachment"
     );
 
-    let rows = app.lun.attachments_for_task(app.lun.task_by_key("T-001").unwrap().id).unwrap();
+    let rows = app
+        .lun
+        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].filename, "notes.txt");
     assert_eq!(rows[0].stored_path, stored.to_str().unwrap());
@@ -101,8 +101,14 @@ fn attach_collision_gets_suffix() {
     attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
     let out = attach_file(&app, &root, "T-001", src2.to_str().unwrap(), &mut input).unwrap();
 
-    assert!(out.contains("dup-2.txt"), "collision must be suffixed: {out}");
-    let rows = app.lun.attachments_for_task(app.lun.task_by_key("T-001").unwrap().id).unwrap();
+    assert!(
+        out.contains("dup-2.txt"),
+        "collision must be suffixed: {out}"
+    );
+    let rows = app
+        .lun
+        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].filename, "dup.txt");
     assert_eq!(rows[1].filename, "dup-2.txt");
@@ -130,13 +136,20 @@ fn attach_out_of_repo_yes_links_by_path_without_copying() {
     assert!(out.starts_with("Attached outside-"), "{out}");
     // No copy made into .lun/attachments/.
     assert!(
-        !attachments_root(&root).join(outside.file_name().unwrap()).exists(),
+        !attachments_root(&root)
+            .join(outside.file_name().unwrap())
+            .exists(),
         "out-of-repo file must NOT be copied"
     );
-    let rows = app.lun.attachments_for_task(app.lun.task_by_key("T-001").unwrap().id).unwrap();
+    let rows = app
+        .lun
+        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
-        rows[0].stored_path.starts_with(std::path::absolute(&outside).unwrap().to_str().unwrap()),
+        rows[0]
+            .stored_path
+            .starts_with(std::path::absolute(&outside).unwrap().to_str().unwrap()),
         "stored path must be the absolute external path: {}",
         rows[0].stored_path
     );
@@ -160,7 +173,10 @@ fn attach_out_of_repo_no_aborts() {
     assert!(e.to_string().contains("outside"), "{}", e.to_string());
 
     // Nothing recorded, nothing copied.
-    let rows = app.lun.attachments_for_task(app.lun.task_by_key("T-001").unwrap().id).unwrap();
+    let rows = app
+        .lun
+        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .unwrap();
     assert!(rows.is_empty());
     let _ = std::fs::remove_file(&outside);
     let _ = std::fs::remove_dir_all(&root);
@@ -198,7 +214,10 @@ fn link_task_and_project() {
     assert_eq!(out, format!("Linked obsidian to task T-001: {uri}"));
 
     let out = add_link_command(&app, "project", "p1", "docs", "https://example.com/p1").unwrap();
-    assert!(out.starts_with("Linked docs to project p1 [P-001]"), "{out}");
+    assert!(
+        out.starts_with("Linked docs to project p1 [P-001]"),
+        "{out}"
+    );
 
     let task_links = app
         .lun
@@ -286,7 +305,10 @@ fn attach_and_link_appear_in_task_log() {
     assert!(out.contains("ATTACH"), "{out}");
     assert!(out.contains("LINK"), "{out}");
     assert!(out.contains("File: fig.png"), "{out}");
-    assert!(out.contains("Link: [obsidian] obsidian://open?vault=p"), "{out}");
+    assert!(
+        out.contains("Link: [obsidian] obsidian://open?vault=p"),
+        "{out}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -314,5 +336,37 @@ fn task_view_empty_attachment_and_link_stubs() {
     let out = task_view(&app, "T-001").unwrap();
     assert!(out.contains("Attachments:\n- (no attachments"), "{out}");
     assert!(out.contains("Links:\n- (no links"), "{out}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn project_attachments_can_be_added_listed_opened_and_removed() {
+    let (root, app) = fixture();
+    let src = root.join("roadmap.md");
+    std::fs::write(&src, "# roadmap\n").unwrap();
+    let mut input = prompt_reader(&[]);
+    let added = attach_entity_file(
+        &app,
+        &root,
+        "project",
+        "p1",
+        src.to_str().unwrap(),
+        &mut input,
+    )
+    .unwrap();
+    assert!(added.contains("P-001"));
+
+    let listed = list_attachments(&app, "project", "p1").unwrap();
+    assert!(listed.contains("roadmap.md"));
+
+    std::env::set_var("LUN_OPEN_BIN", "true");
+    let opened = open_attachment_command(&app, "project", "p1", "roadmap.md").unwrap();
+    assert!(opened.contains("Opened:"));
+
+    let removed = remove_attachment_command(&app, "project", "p1", "roadmap.md").unwrap();
+    assert!(removed.contains("Removed attachment roadmap.md"));
+    let listed_after = list_attachments(&app, "project", "p1").unwrap();
+    assert!(listed_after.contains("- (none)"));
+    std::env::remove_var("LUN_OPEN_BIN");
     let _ = std::fs::remove_dir_all(&root);
 }

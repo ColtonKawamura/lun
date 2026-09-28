@@ -22,11 +22,7 @@ use std::path::PathBuf;
 fn temp_root(name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p9-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("lun-p9-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -81,10 +77,10 @@ fn open_pr(lun: &Lun, task_id: i64) -> lun::Pr {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn schema_v3_adds_prs_table() {
+fn schema_includes_prs_table() {
     let (root, lun, _, _) = fixture();
-    assert_eq!(lun::db::CURRENT_VERSION, 3);
-    // A fresh v3 DB has no PRs but the table answers.
+    assert!(lun::db::CURRENT_VERSION >= 3);
+    // A fresh current-version DB has no PRs but the table answers.
     assert!(lun.list_prs().unwrap().is_empty());
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -239,10 +235,7 @@ fn resolve_pr_by_key_and_by_task() {
     // By key.
     assert_eq!(lun::cli::resolve_pr(&app, &pr.pr_key).unwrap().id, pr.id);
     // By task key (the task's single open PR).
-    assert_eq!(
-        lun::cli::resolve_pr(&app, &t01.task_key).unwrap().id,
-        pr.id
-    );
+    assert_eq!(lun::cli::resolve_pr(&app, &t01.task_key).unwrap().id, pr.id);
     // A task with no open PR is a clean not-found.
     let err = lun::cli::resolve_pr(&app, &t02.task_key).unwrap_err();
     assert_eq!(err.kind(), "not-found");
@@ -368,10 +361,7 @@ fn run_pr_new_with_explicit_flags() {
         "--to".into(),
         "develop".into(),
     ];
-    assert_eq!(
-        lun::cli::run(&app, &args),
-        std::process::ExitCode::SUCCESS
-    );
+    assert_eq!(lun::cli::run(&app, &args), std::process::ExitCode::SUCCESS);
     let prs = app.lun.list_prs().unwrap();
     assert_eq!(prs.len(), 1);
     assert_eq!(prs[0].source_branch, "feat/explicit");

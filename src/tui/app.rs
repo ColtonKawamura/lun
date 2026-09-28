@@ -54,6 +54,15 @@ pub enum Mode {
     Insert,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskFocus {
+    #[default]
+    Summary,
+    Notes,
+    Attachments,
+    Links,
+}
+
 /// A slash command in the palette.
 pub struct SlashCommand {
     pub name: &'static str,
@@ -66,15 +75,51 @@ pub struct SlashCommand {
 
 /// The full palette, in the plan's order.
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
-    SlashCommand { name: "/status", description: "Show global status (projects + tasks)", view: Some(View::Status) },
-    SlashCommand { name: "/board", description: "Show kanban board for current project", view: Some(View::Board) },
-    SlashCommand { name: "/project", description: "Select or view a project", view: Some(View::Project) },
-    SlashCommand { name: "/task", description: "View a task: /task <T-00N|title> (default: current task)", view: Some(View::Task) },
-    SlashCommand { name: "/new-task", description: "Create a new task in current project (planned: later)", view: Some(View::Placeholder) },
-    SlashCommand { name: "/log", description: "Show logs: /log <project|task> (default: current project)", view: Some(View::Log) },
-    SlashCommand { name: "/config", description: "View configuration (planned)", view: Some(View::Placeholder) },
-    SlashCommand { name: "/help", description: "Show help and keybindings", view: Some(View::Help) },
-    SlashCommand { name: "/quit", description: "Exit lun", view: None },
+    SlashCommand {
+        name: "/status",
+        description: "Show global status (projects + tasks)",
+        view: Some(View::Status),
+    },
+    SlashCommand {
+        name: "/board",
+        description: "Show kanban board for current project",
+        view: Some(View::Board),
+    },
+    SlashCommand {
+        name: "/project",
+        description: "Select or view a project",
+        view: Some(View::Project),
+    },
+    SlashCommand {
+        name: "/task",
+        description: "View a task: /task <T-00N|title> (default: current task)",
+        view: Some(View::Task),
+    },
+    SlashCommand {
+        name: "/new-task",
+        description: "Create a new task in current project (planned: later)",
+        view: Some(View::Placeholder),
+    },
+    SlashCommand {
+        name: "/log",
+        description: "Show logs: /log <project|task> (default: current project)",
+        view: Some(View::Log),
+    },
+    SlashCommand {
+        name: "/config",
+        description: "View configuration (planned)",
+        view: Some(View::Placeholder),
+    },
+    SlashCommand {
+        name: "/help",
+        description: "Show help and keybindings",
+        view: Some(View::Help),
+    },
+    SlashCommand {
+        name: "/quit",
+        description: "Exit lun",
+        view: None,
+    },
 ];
 
 /// The whole TUI application (state + the Phase 7 DB handle).
@@ -82,6 +127,8 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
 pub struct App {
     pub data: TuiData,
     pub view: View,
+    pub previous_view: View,
+    pub view_history: Vec<View>,
     pub mode: Mode,
     pub palette_open: bool,
     pub palette_query: String,
@@ -90,6 +137,8 @@ pub struct App {
     /// Task list selection; doubles as the "current task" for the task
     /// view and note editing.
     pub task_selected: usize,
+    pub task_focus: TaskFocus,
+    pub task_item_selected: usize,
     /// What the log view shows (set by `/log`, `:status <q>`, `/log` default).
     pub log_subject: Option<super::data::LogSubject>,
     /// Statusline: `:` opens it; the remainder of the line is the query.
@@ -99,6 +148,7 @@ pub struct App {
     pub notes_draft: String,
     /// Whether the draft differs from the last-committed notes text.
     pub notes_dirty: bool,
+    pub pending_g: bool,
     /// (text, is_error) shown on the message line above the hint bar.
     pub message: Option<(String, bool)>,
     pub quit: bool,
@@ -119,17 +169,22 @@ impl App {
         Self {
             data,
             view: View::Initial,
+            previous_view: View::Initial,
+            view_history: Vec::new(),
             mode: Mode::Normal,
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
             project_selected: 0,
             task_selected: 0,
+            task_focus: TaskFocus::Summary,
+            task_item_selected: 0,
             log_subject: None,
             statusline_open: false,
             statusline_query: String::new(),
             notes_draft: String::new(),
             notes_dirty: false,
+            pending_g: false,
             message: None,
             quit: false,
             root: None,
@@ -151,12 +206,80 @@ impl App {
         if self.data.tasks.is_empty() {
             return None;
         }
-        self.data.tasks.get(self.task_selected.min(self.data.tasks.len() - 1))
+        self.data
+            .tasks
+            .get(self.task_selected.min(self.data.tasks.len() - 1))
+    }
+
+    pub fn current_note_links(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let notes = if self.mode == Mode::Insert {
+            self.notes_draft.as_str()
+        } else {
+            self.current_task().map(|t| t.notes.as_str()).unwrap_or("")
+        };
+        for line in notes.lines() {
+            let mut rest = line;
+            while let Some(label_start) = rest.find('[') {
+                let after_label = &rest[label_start + 1..];
+                let Some(label_end) = after_label.find("](") else {
+                    break;
+                };
+                let after_open = &after_label[label_end + 2..];
+                let Some(uri_end) = after_open.find(')') else {
+                    break;
+                };
+                out.push(after_open[..uri_end].to_string());
+                rest = &after_open[uri_end + 1..];
+            }
+        }
+        out
+    }
+
+    pub fn current_open_target(&self) -> Option<String> {
+        let task = self.current_task()?;
+        match self.task_focus {
+            TaskFocus::Summary => None,
+            TaskFocus::Notes => self
+                .current_note_links()
+                .get(self.task_item_selected)
+                .cloned(),
+            TaskFocus::Attachments => self
+                .data
+                .attachments_for_task(task.id)
+                .get(self.task_item_selected)
+                .map(|a| a.stored_path.clone()),
+            TaskFocus::Links => self
+                .data
+                .links_for_task(task.id)
+                .get(self.task_item_selected)
+                .map(|l| l.uri.clone()),
+        }
     }
 
     /// Whether the current task's notes buffer has unsaved edits.
     pub fn notes_modified(&self) -> bool {
         self.mode == Mode::Insert && self.notes_dirty
+    }
+
+    fn refresh_from_store(&mut self) -> Result<(), String> {
+        let Some(lun) = self.lun.as_mut() else {
+            return Ok(());
+        };
+        let sel = self.task_selected;
+        let proj = self.data.current_project;
+        let fresh = super::data::load(
+            lun,
+            &self.data.version,
+            &self.data.repo_path,
+            self.data.branch.clone(),
+            self.data.current().map(|p| p.project_key.as_str()),
+        )
+        .map_err(|e| e.to_string())?;
+        self.data = fresh;
+        self.task_selected = sel.min(self.data.tasks.len().saturating_sub(1));
+        self.data.current_project = proj.min(self.data.projects.len().saturating_sub(1));
+        Ok(())
     }
 
     /// Palette rows after filtering by the current query.
@@ -210,8 +333,10 @@ impl App {
                 self.palette_selected = 0;
                 // `q` guards unsaved notes like quit does.
                 if self.notes_modified() {
-                    self.message =
-                        Some(("unsaved note edits — press Esc in insert mode first".to_string(), true));
+                    self.message = Some((
+                        "unsaved note edits — press Esc in insert mode first".to_string(),
+                        true,
+                    ));
                     return;
                 }
                 self.quit = true;
@@ -228,14 +353,21 @@ impl App {
     pub fn enter_view(&mut self, view: View, rest: &str) {
         self.close_palette();
         if self.notes_modified() {
-            self.message =
-                Some(("unsaved note edits — press Esc in insert mode first".to_string(), true));
+            self.message = Some((
+                "unsaved note edits — press Esc in insert mode first".to_string(),
+                true,
+            ));
             return;
         }
         self.mode = Mode::Normal;
+        self.pending_g = false;
         self.statusline_open = false;
         self.statusline_query.clear();
         self.message = None;
+        if self.view != view {
+            self.view_history.push(self.view);
+        }
+        self.previous_view = self.view;
         match view {
             View::Task => {
                 if rest.is_empty() {
@@ -247,12 +379,15 @@ impl App {
                     self.message = Some((e, true));
                     return;
                 }
+                self.task_focus = TaskFocus::Summary;
+                self.task_item_selected = 0;
                 self.view = View::Task;
             }
             View::Log => {
                 if rest.is_empty() {
                     // Default: the current project's log.
-                    self.log_subject = Some(super::data::LogSubject::Project(self.data.current_project));
+                    self.log_subject =
+                        Some(super::data::LogSubject::Project(self.data.current_project));
                 } else {
                     match super::data::resolve_log_query(&self.data, rest) {
                         Ok(subject) => self.log_subject = Some(subject),
@@ -293,7 +428,9 @@ impl App {
             .map(|(i, _)| i)
             .collect();
         match hits.as_slice() {
-            [] => Err(format!("no task has key or title '{q}' (try `:status` to list)")),
+            [] => Err(format!(
+                "no task has key or title '{q}' (try `:status` to list)"
+            )),
             [i] => {
                 self.task_selected = *i;
                 Ok(())
@@ -301,8 +438,7 @@ impl App {
             many => Err(format!(
                 "ambiguous task '{q}': {} share this title: {} — use the task key",
                 many.len(),
-                many
-                    .iter()
+                many.iter()
                     .map(|&i| self.data.tasks[i].task_key.clone())
                     .collect::<Vec<_>>()
                     .join(", ")
@@ -349,7 +485,11 @@ impl App {
         if n == 0 {
             return;
         }
-        self.palette_selected = if self.palette_selected == 0 { n - 1 } else { self.palette_selected - 1 };
+        self.palette_selected = if self.palette_selected == 0 {
+            n - 1
+        } else {
+            self.palette_selected - 1
+        };
     }
 
     pub fn palette_down(&mut self) {
@@ -365,6 +505,7 @@ impl App {
         if self.data.projects.is_empty() {
             return;
         }
+        self.pending_g = false;
         let n = self.data.projects.len();
         self.project_selected =
             ((self.project_selected as i32 + dir).rem_euclid(n as i32)) as usize;
@@ -386,9 +527,142 @@ impl App {
         if self.data.tasks.is_empty() {
             return;
         }
+        self.pending_g = false;
         let n = self.data.tasks.len();
-        self.task_selected =
-            ((self.task_selected as i32 + dir).rem_euclid(n as i32)) as usize;
+        self.task_selected = ((self.task_selected as i32 + dir).rem_euclid(n as i32)) as usize;
+    }
+
+    pub fn jump_top(&mut self) {
+        self.pending_g = false;
+        match self.view {
+            View::Project => self.project_selected = 0,
+            _ => self.task_selected = 0,
+        }
+    }
+
+    pub fn jump_bottom(&mut self) {
+        self.pending_g = false;
+        match self.view {
+            View::Project => {
+                self.project_selected = self.data.projects.len().saturating_sub(1);
+            }
+            _ => {
+                self.task_selected = self.data.tasks.len().saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn page_nav(&mut self, dir: i32) {
+        match self.view {
+            View::Project => self.project_nav(dir * 5, false),
+            _ => self.task_nav(dir * 5),
+        }
+    }
+
+    pub fn task_focus_next(&mut self) {
+        self.pending_g = false;
+        self.task_item_selected = 0;
+        self.task_focus = match self.task_focus {
+            TaskFocus::Summary => TaskFocus::Notes,
+            TaskFocus::Notes => TaskFocus::Attachments,
+            TaskFocus::Attachments => TaskFocus::Links,
+            TaskFocus::Links => TaskFocus::Summary,
+        };
+    }
+
+    pub fn task_focus_prev(&mut self) {
+        self.pending_g = false;
+        self.task_item_selected = 0;
+        self.task_focus = match self.task_focus {
+            TaskFocus::Summary => TaskFocus::Links,
+            TaskFocus::Notes => TaskFocus::Summary,
+            TaskFocus::Attachments => TaskFocus::Notes,
+            TaskFocus::Links => TaskFocus::Attachments,
+        };
+    }
+
+    pub fn task_item_nav(&mut self, dir: i32) -> bool {
+        let len = match (self.current_task(), self.task_focus) {
+            (Some(_), TaskFocus::Summary) => 0,
+            (Some(_), TaskFocus::Notes) => self.current_note_links().len(),
+            (Some(task), TaskFocus::Attachments) => self.data.attachments_for_task(task.id).len(),
+            (Some(task), TaskFocus::Links) => self.data.links_for_task(task.id).len(),
+            _ => 0,
+        };
+        if len == 0 {
+            return false;
+        }
+        self.task_item_selected =
+            ((self.task_item_selected as i32 + dir).rem_euclid(len as i32)) as usize;
+        true
+    }
+
+    pub fn go_back(&mut self) {
+        if self.notes_modified() {
+            self.message = Some((
+                "unsaved note edits — press Esc in insert mode first".to_string(),
+                true,
+            ));
+            return;
+        }
+        if self.view == View::Task && self.task_focus != TaskFocus::Summary {
+            self.task_focus = TaskFocus::Summary;
+            self.task_item_selected = 0;
+            return;
+        }
+        if self.view != View::Initial {
+            if let Some(prev) = self.view_history.pop() {
+                self.previous_view = self.view;
+                self.view = prev;
+            }
+        }
+    }
+
+    pub fn open_current_item(&mut self) {
+        let Some(target) = self.current_open_target() else {
+            self.message = Some(("nothing openable is selected".to_string(), true));
+            return;
+        };
+        match crate::cli::open_target(&target) {
+            Ok(()) => self.message = Some((format!("Opened: {target}"), false)),
+            Err(e) => self.message = Some((format!("open failed: {e}"), true)),
+        }
+    }
+
+    pub fn toggle_complete_current_task(&mut self) {
+        let Some((task_id, task_key, done)) = self
+            .current_task()
+            .map(|t| (t.id, t.task_key.clone(), t.status == "done"))
+        else {
+            self.message = Some(("no current task".to_string(), true));
+            return;
+        };
+        let Some(lun) = self.lun.as_mut() else {
+            self.message = Some((
+                "no store attached — completion unavailable".to_string(),
+                true,
+            ));
+            return;
+        };
+        let result = if done {
+            lun.reopen_task(task_id, Some("in-progress"), None, None)
+        } else {
+            lun.complete_task(task_id, None, None)
+        };
+        match result {
+            Ok(_) => {
+                let _ = self.refresh_from_store();
+                self.message = Some((
+                    format!(
+                        "Committed: {} {}",
+                        if done { "reopen" } else { "complete" },
+                        task_key
+                    ),
+                    false,
+                ));
+            }
+            Err(e) => self.message = Some((format!("task update failed: {e}"), true)),
+        }
     }
 
     /// `t` in normal mode: jump to the current task's detail view.
@@ -398,13 +672,19 @@ impl App {
             return;
         }
         if self.notes_modified() {
-            self.message =
-                Some(("unsaved note edits — press Esc in insert mode first".to_string(), true));
+            self.message = Some((
+                "unsaved note edits — press Esc in insert mode first".to_string(),
+                true,
+            ));
             return;
         }
         self.mode = Mode::Normal;
+        self.previous_view = self.view;
+        self.view_history.push(self.view);
         self.statusline_open = false;
         self.statusline_query.clear();
+        self.task_focus = TaskFocus::Summary;
+        self.task_item_selected = 0;
         self.view = View::Task;
     }
 
@@ -469,10 +749,7 @@ impl App {
             // (`update notes for <task>`).
             self.save_notes_draft(None);
         } else if !self.notes_draft.is_empty() {
-            self.message = Some((
-                "notes unchanged — nothing to save".to_string(),
-                false,
-            ));
+            self.message = Some(("notes unchanged — nothing to save".to_string(), false));
         }
     }
 
@@ -484,9 +761,7 @@ impl App {
         // Copy the fields we need out of the (immutable) current-task
         // borrow BEFORE taking the mutable `self.lun` borrow, so the two
         // borrows never overlap.
-        let Some((task_id, task_key)) = self
-            .current_task()
-            .map(|t| (t.id, t.task_key.clone()))
+        let Some((task_id, task_key)) = self.current_task().map(|t| (t.id, t.task_key.clone()))
         else {
             self.notes_dirty = false;
             return;
@@ -516,7 +791,10 @@ impl App {
                     &self.data.version,
                     &self.data.repo_path,
                     self.data.branch.clone(),
-                    self.data.current().map(|p| p.project_key.clone()).as_deref(),
+                    self.data
+                        .current()
+                        .map(|p| p.project_key.clone())
+                        .as_deref(),
                 ) {
                     let sel = self.task_selected;
                     let proj = self.data.current_project;
@@ -547,7 +825,10 @@ impl App {
         // Terminals paste the path verbatim; strip stray whitespace/quotes.
         let path = text.trim().trim_matches('\'').trim_matches('"');
         if path.is_empty() {
-            self.message = Some(("drop a file to attach it (empty paste ignored)".to_string(), false));
+            self.message = Some((
+                "drop a file to attach it (empty paste ignored)".to_string(),
+                false,
+            ));
             return;
         }
         let src = std::path::Path::new(path);
@@ -559,12 +840,15 @@ impl App {
             return;
         }
         let Some(task) = self.current_task() else {
-            self.message = Some(("no current task — select one (j/k, t) before dropping".to_string(), true));
+            self.message = Some((
+                "no current task — select one (j/k, t) before dropping".to_string(),
+                true,
+            ));
             return;
         };
         let task_key = task.task_key.clone();
         let task_id = task.id;
-        drop(task);
+        let _ = task;
 
         // Phase 7 writes need the store + the `.lun/` root; a headless
         // app (tests without a store) reports instead of panicking.
@@ -587,7 +871,13 @@ impl App {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if let Err(e) = lun.add_attachment(task_id, &filename, stored.to_str().unwrap_or_default(), None, None) {
+        if let Err(e) = lun.add_attachment(
+            task_id,
+            &filename,
+            stored.to_str().unwrap_or_default(),
+            None,
+            None,
+        ) {
             // Roll the copy back: no dangling file without a DB record.
             let _ = std::fs::remove_file(&stored);
             self.message = Some((format!("attach failed: {e}"), true));
@@ -633,7 +923,10 @@ impl App {
             _ => ("status", q.as_str()),
         };
         if cmd != "status" {
-            self.message = Some((format!("unknown quick action '{cmd}' (Phase 6: status)"), true));
+            self.message = Some((
+                format!("unknown quick action '{cmd}' (Phase 6: status)"),
+                true,
+            ));
             return;
         }
         match super::data::resolve_log_query(&self.data, rest) {

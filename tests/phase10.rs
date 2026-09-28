@@ -1,11 +1,11 @@
-//! Phase 10 tests: schema migrations (v1 -> v3, v2 -> v3), schema
+//! Phase 10 tests: schema migrations (v1 -> current, v2 -> current), schema
 //! guarantees, and a cross-cutting CLI smoke test.
 //!
 //! The Phase 2-9 suites each cover their own feature; this file covers the
 //! migration machinery itself:
-//! - a v1 database (pre-Phase 7) upgrades to v3 with data preserved;
-//! - a v2 database (pre-Phase 9) upgrades to v3 with data preserved;
-//! - the final v3 schema has every table/column the docs promise;
+//! - a v1 database upgrades to the current schema with data preserved;
+//! - a v2 database upgrades to the current schema with data preserved;
+//! - the final schema has every table/column the docs promise;
 //! - the P-000 seed survives migrations.
 //!
 //! The v1/v2 fixtures are built by replaying the exact SQL that the
@@ -17,11 +17,8 @@ use lun::Lun;
 fn temp_root(name: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p10-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("lun-p10-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -103,11 +100,9 @@ CREATE TABLE projects (
 fn seed_v1_with_data(conn: &rusqlite::Connection) {
     conn.execute_batch(V1_BATCH).unwrap();
     let now = conn
-        .query_row(
-            "SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')",
-            [],
-            |r| r.get::<_, String>(0),
-        )
+        .query_row("SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now')", [], |r| {
+            r.get::<_, String>(0)
+        })
         .unwrap();
     conn.execute(
         "INSERT INTO projects (project_key, name, status, created_at, updated_at)
@@ -172,26 +167,55 @@ fn table_count(conn: &rusqlite::Connection, tables: &[&str]) -> i64 {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn fresh_init_reaches_v3_with_all_tables() {
+fn fresh_init_reaches_current_schema_with_all_tables() {
     let root = temp_root("fresh");
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 3);
+    assert_eq!(schema_version(&conn), 5);
     assert_eq!(
-        table_count(&conn, &["projects", "tasks", "logs", "attachments", "links", "prs", "migrations"]),
+        table_count(
+            &conn,
+            &[
+                "projects",
+                "tasks",
+                "logs",
+                "attachments",
+                "links",
+                "prs",
+                "migrations"
+            ]
+        ),
         7,
-        "fresh v3 schema has all seven tables"
+        "fresh schema has all seven tables"
     );
     // The prs table starts empty.
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM prs", [], |r| r.get(0)).unwrap();
+    let n: i64 = conn
+        .query_row("SELECT COUNT(*) FROM prs", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(n, 0);
+    let attachment_cols: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('attachments') WHERE name IN ('task_id', 'project_id', 'filename', 'stored_path', 'created_at')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(attachment_cols, 5);
+    let task_cols: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'archived_at'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(task_cols, 1);
+    assert_eq!(lun::db::CURRENT_VERSION, 5);
     drop(conn);
-    assert_eq!(lun::db::CURRENT_VERSION, 3);
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
-fn v1_database_upgrades_to_v3_with_data_preserved() {
+fn v1_database_upgrades_to_current_with_data_preserved() {
     let root = temp_root("v1-upgrade");
     std::fs::create_dir_all(root.join(".lun")).unwrap();
     {
@@ -199,22 +223,27 @@ fn v1_database_upgrades_to_v3_with_data_preserved() {
         seed_v1_with_data(&conn);
         assert_eq!(schema_version(&conn), 1);
     }
-    // `lun init` on the existing directory must run the pending
-    // v2 + v3 migrations in one shot.
+    // `lun init` on the existing directory must run the pending migrations in one shot.
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 3);
+    assert_eq!(schema_version(&conn), 5);
     assert_eq!(table_count(&conn, &["projects", "tasks", "prs"]), 3);
     // Data preservation: the legacy task + its log survive the upgrade.
     let title: String = conn
-        .query_row("SELECT title FROM tasks WHERE task_key='T-001'", [], |r| r.get(0))
+        .query_row("SELECT title FROM tasks WHERE task_key='T-001'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(title, "legacy task");
     let notes: String = conn
-        .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| r.get(0))
+        .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     assert_eq!(notes, "", "v1 rows get the v2 default empty notes");
-    let logs: i64 = conn.query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0)).unwrap();
+    let logs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM logs", [], |r| r.get(0))
+        .unwrap();
     assert_eq!(logs, 2, "P-000 seed log + task CREATE log survive");
     drop(conn);
     // The upgraded DB is fully usable: a PR can be opened on the legacy task.
@@ -231,7 +260,7 @@ fn v1_database_upgrades_to_v3_with_data_preserved() {
 }
 
 #[test]
-fn v2_database_upgrades_to_v3_preserving_notes() {
+fn v2_database_upgrades_to_current_preserving_notes() {
     let root = temp_root("v2-upgrade");
     std::fs::create_dir_all(root.join(".lun")).unwrap();
     {
@@ -242,11 +271,16 @@ fn v2_database_upgrades_to_v3_preserving_notes() {
     }
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 3);
+    assert_eq!(schema_version(&conn), 5);
     let notes: String = conn
-        .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| r.get(0))
+        .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
+            r.get(0)
+        })
         .unwrap();
-    assert_eq!(notes, "legacy note text", "v2 notes survive the v3 upgrade");
+    assert_eq!(
+        notes, "legacy note text",
+        "v2 notes survive the current upgrade"
+    );
     drop(conn);
     let _ = lun;
     let _ = std::fs::remove_dir_all(&root);

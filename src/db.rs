@@ -9,10 +9,10 @@
 //! all log-on-write (`CREATE`/`MERGE` on the PR itself plus a task entry
 //! that maps the PR lifecycle onto the task's log).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, types::Value, Connection};
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 3;
+pub const CURRENT_VERSION: i64 = 5;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -25,7 +25,10 @@ pub struct DbError {
 
 impl DbError {
     pub(crate) fn new(kind: &'static str, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into() }
+        Self {
+            kind,
+            message: message.into(),
+        }
     }
 
     /// Error category (`db`, `io`, `not-found`, `usage`, `ambiguous`, ...).
@@ -57,11 +60,19 @@ pub enum LinkTarget {
     Project(i64),
 }
 
+/// Target an attachment record is attached to (a task or a project).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttachmentTarget {
+    Task(i64),
+    Project(i64),
+}
+
 /// Row of the `attachments` table (read model).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Attachment {
     pub id: i64,
-    pub task_id: i64,
+    pub task_id: Option<i64>,
+    pub project_id: Option<i64>,
     pub filename: String,
     pub stored_path: String,
     pub created_at: String,
@@ -176,6 +187,41 @@ pub struct Task {
     pub notes: String,
     pub created_at: String,
     pub updated_at: String,
+    pub archived_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TaskSort {
+    #[default]
+    Key,
+    Title,
+    Status,
+    Priority,
+    Updated,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskListSpec {
+    pub project_id: Option<i64>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub assignee: Option<String>,
+    pub include_archived: bool,
+    pub sort: TaskSort,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskUpdateSpec {
+    pub title: Option<String>,
+    pub project_id: Option<i64>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub assignee: Option<Option<String>>,
+    pub branch: Option<Option<String>>,
+    pub labels: Option<String>,
+    pub notes: Option<String>,
+    pub message: Option<String>,
+    pub user: Option<String>,
 }
 
 /// Handle to an opened `.lun/lun.db`.
@@ -217,10 +263,7 @@ impl Lun {
         if !path.exists() {
             return Err(DbError::new(
                 "not-initialized",
-                format!(
-                    "{} does not exist; run `lun init` first",
-                    path.display()
-                ),
+                format!("{} does not exist; run `lun init` first", path.display()),
             ));
         }
         let conn = Connection::open(&path)?;
@@ -237,9 +280,11 @@ impl Lun {
         )?;
 
         let version: i64 = conn
-            .query_row("SELECT COALESCE(MAX(version), 0) FROM migrations", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) FROM migrations",
+                [],
+                |r| r.get(0),
+            )
             .unwrap_or(0);
 
         if version < 1 {
@@ -342,6 +387,35 @@ impl Lun {
             )?;
         }
 
+        if version < 4 {
+            conn.execute_batch(
+                "ALTER TABLE attachments RENAME TO attachments_v1;
+                CREATE TABLE attachments (
+                   id          INTEGER PRIMARY KEY,
+                   task_id     INTEGER REFERENCES tasks(id),
+                   project_id  INTEGER REFERENCES projects(id),
+                   filename    TEXT NOT NULL,
+                   stored_path TEXT NOT NULL,
+                   created_at  TEXT NOT NULL,
+                   CHECK ((task_id IS NULL) <> (project_id IS NULL))
+                );
+                INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
+                SELECT id, task_id, NULL, filename, stored_path, created_at
+                  FROM attachments_v1;
+                DROP TABLE attachments_v1;
+                INSERT INTO migrations (version, applied_at)
+                    VALUES (4, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+            )?;
+        }
+
+        if version < 5 {
+            conn.execute_batch(
+                "ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+                INSERT INTO migrations (version, applied_at)
+                    VALUES (5, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+            )?;
+        }
+
         let version: i64 = conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM migrations",
             [],
@@ -350,9 +424,7 @@ impl Lun {
         if version != CURRENT_VERSION {
             return Err(DbError::new(
                 "version-mismatch",
-                format!(
-                    "database is at schema version {version}, lun expects {CURRENT_VERSION}"
-                ),
+                format!("database is at schema version {version}, lun expects {CURRENT_VERSION}"),
             ));
         }
         Ok(())
@@ -363,6 +435,14 @@ impl Lun {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| format_epoch(d.as_secs()))
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    }
+
+    fn json_escape(value: &str) -> String {
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+            .replace('\t', "\\t")
     }
 
     // ------------------------------------------------------------------
@@ -441,8 +521,10 @@ impl Lun {
 
     /// All projects ordered by key.
     pub fn list_projects(&self) -> Result<Vec<Project>> {
-        let mut stmt = self.conn.prepare("SELECT id, project_key, name, status, created_at, updated_at
-                                          FROM projects ORDER BY project_key")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_key, name, status, created_at, updated_at
+                                          FROM projects ORDER BY project_key",
+        )?;
         let rows = stmt
             .query_map([], Self::project_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -519,9 +601,9 @@ impl Lun {
                 .map_err(|e| DbError::new("db", format!("project {} vanished: {}", pid, e)))?,
             None => "Unassigned".to_string(),
         };
-        let message = spec.message.unwrap_or_else(|| {
-            format!("add task \"{}\" to {}", spec.title, project_name)
-        });
+        let message = spec
+            .message
+            .unwrap_or_else(|| format!("add task \"{}\" to {}", spec.title, project_name));
         self.log(
             "task",
             id,
@@ -547,28 +629,65 @@ impl Lun {
             notes: String::new(),
             created_at: now.clone(),
             updated_at: now,
+            archived_at: None,
         })
     }
 
     /// All tasks ordered by key.
     pub fn list_tasks(&self) -> Result<Vec<Task>> {
-        let mut stmt = self.conn.prepare(
+        self.list_tasks_with(&TaskListSpec::default())
+    }
+
+    pub fn list_tasks_with(&self, spec: &TaskListSpec) -> Result<Vec<Task>> {
+        let mut sql = String::from(
             "SELECT id, task_key, project_id, title, status, priority,
-                    assignee, branch, labels, notes, created_at, updated_at
-             FROM tasks ORDER BY id",
-        )?;
+                    assignee, branch, labels, notes, created_at, updated_at, archived_at
+             FROM tasks",
+        );
+        let mut clauses = Vec::new();
+        let mut values: Vec<Value> = Vec::new();
+        if !spec.include_archived {
+            clauses.push("archived_at IS NULL".to_string());
+        }
+        if let Some(project_id) = spec.project_id {
+            clauses.push("project_id = ?".to_string());
+            values.push(Value::Integer(project_id));
+        }
+        if let Some(status) = &spec.status {
+            clauses.push("status = ?".to_string());
+            values.push(Value::Text(status.clone()));
+        }
+        if let Some(priority) = &spec.priority {
+            clauses.push("priority = ?".to_string());
+            values.push(Value::Text(priority.clone()));
+        }
+        if let Some(assignee) = &spec.assignee {
+            clauses.push("assignee = ?".to_string());
+            values.push(Value::Text(assignee.clone()));
+        }
+        if !clauses.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&clauses.join(" AND "));
+        }
+        sql.push_str(" ORDER BY ");
+        sql.push_str(match spec.sort {
+            TaskSort::Key => "task_key ASC",
+            TaskSort::Title => "title ASC, task_key ASC",
+            TaskSort::Status => "status ASC, task_key ASC",
+            TaskSort::Priority => "priority ASC, task_key ASC",
+            TaskSort::Updated => "updated_at DESC, task_key ASC",
+        });
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
-            .query_map([], Self::task_from_row)?
+            .query_map(rusqlite::params_from_iter(values), Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
     }
 
     fn next_task_key(&self) -> Result<String> {
-        let n: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM tasks",
-            [],
-            |r| r.get(0),
-        )?;
+        let n: i64 = self
+            .conn
+            .query_row("SELECT COALESCE(MAX(id), 0) FROM tasks", [], |r| r.get(0))?;
         Ok(format!("T-{:03}", n + 1))
     }
 
@@ -601,7 +720,7 @@ impl Lun {
         self.conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE task_key = ?1",
                 [key],
                 Self::task_from_row,
@@ -614,7 +733,7 @@ impl Lun {
         self.conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [id],
                 Self::task_from_row,
@@ -625,13 +744,11 @@ impl Lun {
     /// All tasks whose title exactly equals `title`. Zero, one, or many —
     /// the CLI layer treats >1 as ambiguous.
     pub fn tasks_by_title(&self, title: &str) -> Result<Vec<Task>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE title = ?1 ORDER BY id",
-            )?;
+        )?;
         let rows = stmt
             .query_map([title], Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -640,13 +757,11 @@ impl Lun {
 
     /// Tasks belonging to `project_id`, ordered by id.
     pub fn tasks_for_project(&self, project_id: i64) -> Result<Vec<Task>> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE project_id = ?1 ORDER BY id",
-            )?;
+        )?;
         let rows = stmt
             .query_map([project_id], Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -684,18 +799,17 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [task_id],
                 Self::task_from_row,
             )
             .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
 
-        self.conn
-            .execute(
-                "UPDATE tasks SET notes = ?1, updated_at = ?2 WHERE id = ?3",
-                params![notes, now, task_id],
-            )?;
+        self.conn.execute(
+            "UPDATE tasks SET notes = ?1, updated_at = ?2 WHERE id = ?3",
+            params![notes, now, task_id],
+        )?;
 
         let describe = |t: &str| {
             let n = t.lines().count();
@@ -714,10 +828,214 @@ impl Lun {
             task_id,
             "UPDATE",
             &message,
-            &format!("{{\"changes\": \"{changes}\"}}"),
+            &format!("{{\"changes\": \"{}\"}}", Self::json_escape(&changes)),
             Some(user),
         )?;
         Ok(())
+    }
+
+    pub fn update_task(&self, task_id: i64, spec: TaskUpdateSpec) -> Result<Task> {
+        let user = spec.user.as_deref().unwrap_or(DEFAULT_USER);
+        let mut task = self.task_by_id(task_id)?;
+        let now = Self::now();
+        let mut changes = Vec::new();
+
+        if let Some(title) = spec.title {
+            if title != task.title {
+                changes.push(format!("title: {} -> {}", task.title, title));
+                task.title = title;
+            }
+        }
+        if let Some(project_id) = spec.project_id {
+            if Some(project_id) != task.project_id {
+                changes.push(format!(
+                    "project: {} -> {}",
+                    self.project_name_for_task(&task),
+                    self.conn
+                        .query_row(
+                            "SELECT name FROM projects WHERE id = ?1",
+                            [project_id],
+                            |r| { r.get::<_, String>(0) }
+                        )
+                        .map_err(|e| DbError::new(
+                            "not-found",
+                            format!("project {project_id}: {e}")
+                        ))?
+                ));
+                task.project_id = Some(project_id);
+            }
+        }
+        if let Some(status) = spec.status {
+            if status != task.status {
+                changes.push(format!("status: {} -> {}", task.status, status));
+                task.status = status;
+            }
+        }
+        if let Some(priority) = spec.priority {
+            if priority != task.priority {
+                changes.push(format!("priority: {} -> {}", task.priority, priority));
+                task.priority = priority;
+            }
+        }
+        if let Some(assignee) = spec.assignee {
+            if assignee != task.assignee {
+                changes.push(format!(
+                    "assignee: {} -> {}",
+                    task.assignee.as_deref().unwrap_or(""),
+                    assignee.as_deref().unwrap_or("")
+                ));
+                task.assignee = assignee;
+            }
+        }
+        if let Some(branch) = spec.branch {
+            if branch != task.branch {
+                changes.push(format!(
+                    "branch: {} -> {}",
+                    task.branch.as_deref().unwrap_or(""),
+                    branch.as_deref().unwrap_or("")
+                ));
+                task.branch = branch;
+            }
+        }
+        if let Some(labels) = spec.labels {
+            if labels != task.labels {
+                changes.push(format!("labels: {} -> {}", task.labels, labels));
+                task.labels = labels;
+            }
+        }
+        if let Some(notes) = spec.notes {
+            if notes != task.notes {
+                let describe = |t: &str| {
+                    let n = t.lines().count();
+                    if n == 0 {
+                        "empty".to_string()
+                    } else {
+                        format!("{n} line{}", if n == 1 { "" } else { "s" })
+                    }
+                };
+                changes.push(format!(
+                    "notes: {} -> {}",
+                    describe(&task.notes),
+                    describe(&notes)
+                ));
+                task.notes = notes;
+            }
+        }
+
+        if changes.is_empty() {
+            return Ok(task);
+        }
+
+        task.updated_at = now.clone();
+        self.conn.execute(
+            "UPDATE tasks
+                SET project_id = ?1, title = ?2, status = ?3, priority = ?4,
+                    assignee = ?5, branch = ?6, labels = ?7, notes = ?8, updated_at = ?9
+              WHERE id = ?10",
+            params![
+                task.project_id,
+                task.title,
+                task.status,
+                task.priority,
+                task.assignee,
+                task.branch,
+                task.labels,
+                task.notes,
+                now,
+                task_id
+            ],
+        )?;
+        let message = spec
+            .message
+            .unwrap_or_else(|| format!("edit {}", task.task_key));
+        self.log(
+            "task",
+            task_id,
+            "UPDATE",
+            &message,
+            &format!(
+                "{{\"changes\": \"{}\"}}",
+                Self::json_escape(&changes.join(", "))
+            ),
+            Some(user),
+        )?;
+        self.task_by_id(task_id)
+    }
+
+    pub fn complete_task(
+        &self,
+        task_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Task> {
+        let task = self.task_by_id(task_id)?;
+        self.update_task(
+            task_id,
+            TaskUpdateSpec {
+                status: Some("done".to_string()),
+                message: Some(
+                    message
+                        .map(str::to_string)
+                        .unwrap_or_else(|| format!("complete {}", task.task_key)),
+                ),
+                user: user.map(str::to_string),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn reopen_task(
+        &self,
+        task_id: i64,
+        status: Option<&str>,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Task> {
+        let task = self.task_by_id(task_id)?;
+        let target_status = status.unwrap_or("in-progress");
+        self.update_task(
+            task_id,
+            TaskUpdateSpec {
+                status: Some(target_status.to_string()),
+                message: Some(
+                    message.map(str::to_string).unwrap_or_else(|| {
+                        format!("reopen {} to {}", task.task_key, target_status)
+                    }),
+                ),
+                user: user.map(str::to_string),
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn archive_task(
+        &self,
+        task_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Task> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let task = self.task_by_id(task_id)?;
+        if task.archived_at.is_some() {
+            return Ok(task);
+        }
+        let now = Self::now();
+        self.conn.execute(
+            "UPDATE tasks SET archived_at = ?1, updated_at = ?1 WHERE id = ?2",
+            params![now, task_id],
+        )?;
+        let message = message
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("archive {}", task.task_key));
+        self.log(
+            "task",
+            task_id,
+            "ARCHIVE",
+            &message,
+            "{\"archived\": true}",
+            Some(user),
+        )?;
+        self.task_by_id(task_id)
     }
 
     // ------------------------------------------------------------------
@@ -795,6 +1113,7 @@ impl Lun {
             notes: r.get(9)?,
             created_at: r.get(10)?,
             updated_at: r.get(11)?,
+            archived_at: r.get(12)?,
         })
     }
 
@@ -813,35 +1132,71 @@ impl Lun {
         message: Option<&str>,
         user: Option<&str>,
     ) -> Result<i64> {
+        self.add_attachment_to(
+            AttachmentTarget::Task(task_id),
+            filename,
+            stored_path,
+            message,
+            user,
+        )
+    }
+
+    pub fn add_attachment_to(
+        &self,
+        target: AttachmentTarget,
+        filename: &str,
+        stored_path: &str,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<i64> {
         let user = user.unwrap_or(DEFAULT_USER);
         let now = Self::now();
-        let task: Task = self
-            .conn
-            .query_row(
-                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
-                 FROM tasks WHERE id = ?1",
-                [task_id],
-                Self::task_from_row,
-            )
-            .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
-
+        let (entity_type, entity_id, task_id, project_id, target_label) = match target {
+            AttachmentTarget::Task(task_id) => {
+                let task = self
+                    .task_by_id(task_id)
+                    .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
+                ("task", task_id, Some(task_id), None, task.task_key)
+            }
+            AttachmentTarget::Project(project_id) => {
+                let project = self
+                    .conn
+                    .query_row(
+                        "SELECT id, project_key, name, status, created_at, updated_at
+                     FROM projects WHERE id = ?1",
+                        [project_id],
+                        Self::project_from_row,
+                    )
+                    .map_err(|e| DbError::new("not-found", format!("project {project_id}: {e}")))?;
+                (
+                    "project",
+                    project_id,
+                    None,
+                    Some(project_id),
+                    project.project_key,
+                )
+            }
+        };
         self.conn.execute(
-            "INSERT INTO attachments (task_id, filename, stored_path, created_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![task_id, filename, stored_path, now],
+            "INSERT INTO attachments (task_id, project_id, filename, stored_path, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![task_id, project_id, filename, stored_path, now],
         )?;
         let id = self.conn.last_insert_rowid();
 
         let message = message
             .map(|m| m.to_string())
-            .unwrap_or_else(|| format!("attach \"{}\" to {}", filename, task.task_key));
+            .unwrap_or_else(|| format!("attach \"{}\" to {}", filename, target_label));
         self.log(
-            "task",
-            task_id,
+            entity_type,
+            entity_id,
             "ATTACH",
             &message,
-            &format!("{{\"filename\": \"{}\", \"stored_path\": \"{}\"}}", filename, stored_path),
+            &format!(
+                "{{\"filename\": \"{}\", \"stored_path\": \"{}\"}}",
+                Self::json_escape(filename),
+                Self::json_escape(stored_path)
+            ),
             Some(user),
         )?;
         Ok(id)
@@ -888,7 +1243,7 @@ impl Lun {
     /// List attachments recorded for a task, oldest first.
     pub fn attachments_for_task(&self, task_id: i64) -> Result<Vec<Attachment>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, task_id, filename, stored_path, created_at
+            "SELECT id, task_id, project_id, filename, stored_path, created_at
              FROM attachments WHERE task_id = ?1 ORDER BY id",
         )?;
         let rows = stmt
@@ -896,14 +1251,106 @@ impl Lun {
                 Ok(Attachment {
                     id: r.get(0)?,
                     task_id: r.get(1)?,
-                    filename: r.get(2)?,
-                    stored_path: r.get(3)?,
-                    created_at: r.get(4)?,
+                    project_id: r.get(2)?,
+                    filename: r.get(3)?,
+                    stored_path: r.get(4)?,
+                    created_at: r.get(5)?,
                 })
             })
             .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))?;
         rows.collect::<std::result::Result<_, _>>()
             .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))
+    }
+
+    pub fn attachments_for_project(&self, project_id: i64) -> Result<Vec<Attachment>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, project_id, filename, stored_path, created_at
+             FROM attachments WHERE project_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([project_id], |r| {
+                Ok(Attachment {
+                    id: r.get(0)?,
+                    task_id: r.get(1)?,
+                    project_id: r.get(2)?,
+                    filename: r.get(3)?,
+                    stored_path: r.get(4)?,
+                    created_at: r.get(5)?,
+                })
+            })
+            .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| DbError::new("db", format!("listing attachments: {e}")))
+    }
+
+    pub fn remove_attachment(
+        &self,
+        attachment_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Attachment> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let attachment = self
+            .conn
+            .query_row(
+                "SELECT id, task_id, project_id, filename, stored_path, created_at
+             FROM attachments WHERE id = ?1",
+                [attachment_id],
+                |r| {
+                    Ok(Attachment {
+                        id: r.get(0)?,
+                        task_id: r.get(1)?,
+                        project_id: r.get(2)?,
+                        filename: r.get(3)?,
+                        stored_path: r.get(4)?,
+                        created_at: r.get(5)?,
+                    })
+                },
+            )
+            .map_err(|e| DbError::new("not-found", format!("attachment {attachment_id}: {e}")))?;
+        self.conn
+            .execute("DELETE FROM attachments WHERE id = ?1", [attachment_id])?;
+        let (entity_type, entity_id, target_label) =
+            match (attachment.task_id, attachment.project_id) {
+                (Some(task_id), None) => {
+                    let task = self.task_by_id(task_id)?;
+                    ("task", task_id, task.task_key)
+                }
+                (None, Some(project_id)) => {
+                    let project = self.conn.query_row(
+                        "SELECT id, project_key, name, status, created_at, updated_at
+                    FROM projects WHERE id = ?1",
+                        [project_id],
+                        Self::project_from_row,
+                    )?;
+                    ("project", project_id, project.project_key)
+                }
+                _ => {
+                    return Err(DbError::new(
+                        "db",
+                        format!("attachment {} has invalid ownership", attachment_id),
+                    ))
+                }
+            };
+        let message = message.map(str::to_string).unwrap_or_else(|| {
+            format!(
+                "remove attachment \"{}\" from {}",
+                attachment.filename, target_label
+            )
+        });
+        self.log(
+            entity_type,
+            entity_id,
+            "DETACH",
+            &message,
+            &format!(
+                "{{\"filename\": \"{}\", \"stored_path\": \"{}\"}}",
+                Self::json_escape(&attachment.filename),
+                Self::json_escape(&attachment.stored_path)
+            ),
+            Some(user),
+        )?;
+        Ok(attachment)
     }
 
     /// List links on a task, oldest first.
@@ -1033,7 +1480,7 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [spec.task_id],
                 Self::task_from_row,
@@ -1066,9 +1513,7 @@ impl Lun {
                     )
                 })?,
         };
-        let target = spec
-            .target_branch
-            .unwrap_or_else(|| "main".to_string());
+        let target = spec.target_branch.unwrap_or_else(|| "main".to_string());
         if source == target {
             return Err(DbError::new(
                 "usage",
@@ -1076,11 +1521,13 @@ impl Lun {
             ));
         }
 
-        let key = format!("PR-{:03}", self.conn.query_row(
-            "SELECT COALESCE(MAX(id), 0) FROM prs",
-            [],
-            |r| r.get::<_, i64>(0),
-        )? + 1);
+        let key = format!(
+            "PR-{:03}",
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) FROM prs", [], |r| r
+                    .get::<_, i64>(0),)?
+                + 1
+        );
         let now = Self::now();
 
         self.conn.execute(
@@ -1091,7 +1538,10 @@ impl Lun {
         let id = self.conn.last_insert_rowid();
 
         let message = spec.message.unwrap_or_else(|| {
-            format!("open {key} from {source} into {target} for {}", task.task_key)
+            format!(
+                "open {key} from {source} into {target} for {}",
+                task.task_key
+            )
         });
         // PR's own log entity is a task-type entry on the PR row? No —
         // logs.entity_type is CHECK-constrained to project|task, so the
@@ -1124,12 +1574,7 @@ impl Lun {
     /// `details` carrying the PR key + branches.
     ///
     /// `message` defaults to `merge <pr> (<source> -> <target>)`.
-    pub fn merge_pr(
-        &self,
-        pr_id: i64,
-        message: Option<&str>,
-        user: Option<&str>,
-    ) -> Result<Pr> {
+    pub fn merge_pr(&self, pr_id: i64, message: Option<&str>, user: Option<&str>) -> Result<Pr> {
         let user = user.unwrap_or(DEFAULT_USER);
         let now = Self::now();
         let pr: Pr = self
@@ -1156,7 +1601,7 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at
+                        labels, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [pr.task_id],
                 Self::task_from_row,
@@ -1175,14 +1620,12 @@ impl Lun {
             params![now, task.id],
         )?;
 
-        let message = message
-            .map(|m| m.to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "merge {} ({} -> {})",
-                    pr.pr_key, pr.source_branch, pr.target_branch
-                )
-            });
+        let message = message.map(|m| m.to_string()).unwrap_or_else(|| {
+            format!(
+                "merge {} ({} -> {})",
+                pr.pr_key, pr.source_branch, pr.target_branch
+            )
+        });
         self.log(
             "task",
             task.id,

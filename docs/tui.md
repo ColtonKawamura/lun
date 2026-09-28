@@ -23,11 +23,18 @@ later phases.
 | --------- | --------------- | ------ |
 | `/`       | normal          | open the command palette |
 | `:`       | normal          | quick action line (`:status <project\|task>`) |
-| `j` / `k` | normal          | navigate lists (projects, tasks, board) |
-| `enter`   | normal          | select (project view: set current project) |
+| `j` / `k` / `↑` / `↓` | normal | navigate lists (projects, tasks, board) |
+| `h` / `l` / `←` / `→` | task view | move focus between summary / notes / attachments / links |
+| `gg` / `G` | normal | jump to the first / last item |
+| `home` / `end` | normal | jump to the first / last item |
+| `page up` / `page down` | normal | move faster through longer lists |
+| `enter`   | normal          | select/open (project view: set current project; task view: open focused item) |
 | `t`       | normal          | open the current task's detail view |
+| `o`       | task view       | open the focused note link / attachment / explicit link |
+| `c`       | normal          | toggle the current task complete / reopen |
 | `i` / `e` | task view       | edit the current task's notes |
-| `esc`     | palette / insert / statusline | close palette / statusline, back to normal mode |
+| `?`       | normal          | open help |
+| `esc` / `backspace` | palette / insert / statusline / detail views | close palette / statusline, back to normal mode or previous view |
 | `ctrl-s`  | insert (notes)  | save the notes draft (logs `UPDATE`; default message `update notes for <task>`) |
 | `q`       | normal          | quit (blocked while notes have unsaved edits) |
 
@@ -47,6 +54,10 @@ Drop a file (or paste a path) while a task is selected: the file is
 copied into `.lun/attachments/` and an `ATTACH` log entry is written.
 A copy failure rolls the file back (no dangling copy without a DB
 record).
+
+Focused items in the **Task** view can also be opened directly from the
+TUI: move focus to **Notes**, **Attachments**, or **Links** with `h`/`l`,
+select an item with `j`/`k`, then press `o` or `enter`.
 
 ## PRs in the TUI (Phase 9)
 
