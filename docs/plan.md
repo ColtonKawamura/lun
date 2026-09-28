@@ -139,14 +139,14 @@ Tasks, projects, attachments, and logs are **stored in the DB**, not plain text.
      - `id` (integer PK)  
      - `project_key` (string like `P-001`)  
      - `name` (string)  
-     - `status` (enum/string: `planning`, `active`, `in-progress`, etc.)  
+     - `status` (enum/string: `active`, `inactive`)  
      - `created_at`, `updated_at`  
    - `tasks`  
      - `id` (integer PK)  
      - `task_key` (string like `T-008`)  
      - `project_id` (FK to `projects`, nullable for Unassigned tasks)  
      - `title`  
-     - `status` (`todo`, `in-progress`, `review`, `done`)  
+     - `status` (`todo`, `doing`, `follow-up`, `blocked`, `done`)  
      - `priority` (`low`, `med`, `medium`, `high`)  
      - `assignee`  
      - `branch` (string, optional)  
@@ -227,8 +227,8 @@ Projects
 --------
 
 ID      Name               Status       Open  Review  Done
-P-001   paper-stack        in-progress  3     1       7
-P-002   granE-friction     planning     5     0       0
+P-001   paper-stack        doing  3     1       7
+P-002   granE-friction     active     5     0       0
 P-003   lun-cli            active       2     0       4
 P-000   Unassigned         active       2     0       0
 
@@ -237,23 +237,23 @@ Tasks
 -----
 
 ID      Project        Title                                Status       Priority  Assignee  Branch
-T-010   paper-stack    Tune ball–chain damping params       in-progress  high      me        feat/damping-sweep
+T-010   paper-stack    Tune ball–chain damping params       doing  high      me        feat/damping-sweep
 T-011   paper-stack    Analyze restitution vs stack size    todo         medium    me
-T-012   paper-stack    Write methods section draft          review       high      me        feat/methods-draft
+T-012   paper-stack    Write methods section draft          follow-up       high      me        feat/methods-draft
 T-020   granE-friction Design frictional pack.m pipeline    todo         high      me
 T-021   granE-friction Save contact histories in pack.m     todo         medium    me
-T-030   lun-cli        Implement `lun status` command       in-progress  high      me        feat/lun-status
+T-030   lun-cli        Implement `lun status` command       doing  high      me        feat/lun-status
 T-031   lun-cli        Add markdown board view              done         low       me        feat/board-view
 T-040   Unassigned     Sketch ideas for `lun board`         todo         medium    me
 T-041   Unassigned     Refactor personal dotfiles           todo         low       me
 
-Summary: 4 projects · 9 tasks (5 todo, 2 in-progress, 1 review, 1 done)
+Summary: 4 projects · 9 tasks (5 todo, 2 doing, 1 follow-up, 1 done)
 ```
 
 **Implementation notes:**
 
-- “Open” = tasks with `status` in `{todo, in-progress}` (or as defined).
-- “Review” = tasks with `status = review`.
+- “Open” = tasks with `status` in `{todo, doing}` (or as defined).
+- “Review” = tasks with `status = follow-up`.
 - “Done” = tasks with `status = done`.
 - Any task with no project is aggregated under `P-000 Unassigned`.
 
@@ -276,12 +276,12 @@ Overview
 
 ID:        P-001
 Name:      paper-stack
-Status:    in-progress
+Status:    doing
 
 Tasks by Status:
 - todo:         2
-- in-progress:  1
-- review:       1
+- doing:  1
+- follow-up:       1
 - done:         7
 
 
@@ -289,9 +289,9 @@ Tasks
 -----
 
 ID      Title                                Status       Priority  Assignee  Branch
-T-010   Tune ball–chain damping params       in-progress  high      me        feat/damping-sweep
+T-010   Tune ball–chain damping params       doing  high      me        feat/damping-sweep
 T-011   Analyze restitution vs stack size    todo         medium    me
-T-012   Write methods section draft          review       high      me        feat/methods-draft
+T-012   Write methods section draft          follow-up       high      me        feat/methods-draft
 T-001   Set up ball–chain simulation         done         high      me        feat/chain-sim
 T-002   Implement restitution measurement    done         high      me        feat/restitution
 T-003   Explore stack length sweep           done         medium    me
@@ -300,7 +300,7 @@ T-005   Validate negligible-gravity regime   done         medium    me
 T-006   Prepare figures for restitution plot done         medium    me
 T-007   Draft introduction section           done         low       me
 
-Summary: 1 project · 11 tasks (2 todo, 1 in-progress, 1 review, 7 done)
+Summary: 1 project · 11 tasks (2 todo, 1 doing, 1 follow-up, 7 done)
 ```
 
 Also allow:
@@ -412,7 +412,7 @@ Log: paper-stack
     Status: todo, Priority: med
 
 2026-09-25 15:10  me  update-task T-012 "Write methods section draft"
-    Status: review
+    Status: follow-up
 
 2026-09-25 14:30  me  close-task T-007 "Draft introduction section"
     Status: done
@@ -440,7 +440,7 @@ Log: Task T-008 "my task title"
 
 2026-09-25 17:02  me  UPDATE
     Field changes:
-      Status:  todo -> in-progress
+      Status:  todo -> doing
     Commit: start work on "my task title"
 
 2026-09-25 17:30  me  UPDATE
@@ -453,7 +453,7 @@ Log: Task T-008 "my task title"
 
 2026-09-25 19:00  me  UPDATE
     Field changes:
-      Status:  in-progress -> done
+      Status:  doing -> done
     Commit: finish "my task title"
 ```
 
@@ -552,8 +552,8 @@ Implement the full-screen TUI invoked by `lun`, with purple/light-blue aesthetic
 - IDs: soft lavender / light purple.
 - Status colors:
   - `todo`: blue
-  - `in-progress`: bright purple
-  - `review`: magenta
+  - `doing`: bright purple
+  - `follow-up`: magenta
   - `done`: bright green
 - Errors: bright red, bold.
 - Success: bright green.
@@ -592,10 +592,10 @@ On `lun`:
   Repo:      /Users/you/projects/paper-stack
   Branch:    main
   Project:   paper-stack
-  Summary:   3 projects · 9 tasks (5 todo, 2 in-progress, 1 review, 1 done)
+  Summary:   3 projects · 9 tasks (5 todo, 2 doing, 1 follow-up, 1 done)
   ```
 
-- Board preview:
+- Board pfollow-up:
 
   ```text
   Board (paper-stack)
@@ -743,7 +743,7 @@ Log: Task T-008 "my task title"
 
 2026-09-25 17:02  me  UPDATE
     Field changes:
-      Status:  todo -> in-progress
+      Status:  todo -> doing
     Commit: start work on "my task title"
 
 2026-09-25 17:30  me  UPDATE
@@ -756,7 +756,7 @@ Log: Task T-008 "my task title"
 
 2026-09-25 19:00  me  UPDATE
     Field changes:
-      Status:  in-progress -> done
+      Status:  doing -> done
     Commit: finish "my task title"
 ```
 
@@ -787,7 +787,7 @@ Task T-050 (edit mode)
 
 Project:   lun-cli
 Title:     Design lun TUI
-Status:    in-progress
+Status:    doing
 Priority:  high
 Assignee:  me
 
@@ -830,7 +830,7 @@ Task T-050
 
 Project:   lun-cli
 Title:     Design lun TUI
-Status:    in-progress
+Status:    doing
 Priority:  high
 Assignee:  me
 
@@ -845,7 +845,7 @@ Notes:
 
 History:
 - 2026-09-25 16:10  CREATED
-- 2026-09-25 16:30  UPDATE  Status: todo -> in-progress
+- 2026-09-25 16:30  UPDATE  Status: todo -> doing
 - 2026-09-25 16:45  ATTACH  File: lun-tui-mock.png
     Commit: attach mockup "lun-tui-mock.png" to T-050
 ```
@@ -939,4 +939,3 @@ Make `lun` reliable and easy to install/use.
 - Packaging:
   - `Makefile` or `justfile` for build/install.
   - Homebrew-style instructions (future).
-

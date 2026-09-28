@@ -64,8 +64,8 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         .unwrap();
     for (title, status, priority) in [
         ("set up sim", "todo", "med"),
-        ("tune damping", "in-progress", "high"),
-        ("write methods", "review", "low"),
+        ("tune damping", "doing", "high"),
+        ("write methods", "follow-up", "low"),
         ("implement restitution", "done", "med"),
     ] {
         lun.create_task(TaskSpec {
@@ -706,7 +706,7 @@ fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
     assert_eq!(app.current_task().unwrap().status, "done");
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
-    assert_eq!(app.current_task().unwrap().status, "in-progress");
+    assert_eq!(app.current_task().unwrap().status, "doing");
     std::env::remove_var("LUN_OPEN_BIN");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -749,14 +749,17 @@ fn new_project_form_creates_project_and_selects_it() {
         app.form_type(ch);
     }
     app.form_nav(1);
-    app.form_cycle(1); // in-progress
+    app.form_cycle(1); // inactive
     app.form_nav(1);
     app.submit_form();
 
     let p = app.lun.as_ref().unwrap().project_by_name("infra").unwrap();
     assert_eq!(p.project_key, "P-002");
-    assert_eq!(p.status, "in-progress");
-    assert_eq!(app.data.projects[app.data.current_project].project_key, "P-002");
+    assert_eq!(p.status, "inactive");
+    assert_eq!(
+        app.data.projects[app.data.current_project].project_key,
+        "P-002"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -777,7 +780,9 @@ fn move_form_reassigns_task_and_writes_update_log() {
     let p0 = app.lun.as_ref().unwrap().project_by_key("P-000").unwrap();
     assert_eq!(t.project_id, Some(p0.id));
     let logs = app.lun.as_ref().unwrap().logs_for("task", t.id).unwrap();
-    assert!(logs.iter().any(|e| e.message.contains("move T-001 to Unassigned")));
+    assert!(logs
+        .iter()
+        .any(|e| e.message.contains("move T-001 to Unassigned")));
 
     let _ = std::fs::remove_dir_all(&root);
 }

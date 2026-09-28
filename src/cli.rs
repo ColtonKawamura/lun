@@ -42,6 +42,8 @@ use crate::db::{
     Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec,
 };
 
+const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
+
 /// CLI exit codes: 2 = usage/resolution error, 1 = runtime (DB/IO) error.
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_RUNTIME: u8 = 1;
@@ -258,38 +260,43 @@ pub fn json_str(details: &str, key: &str) -> Option<String> {
     Some(out)
 }
 
-/// Per-project task counts: Open = todo + in-progress, Review, Done.
-fn status_counts(tasks: &[Task]) -> (usize, usize, usize) {
-    let open = tasks
-        .iter()
-        .filter(|t| t.status == "todo" || t.status == "in-progress")
-        .count();
-    let review = tasks.iter().filter(|t| t.status == "review").count();
-    let done = tasks.iter().filter(|t| t.status == "done").count();
-    (open, review, done)
+/// Per-project task counts in board/status order.
+fn status_counts(tasks: &[Task]) -> [usize; 5] {
+    let mut counts = [0; 5];
+    for task in tasks {
+        if let Some(i) = TASK_STATUSES.iter().position(|s| *s == task.status) {
+            counts[i] += 1;
+        }
+    }
+    counts
 }
 
 fn counts_by_status(tasks: &[Task]) -> Vec<(&'static str, usize)> {
     let mut out = Vec::new();
-    for s in ["todo", "in-progress", "review", "done"] {
+    for s in TASK_STATUSES {
         out.push((s, tasks.iter().filter(|t| t.status == s).count()));
     }
     out
 }
 
-/// The plan's summary line: `Summary: N projects · M tasks (a todo, b in-progress, c review, d done)`.
+/// Summary line with all task statuses.
 pub fn summary_line(n_projects: usize, tasks: &[Task]) -> String {
-    let (t, ip, r, d) = (
-        tasks.iter().filter(|t| t.status == "todo").count(),
-        tasks.iter().filter(|t| t.status == "in-progress").count(),
-        tasks.iter().filter(|t| t.status == "review").count(),
-        tasks.iter().filter(|t| t.status == "done").count(),
-    );
+    let mut counts = [0; 5];
+    for task in tasks {
+        if let Some(i) = TASK_STATUSES.iter().position(|s| *s == task.status) {
+            counts[i] += 1;
+        }
+    }
     format!(
-        "Summary: {n_projects} project{} · {} task{} ({t} todo, {ip} in-progress, {r} review, {d} done)",
+        "Summary: {n_projects} project{} · {} task{} ({} todo, {} doing, {} follow-up, {} blocked, {} done)",
         if n_projects == 1 { "" } else { "s" },
         tasks.len(),
-        if tasks.len() == 1 { "" } else { "s" }
+        if tasks.len() == 1 { "" } else { "s" },
+        counts[0],
+        counts[1],
+        counts[2],
+        counts[3],
+        counts[4]
     )
 }
 
@@ -442,38 +449,51 @@ pub fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
 // Views (pure: App in -> markdown-ish String out)
 // ---------------------------------------------------------------------------
 
-/// `lun status` — global project table, all-task table, summary.
+fn status_name(status: &str) -> &'static str {
+    match status {
+        "todo" => "Todo",
+        "doing" => "Doing",
+        "follow-up" => "Follow-Up",
+        "blocked" => "Blocked",
+        "done" => "Done",
+        _ => "?",
+    }
+}
+
+/// `lun status` — global project table and summary.
 pub fn status_all(app: &App) -> Result<String> {
     let projects = app.lun.list_projects()?;
     let tasks = app.lun.list_tasks()?;
 
     let mut prow = Vec::new();
     for p in &projects {
-        let (open, review, done) = status_counts(&app.lun.tasks_for_project(p.id)?);
+        let counts = status_counts(&app.lun.tasks_for_project(p.id)?);
         prow.push(vec![
             p.project_key.clone(),
             p.name.clone(),
             p.status.clone(),
-            open.to_string(),
-            review.to_string(),
-            done.to_string(),
+            counts[0].to_string(),
+            counts[1].to_string(),
+            counts[2].to_string(),
+            counts[3].to_string(),
+            counts[4].to_string(),
         ]);
     }
-
-    let trow: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, true)).collect();
 
     let mut out = String::new();
     out.push_str("Projects\n--------\n\n");
     out.push_str(&render_table(
-        &["ID", "Name", "Status", "Open", "Review", "Done"],
-        &prow,
-    ));
-    out.push_str("\n\n\nTasks\n-----\n\n");
-    out.push_str(&render_table(
         &[
-            "ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch",
+            "ID",
+            "Name",
+            "Status",
+            "Todo",
+            "Doing",
+            "Follow-Up",
+            "Blocked",
+            "Done",
         ],
-        &trow,
+        &prow,
     ));
     out.push('\n');
     out.push_str(&summary_line(projects.len(), &tasks));
@@ -500,14 +520,45 @@ pub fn status_project(app: &App, query: &str) -> Result<String> {
         out.push_str(&format!("- {:<14}{}\n", format!("{s}:"), n));
     }
     out.push_str("\nTasks\n-----\n\n");
-    let trow: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, false)).collect();
+    let trow: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, true)).collect();
     out.push_str(&render_table(
-        &["ID", "Title", "Status", "Priority", "Assignee", "Branch"],
+        &[
+            "ID", "Project", "Title", "Status", "Priority", "Assignee", "Branch",
+        ],
         &trow,
     ));
     out.push('\n');
     out.push_str(&summary_line(1, &tasks));
     Ok(out)
+}
+
+pub fn status_project_board(app: &App, query: &str) -> Result<String> {
+    let p = resolve_project(&app.lun, query)?;
+    let tasks = app.lun.tasks_for_project(p.id)?;
+    let header = format!("Board: {}", p.name);
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push_str("\n\n");
+    for status in TASK_STATUSES {
+        out.push_str(&format!(
+            "{}\n{}\n",
+            status_name(status),
+            "-".repeat(status_name(status).len())
+        ));
+        let items: Vec<&Task> = tasks.iter().filter(|t| t.status == status).collect();
+        if items.is_empty() {
+            out.push_str("- (none)\n\n");
+            continue;
+        }
+        for task in items {
+            out.push_str(&format!("- {}  {}\n", task.task_key, task.title));
+        }
+        out.push('\n');
+    }
+    out.push_str(&summary_line(1, &tasks));
+    Ok(out.trim_end().to_string())
 }
 
 /// `lun task <key|title>` — fields, labels, timestamps, log history.
@@ -1153,9 +1204,15 @@ pub fn task_list(app: &App, args: &[String]) -> Result<String> {
     Ok(out)
 }
 
-pub fn task_edit(app: &App, query: &str, args: &[String]) -> Result<String> {
+pub fn task_edit(
+    app: &App,
+    query: &str,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
     let task = resolve_task(&app.lun, query)?;
     let mut spec = TaskUpdateSpec::default();
+    let mut explicit_message: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         let value = |i: usize, flag: &str, args: &[String]| {
@@ -1211,7 +1268,7 @@ pub fn task_edit(app: &App, query: &str, args: &[String]) -> Result<String> {
                 i += 2;
             }
             "--message" => {
-                spec.message = Some(value(i, "--message", args)?);
+                explicit_message = Some(value(i, "--message", args)?);
                 i += 2;
             }
             other => {
@@ -1222,6 +1279,12 @@ pub fn task_edit(app: &App, query: &str, args: &[String]) -> Result<String> {
             }
         }
     }
+    let default_message = format!("edit {}", task.task_key);
+    spec.message = Some(read_commit_message_with_optional_override(
+        stdin,
+        explicit_message,
+        &default_message,
+    )?);
     let updated = app.lun.update_task(task.id, spec)?;
     Ok(format!(
         "Updated {}: {} [{} / {}]",
@@ -1229,27 +1292,40 @@ pub fn task_edit(app: &App, query: &str, args: &[String]) -> Result<String> {
     ))
 }
 
-pub fn task_complete(app: &App, query: &str) -> Result<String> {
+pub fn task_complete(app: &App, query: &str, stdin: &mut dyn BufRead) -> Result<String> {
     let task = resolve_task(&app.lun, query)?;
-    let updated = app.lun.complete_task(task.id, None, None)?;
+    let default = format!("complete {}", task.task_key);
+    let message = read_commit_message(stdin, &default)?;
+    let updated = app.lun.complete_task(task.id, Some(&message), None)?;
     Ok(format!(
-        "Completed {} ({})",
-        updated.task_key, updated.title
+        "Completed {} ({})\nCommitted: {}",
+        updated.task_key, updated.title, message
     ))
 }
 
-pub fn task_reopen(app: &App, query: &str, args: &[String]) -> Result<String> {
+pub fn task_reopen(
+    app: &App,
+    query: &str,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
     let task = resolve_task(&app.lun, query)?;
-    let mut status: Option<&str> = None;
+    let mut status: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--status" => {
-                status = Some(
-                    args.get(i + 1)
-                        .ok_or_else(|| DbError::new("usage", "--status needs a value"))?
-                        .as_str(),
-                );
+                let raw = args
+                    .get(i + 1)
+                    .ok_or_else(|| DbError::new("usage", "--status needs a value"))?;
+                status = Some(resolve_task_status(raw).ok_or_else(|| {
+                    DbError::new(
+                        "invalid",
+                        format!(
+                            "invalid status '{raw}' (expected todo, doing, follow-up, blocked, or done)"
+                        ),
+                    )
+                })?);
                 i += 2;
             }
             other => {
@@ -1260,14 +1336,154 @@ pub fn task_reopen(app: &App, query: &str, args: &[String]) -> Result<String> {
             }
         }
     }
-    let updated = app.lun.reopen_task(task.id, status, None, None)?;
-    Ok(format!("Reopened {} ({})", updated.task_key, updated.title))
+    let target = status.as_deref().unwrap_or("doing");
+    let default = format!("reopen {} to {}", task.task_key, target);
+    let message = read_commit_message(stdin, &default)?;
+    let updated = app
+        .lun
+        .reopen_task(task.id, Some(target), Some(&message), None)?;
+    Ok(format!(
+        "Reopened {} ({})\nCommitted: {}",
+        updated.task_key, updated.title, message
+    ))
 }
 
-pub fn task_archive(app: &App, query: &str) -> Result<String> {
+pub fn task_archive(app: &App, query: &str, stdin: &mut dyn BufRead) -> Result<String> {
     let task = resolve_task(&app.lun, query)?;
-    let updated = app.lun.archive_task(task.id, None, None)?;
-    Ok(format!("Archived {} ({})", updated.task_key, updated.title))
+    let default = format!("archive {}", task.task_key);
+    let message = read_commit_message(stdin, &default)?;
+    let updated = app.lun.archive_task(task.id, Some(&message), None)?;
+    Ok(format!(
+        "Archived {} ({})\nCommitted: {}",
+        updated.task_key, updated.title, message
+    ))
+}
+
+pub fn task_set_status(
+    app: &App,
+    query: &str,
+    status: &str,
+    message: Option<String>,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let status = resolve_task_status(status).ok_or_else(|| {
+        DbError::new(
+            "invalid",
+            format!(
+                "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
+            ),
+        )
+    })?;
+    let default_message = format!("set {} status to {}", task.task_key, status);
+    let message = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    let updated = app.lun.update_task(
+        task.id,
+        TaskUpdateSpec {
+            status: Some(status.clone()),
+            message: Some(message.clone()),
+            ..Default::default()
+        },
+    )?;
+    Ok(format!(
+        "Updated {}: status -> {}\nCommitted: {}",
+        updated.task_key, status, message
+    ))
+}
+
+pub fn create_project_command(
+    app: &App,
+    name: &str,
+    status: Option<&str>,
+    message: Option<String>,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    if name.trim().is_empty() {
+        return Err(DbError::new("usage", "project name must not be empty"));
+    }
+    let resolved_status = status
+        .map(|s| {
+            resolve_project_status(s).ok_or_else(|| {
+                DbError::new(
+                    "invalid",
+                    format!("invalid project status '{s}' (expected active or inactive)"),
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or_else(|| "active".to_string());
+    let default_message = format!("create project \"{}\"", name.trim());
+    let commit = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    let project = app.lun.create_project(crate::db::ProjectSpec {
+        name: name.trim().to_string(),
+        status: Some(resolved_status),
+        message: Some(commit.clone()),
+        user: None,
+    })?;
+    Ok(format!(
+        "Created project {} [{}]\nCommitted: {}",
+        project.name, project.project_key, commit
+    ))
+}
+
+pub fn project_set_status(
+    app: &App,
+    query: &str,
+    status: &str,
+    message: Option<String>,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let project = resolve_project(&app.lun, query)?;
+    let resolved_status = resolve_project_status(status).ok_or_else(|| {
+        DbError::new(
+            "invalid",
+            format!("invalid project status '{status}' (expected active or inactive)"),
+        )
+    })?;
+    let default_message = format!("set {} status to {}", project.project_key, resolved_status);
+    let commit = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    let updated =
+        app.lun
+            .update_project_status(project.id, &resolved_status, Some(&commit), None)?;
+    Ok(format!(
+        "Updated project {} [{}]: status -> {}\nCommitted: {}",
+        updated.name, updated.project_key, updated.status, commit
+    ))
+}
+
+pub fn move_task(
+    app: &App,
+    task_query: &str,
+    project_query: &str,
+    message: Option<String>,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let task = resolve_task(&app.lun, task_query)?;
+    let source_project = app.lun.project_name_for_task(&task);
+    let target_project = resolve_project(&app.lun, project_query)?;
+    if task.project_id == Some(target_project.id) {
+        return Ok(format!(
+            "{} already in {}",
+            task.task_key, target_project.name
+        ));
+    }
+    let default_message = format!(
+        "Moved task from \"{}\" to \"{}\"",
+        source_project, target_project.name
+    );
+    let commit = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    app.lun.update_task(
+        task.id,
+        TaskUpdateSpec {
+            project_id: Some(target_project.id),
+            message: Some(commit.clone()),
+            ..Default::default()
+        },
+    )?;
+    Ok(format!(
+        "Moved {} from {} to {}\nCommitted: {}",
+        task.task_key, source_project, target_project.name, commit
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -1285,61 +1501,99 @@ fn read_prompt(stdin: &mut dyn BufRead, label: &str) -> Result<String> {
 }
 
 fn valid_task_status(s: &str) -> bool {
-    matches!(s, "todo" | "in-progress" | "review" | "done")
+    matches!(s, "todo" | "doing" | "follow-up" | "blocked" | "done")
+}
+
+fn valid_project_status(s: &str) -> bool {
+    matches!(s, "active" | "inactive")
 }
 
 fn valid_priority(s: &str) -> bool {
     matches!(s, "low" | "med" | "high")
 }
 
-/// `lun proj add task "<title>"`.
+fn resolve_task_status(value: &str) -> Option<String> {
+    match value {
+        "in-progress" => Some("doing".to_string()),
+        "review" => Some("follow-up".to_string()),
+        other if valid_task_status(other) => Some(other.to_string()),
+        _ => None,
+    }
+}
+
+fn resolve_project_status(value: &str) -> Option<String> {
+    match value {
+        "planning" | "in-progress" => Some("active".to_string()),
+        "done" => Some("inactive".to_string()),
+        other if valid_project_status(other) => Some(other.to_string()),
+        _ => None,
+    }
+}
+
+fn read_commit_message(stdin: &mut dyn BufRead, default: &str) -> Result<String> {
+    let ans = read_prompt(stdin, "Commit Message: ")?;
+    if ans.is_empty() {
+        Ok(default.to_string())
+    } else {
+        Ok(ans)
+    }
+}
+
+fn read_commit_message_with_optional_override(
+    stdin: &mut dyn BufRead,
+    explicit: Option<String>,
+    default: &str,
+) -> Result<String> {
+    if let Some(message) = explicit {
+        Ok(message)
+    } else {
+        read_commit_message(stdin, default)
+    }
+}
+
+/// `lun add task "<title>" [proj "<name|P-00N>"]`.
 ///
 /// Prompts (printed to stderr; empty input accepts the default):
-/// - `Status?:` (default: todo; must be todo|in-progress|review|done)
-/// - `Priority?:` (default: low; must be low|med|high)
+/// - `Status? (todo, doing, follow-up, blocked, done):` (default: todo)
+/// - `Priority? (low, med, or high):` (default: low)
 /// - `Assignee? (default: me):`
-/// - `Project?:` — default is the sole project when exactly one exists,
-///   otherwise Unassigned (P-000); accepts a project name or key.
-/// - `Commit message?:` — default `add task "<title>" to <project>` (the
-///   same default the DB layer would use).
+/// - `Commit Message:` — default `add task "<title>" to <project>`.
 ///
 /// Returns the two-line user output:
 /// `Created task T-00N in project X` / `Committed: <msg>`.
-pub fn create_task(app: &App, title: &str, stdin: &mut dyn BufRead) -> Result<String> {
+pub fn create_task(
+    app: &App,
+    title: &str,
+    project_query: Option<&str>,
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
     if title.trim().is_empty() {
         return Err(DbError::new(
             "usage",
             "task title must not be empty (quote titles with whitespace)",
         ));
     }
-    let projects = app.lun.list_projects()?;
-    // Default project: the sole user project if exactly one exists, otherwise
-    // the implicit P-000 Unassigned bucket (P-000 never counts as a user pick).
-    let user_projects: Vec<_> = projects
-        .iter()
-        .filter(|p| p.project_key != "P-000")
-        .cloned()
-        .collect();
-    let default_project = if user_projects.len() == 1 {
-        user_projects.into_iter().next().unwrap()
+    let project = if let Some(query) = project_query {
+        resolve_project(&app.lun, query)?
     } else {
         app.lun.project_by_key("P-000")?
     };
 
-    let status = read_prompt(stdin, "Status?: ")?;
+    let status = read_prompt(stdin, "Status? (todo, doing, follow-up, blocked, done): ")?;
     let status = if status.is_empty() {
         "todo".to_string()
     } else {
-        if !valid_task_status(&status) {
-            return Err(DbError::new(
+        resolve_task_status(&status).ok_or_else(|| {
+            DbError::new(
                 "invalid",
-                format!("invalid status '{status}' (expected todo, in-progress, review, or done)"),
-            ));
-        }
-        status
+                format!(
+                    "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
+                ),
+            )
+        })?
     };
 
-    let priority = read_prompt(stdin, "Priority?: ")?;
+    let priority = read_prompt(stdin, "Priority? (low, med, or high): ")?;
     let priority = if priority.is_empty() {
         "low".to_string()
     } else {
@@ -1359,17 +1613,8 @@ pub fn create_task(app: &App, title: &str, stdin: &mut dyn BufRead) -> Result<St
         assignee
     };
 
-    // Project: the sole user project when exactly one exists, otherwise the
-    // implicit P-000 Unassigned bucket (the plan's flow has no project prompt).
-    let project = default_project;
-
     let default_msg = format!("add task \"{title}\" to {}", project.name);
-    let msg_ans = read_prompt(stdin, &format!("Commit message?: "))?;
-    let message = if msg_ans.is_empty() {
-        default_msg
-    } else {
-        msg_ans
-    };
+    let message = read_commit_message(stdin, &default_msg)?;
 
     let task = app.lun.create_task(TaskSpec {
         title: title.to_string(),
@@ -1659,6 +1904,25 @@ fn git_merge_note(root: &Path, source: &str, target: &str) -> Option<String> {
     }
 }
 
+fn parse_message_flag(args: &[String]) -> Result<(Vec<String>, Option<String>)> {
+    let mut out = Vec::new();
+    let mut message: Option<String> = None;
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--message" {
+            let value = args
+                .get(i + 1)
+                .ok_or_else(|| DbError::new("usage", "--message needs a value"))?;
+            message = Some(value.clone());
+            i += 2;
+        } else {
+            out.push(args[i].clone());
+            i += 1;
+        }
+    }
+    Ok((out, message))
+}
+
 // ---------------------------------------------------------------------------
 // Dispatch (used by the binary)
 // ---------------------------------------------------------------------------
@@ -1745,48 +2009,226 @@ fn run_pr(app: &App, args: &[String]) -> Result<String> {
     }
 }
 
-/// Dispatch already-split argv (without the program name) to a command.
-/// Prints the result to stdout, errors to stderr, and returns the exit code.
-/// (2 = usage/resolution error, 1 = runtime (DB/IO) error.)
-pub fn run(app: &App, args: &[String]) -> ExitCode {
-    let result: Result<String> = match args.first().map(String::as_str) {
+fn run_result(app: &App, args: &[String]) -> Result<String> {
+    match args.first().map(String::as_str) {
         Some("status") => match args.get(1) {
             None => status_all(app),
-            Some(q) => status_project(app, q),
+            Some(q) => {
+                let board = args.iter().skip(2).any(|a| a == "--board");
+                if board {
+                    status_project_board(app, q)
+                } else {
+                    status_project(app, q)
+                }
+            }
         },
-        Some("proj") => match (args.get(1), args.get(2), args.get(3)) {
-            (Some(a), Some(b), Some(title)) if a == "add" && b == "task" => {
+        Some("new") => match args.get(1).map(String::as_str) {
+            Some("proj") | Some("project") => {
+                let name = args
+                    .get(2)
+                    .ok_or_else(|| DbError::new("usage", "expected: lun new proj \"<name>\""))?;
+                let (filtered, message) = parse_message_flag(&args[3..])?;
+                let mut status: Option<&str> = None;
+                let mut i = 0;
+                while i < filtered.len() {
+                    match filtered[i].as_str() {
+                        "--status" => {
+                            status = Some(
+                                filtered
+                                    .get(i + 1)
+                                    .ok_or_else(|| DbError::new("usage", "--status needs a value"))?,
+                            );
+                            i += 2;
+                        }
+                        other => {
+                            return Err(DbError::new(
+                                "usage",
+                                format!("unexpected argument '{other}' for lun new proj"),
+                            ))
+                        }
+                    }
+                }
                 let stdin = std::io::stdin();
                 let mut reader = std::io::BufReader::new(stdin.lock());
-                create_task(app, title, &mut reader)
+                create_project_command(app, name, status, message, &mut reader)
             }
             _ => Err(DbError::new(
                 "usage",
-                "expected: lun proj add task \"<title>\"",
+                "expected: lun new proj \"<name>\" [--status active|inactive] [--message \"...\"]",
             )),
         },
+        Some("add") => match args.get(1).map(String::as_str) {
+            Some("task") => {
+                let title = args
+                    .get(2)
+                    .ok_or_else(|| DbError::new("usage", "expected: lun add task \"<title>\" [proj \"<project>\"]"))?;
+                let mut project_query: Option<&str> = None;
+                let mut i = 3;
+                while i < args.len() {
+                    match args[i].as_str() {
+                        "proj" | "project" => {
+                            project_query = Some(
+                                args.get(i + 1)
+                                    .ok_or_else(|| DbError::new("usage", "proj needs a project name or key"))?,
+                            );
+                            i += 2;
+                        }
+                        other => {
+                            return Err(DbError::new(
+                                "usage",
+                                format!(
+                                    "unexpected argument '{other}' (expected: lun add task \"<title>\" [proj \"<project>\"])"
+                                ),
+                            ))
+                        }
+                    }
+                }
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                create_task(app, title, project_query, &mut reader)
+            }
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun add task \"<title>\" [proj \"<project>\"]",
+            )),
+        },
+        Some("proj") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(a), Some(b), Some(title)) if a == "add" && b == "task" => {
+                let projects = app.lun.list_projects()?;
+                let user_projects: Vec<_> = projects
+                    .iter()
+                    .filter(|p| p.project_key != "P-000")
+                    .collect();
+                let project_query = if user_projects.len() == 1 {
+                    Some(user_projects[0].name.as_str())
+                } else {
+                    None
+                };
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                create_task(app, title, project_query, &mut reader)
+            }
+            _ => {
+                let query = args
+                    .get(1)
+                    .ok_or_else(|| DbError::new("usage", "expected: lun proj <name|P-00N> --status <active|inactive>"))?;
+                let (filtered, message) = parse_message_flag(&args[2..])?;
+                let mut status: Option<&str> = None;
+                let mut i = 0;
+                while i < filtered.len() {
+                    match filtered[i].as_str() {
+                        "--status" => {
+                            status = Some(
+                                filtered
+                                    .get(i + 1)
+                                    .ok_or_else(|| DbError::new("usage", "--status needs a value"))?,
+                            );
+                            i += 2;
+                        }
+                        other => {
+                            return Err(DbError::new(
+                                "usage",
+                                format!("unexpected argument '{other}' for lun proj"),
+                            ))
+                        }
+                    }
+                }
+                let status = status.ok_or_else(|| {
+                    DbError::new(
+                        "usage",
+                        "expected: lun proj <name|P-00N> --status <active|inactive> [--message \"...\"]",
+                    )
+                })?;
+                let stdin = std::io::stdin();
+                let mut reader = std::io::BufReader::new(stdin.lock());
+                project_set_status(app, query, status, message, &mut reader)
+            }
+        },
+        Some("move") => {
+            let task_query = args
+                .get(1)
+                .ok_or_else(|| DbError::new("usage", "expected: lun move \"<task>\" \"<project>\""))?;
+            let project_query = args
+                .get(2)
+                .ok_or_else(|| DbError::new("usage", "expected: lun move \"<task>\" \"<project>\""))?;
+            let (_, message) = parse_message_flag(&args[3..])?;
+            let stdin = std::io::stdin();
+            let mut reader = std::io::BufReader::new(stdin.lock());
+            move_task(app, task_query, project_query, message, &mut reader)
+        }
         Some("task") => match args.get(1) {
             Some(sub) if sub == "ls" => task_list(app, &args[2..]),
             Some(sub) if sub == "edit" => match args.get(2) {
-                Some(q) => task_edit(app, q, &args[3..]),
+                Some(q) => {
+                    let stdin = std::io::stdin();
+                    let mut reader = std::io::BufReader::new(stdin.lock());
+                    task_edit(app, q, &args[3..], &mut reader)
+                }
                 None => Err(DbError::new("usage", "expected: lun task edit <key|title> [flags]")),
             },
             Some(sub) if sub == "complete" => match args.get(2) {
-                Some(q) => task_complete(app, q),
+                Some(q) => {
+                    let stdin = std::io::stdin();
+                    let mut reader = std::io::BufReader::new(stdin.lock());
+                    task_complete(app, q, &mut reader)
+                }
                 None => Err(DbError::new("usage", "expected: lun task complete <key|title>")),
             },
             Some(sub) if sub == "reopen" => match args.get(2) {
-                Some(q) => task_reopen(app, q, &args[3..]),
+                Some(q) => {
+                    let stdin = std::io::stdin();
+                    let mut reader = std::io::BufReader::new(stdin.lock());
+                    task_reopen(app, q, &args[3..], &mut reader)
+                }
                 None => Err(DbError::new("usage", "expected: lun task reopen <key|title>")),
             },
             Some(sub) if sub == "archive" || sub == "delete" => match args.get(2) {
-                Some(q) => task_archive(app, q),
+                Some(q) => {
+                    let stdin = std::io::stdin();
+                    let mut reader = std::io::BufReader::new(stdin.lock());
+                    task_archive(app, q, &mut reader)
+                }
                 None => Err(DbError::new("usage", "expected: lun task archive <key|title>")),
             },
-            Some(q) => task_view(app, q),
+            Some(q) => {
+                if args.len() == 2 {
+                    task_view(app, q)
+                } else {
+                    let (filtered, message) = parse_message_flag(&args[2..])?;
+                    let mut status: Option<&str> = None;
+                    let mut i = 0;
+                    while i < filtered.len() {
+                        match filtered[i].as_str() {
+                            "--status" => {
+                                status = Some(
+                                    filtered
+                                        .get(i + 1)
+                                        .ok_or_else(|| DbError::new("usage", "--status needs a value"))?,
+                                );
+                                i += 2;
+                            }
+                            other => {
+                                return Err(DbError::new(
+                                    "usage",
+                                    format!("unexpected argument '{other}' for lun task"),
+                                ))
+                            }
+                        }
+                    }
+                    let status = status.ok_or_else(|| {
+                        DbError::new(
+                            "usage",
+                            "expected: lun task <key|title> [--status <todo|doing|follow-up|blocked|done>] [--message \"...\"]",
+                        )
+                    })?;
+                    let stdin = std::io::stdin();
+                    let mut reader = std::io::BufReader::new(stdin.lock());
+                    task_set_status(app, q, status, message, &mut reader)
+                }
+            }
             None => Err(DbError::new(
                 "usage",
-                "expected: lun task <key|title> | task ls | task edit | task complete | task reopen | task archive",
+                "expected: lun task <key|title> [--status ...] | task ls | task edit | task complete | task reopen | task archive",
             )),
         },
         Some("log") => match args.get(1) {
@@ -1857,7 +2299,14 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
             format!("command '{other}' not implemented (see `lun --help`)"),
         )),
         None => Err(DbError::new("usage", "no command given (see `lun --help`)")),
-    };
+    }
+}
+
+/// Dispatch already-split argv (without the program name) to a command.
+/// Prints the result to stdout, errors to stderr, and returns the exit code.
+/// (2 = usage/resolution error, 1 = runtime (DB/IO) error.)
+pub fn run(app: &App, args: &[String]) -> ExitCode {
+    let result = run_result(app, args);
 
     match result {
         Ok(out) => {

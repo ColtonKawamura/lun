@@ -12,7 +12,7 @@
 use rusqlite::{params, types::Value, Connection};
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 5;
+pub const CURRENT_VERSION: i64 = 6;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -93,7 +93,7 @@ pub struct Link {
 #[derive(Debug, Clone, Default)]
 pub struct ProjectSpec {
     pub name: String,
-    /// `planning`, `active`, `in-progress`, or `done`. Defaults to `active`.
+    /// `active` or `inactive`. Defaults to `active`.
     pub status: Option<String>,
     /// Commit-style message for the log entry. Defaults to `create project "<name>"`.
     pub message: Option<String>,
@@ -106,7 +106,7 @@ pub struct TaskSpec {
     pub title: String,
     /// Project the task belongs to; `None` falls back to P-000 "Unassigned".
     pub project: Option<i64>,
-    /// `todo`, `in-progress`, `review`, `done`. Defaults to `todo`.
+    /// `todo`, `doing`, `follow-up`, `blocked`, or `done`. Defaults to `todo`.
     pub status: Option<String>,
     /// `low`, `med`, `high`. Defaults to `low`.
     pub priority: Option<String>,
@@ -239,6 +239,45 @@ impl std::fmt::Debug for Lun {
 }
 
 impl Lun {
+    fn normalize_project_status(status: &str) -> String {
+        match status {
+            "inactive" | "done" => "inactive".to_string(),
+            _ => "active".to_string(),
+        }
+    }
+
+    fn normalize_task_status(status: &str) -> String {
+        match status {
+            "in-progress" => "doing".to_string(),
+            "review" => "follow-up".to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    fn validate_project_status(status: &str) -> Result<()> {
+        if matches!(status, "active" | "inactive") {
+            Ok(())
+        } else {
+            Err(DbError::new(
+                "invalid",
+                format!("invalid project status '{status}' (expected active or inactive)"),
+            ))
+        }
+    }
+
+    fn validate_task_status(status: &str) -> Result<()> {
+        if matches!(status, "todo" | "doing" | "follow-up" | "blocked" | "done") {
+            Ok(())
+        } else {
+            Err(DbError::new(
+                "invalid",
+                format!(
+                    "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
+                ),
+            ))
+        }
+    }
+
     /// Open (creating if needed) `.lun/lun.db` under `root`, ensure the
     /// directory exists, and run any pending migrations.
     ///
@@ -266,8 +305,9 @@ impl Lun {
                 format!("{} does not exist; run `lun init` first", path.display()),
             ));
         }
-        let conn = Connection::open(&path)?;
+        let mut conn = Connection::open(&path)?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        Self::migrate(&mut conn)?;
         Ok(Self { conn })
     }
 
@@ -294,7 +334,7 @@ impl Lun {
                     project_key TEXT NOT NULL UNIQUE,
                     name        TEXT NOT NULL,
                     status      TEXT NOT NULL DEFAULT 'active'
-                               CHECK (status IN ('planning', 'active', 'in-progress', 'done')),
+                              CHECK (status IN ('active', 'inactive')),
                     created_at  TEXT NOT NULL,
                     updated_at  TEXT NOT NULL
                  );
@@ -304,7 +344,7 @@ impl Lun {
                     project_id  INTEGER REFERENCES projects(id),
                     title       TEXT NOT NULL,
                     status      TEXT NOT NULL DEFAULT 'todo'
-                               CHECK (status IN ('todo', 'in-progress', 'review', 'done')),
+                               CHECK (status IN ('todo', 'doing', 'follow-up', 'blocked', 'done')),
                     priority    TEXT NOT NULL DEFAULT 'low'
                                CHECK (priority IN ('low', 'med', 'high')),
                     assignee    TEXT,
@@ -416,6 +456,152 @@ impl Lun {
             )?;
         }
 
+        if version < 6 {
+            let table_exists = |name: &str| -> Result<bool> {
+                let exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                    [name],
+                    |r| r.get(0),
+                )?;
+                Ok(exists > 0)
+            };
+            let has_attachments = table_exists("attachments")?;
+            let has_links = table_exists("links")?;
+            let has_prs = table_exists("prs")?;
+
+            let mut sql = String::new();
+            if has_attachments {
+                sql.push_str("ALTER TABLE attachments RENAME TO attachments_v5;");
+            }
+            if has_links {
+                sql.push_str("ALTER TABLE links RENAME TO links_v5;");
+            }
+            if has_prs {
+                sql.push_str("ALTER TABLE prs RENAME TO prs_v5;");
+            }
+            sql.push_str(
+                "ALTER TABLE projects RENAME TO projects_v5;
+                ALTER TABLE tasks RENAME TO tasks_v5;
+                CREATE TABLE projects (
+                   id          INTEGER PRIMARY KEY,
+                   project_key TEXT NOT NULL UNIQUE,
+                   name        TEXT NOT NULL,
+                   status      TEXT NOT NULL DEFAULT 'active'
+                              CHECK (status IN ('active', 'inactive')),
+                   created_at  TEXT NOT NULL,
+                   updated_at  TEXT NOT NULL
+                );
+                CREATE TABLE tasks (
+                   id          INTEGER PRIMARY KEY,
+                   task_key    TEXT NOT NULL UNIQUE,
+                   project_id  INTEGER REFERENCES projects(id),
+                   title       TEXT NOT NULL,
+                   status      TEXT NOT NULL DEFAULT 'todo'
+                              CHECK (status IN ('todo', 'doing', 'follow-up', 'blocked', 'done')),
+                   priority    TEXT NOT NULL DEFAULT 'low'
+                              CHECK (priority IN ('low', 'med', 'high')),
+                   assignee    TEXT,
+                   branch      TEXT,
+                   labels      TEXT NOT NULL DEFAULT '[]',
+                   created_at  TEXT NOT NULL,
+                   updated_at  TEXT NOT NULL,
+                   notes       TEXT NOT NULL DEFAULT '',
+                   archived_at TEXT
+                );
+                CREATE TABLE attachments (
+                   id          INTEGER PRIMARY KEY,
+                   task_id     INTEGER REFERENCES tasks(id),
+                   project_id  INTEGER REFERENCES projects(id),
+                   filename    TEXT NOT NULL,
+                   stored_path TEXT NOT NULL,
+                   created_at  TEXT NOT NULL,
+                   CHECK ((task_id IS NULL) <> (project_id IS NULL))
+                );
+                CREATE TABLE links (
+                   id          INTEGER PRIMARY KEY,
+                   task_id     INTEGER REFERENCES tasks(id),
+                   project_id  INTEGER REFERENCES projects(id),
+                   label       TEXT NOT NULL,
+                   uri         TEXT NOT NULL,
+                   created_at  TEXT NOT NULL,
+                   CHECK ((task_id IS NULL) <> (project_id IS NULL))
+                );
+                CREATE TABLE prs (
+                   id            INTEGER PRIMARY KEY,
+                   pr_key        TEXT NOT NULL UNIQUE,
+                   task_id       INTEGER NOT NULL REFERENCES tasks(id),
+                   source_branch TEXT NOT NULL,
+                   target_branch TEXT NOT NULL,
+                   status        TEXT NOT NULL DEFAULT 'open'
+                               CHECK (status IN ('open', 'merged')),
+                   created_at    TEXT NOT NULL,
+                   merged_at     TEXT
+                );
+                INSERT INTO projects (id, project_key, name, status, created_at, updated_at)
+                SELECT id,
+                       project_key,
+                       name,
+                       CASE
+                           WHEN status = 'inactive' THEN 'inactive'
+                           WHEN status = 'done' THEN 'inactive'
+                           ELSE 'active'
+                       END,
+                       created_at,
+                       updated_at
+                  FROM projects_v5;
+                INSERT INTO tasks (id, task_key, project_id, title, status, priority, assignee, branch, labels, created_at, updated_at, notes, archived_at)
+                SELECT id,
+                       task_key,
+                       project_id,
+                       title,
+                       CASE
+                           WHEN status = 'in-progress' THEN 'doing'
+                           WHEN status = 'review' THEN 'follow-up'
+                           ELSE status
+                       END,
+                       priority,
+                       assignee,
+                       branch,
+                       labels,
+                       created_at,
+                       updated_at,
+                       notes,
+                       archived_at
+                  FROM tasks_v5;",
+            );
+            if has_attachments {
+                sql.push_str(
+                   "INSERT INTO attachments (id, task_id, project_id, filename, stored_path, created_at)
+                    SELECT id, task_id, project_id, filename, stored_path, created_at
+                      FROM attachments_v5;
+                    DROP TABLE attachments_v5;",
+                );
+            }
+            if has_links {
+                sql.push_str(
+                    "INSERT INTO links (id, task_id, project_id, label, uri, created_at)
+                    SELECT id, task_id, project_id, label, uri, created_at
+                      FROM links_v5;
+                    DROP TABLE links_v5;",
+                );
+            }
+            if has_prs {
+                sql.push_str(
+                   "INSERT INTO prs (id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at)
+                    SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+                      FROM prs_v5;
+                    DROP TABLE prs_v5;",
+                );
+            }
+            sql.push_str(
+                "DROP TABLE tasks_v5;
+                DROP TABLE projects_v5;
+                INSERT INTO migrations (version, applied_at)
+                    VALUES (6, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+            );
+            conn.execute_batch(&sql)?;
+        }
+
         let version: i64 = conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM migrations",
             [],
@@ -486,7 +672,8 @@ impl Lun {
     /// at P-001). Writes a `CREATE` log entry.
     pub fn create_project(&self, spec: ProjectSpec) -> Result<Project> {
         let user = spec.user.as_deref().unwrap_or(DEFAULT_USER);
-        let status = spec.status.unwrap_or_else(|| "active".to_string());
+        let status = Self::normalize_project_status(spec.status.as_deref().unwrap_or("active"));
+        Self::validate_project_status(&status)?;
         let key = self.next_project_key()?;
         let now = Self::now();
 
@@ -517,6 +704,53 @@ impl Lun {
             created_at: now.clone(),
             updated_at: now,
         })
+    }
+
+    pub fn update_project_status(
+        &self,
+        project_id: i64,
+        status: &str,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Project> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let mut project = self
+            .conn
+            .query_row(
+                "SELECT id, project_key, name, status, created_at, updated_at
+                 FROM projects WHERE id = ?1",
+                [project_id],
+                Self::project_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("project {project_id}: {e}")))?;
+        let target = Self::normalize_project_status(status);
+        Self::validate_project_status(&target)?;
+        if project.status == target {
+            return Ok(project);
+        }
+        let now = Self::now();
+        self.conn.execute(
+            "UPDATE projects SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            params![target, now, project_id],
+        )?;
+        let changes = format!("status: {} -> {}", project.status, target);
+        let message = message.map(str::to_string).unwrap_or_else(|| {
+            format!(
+                "update project {} status to {}",
+                project.project_key, target
+            )
+        });
+        self.log(
+            "project",
+            project_id,
+            "UPDATE",
+            &message,
+            &format!("{{\"changes\": \"{}\"}}", Self::json_escape(&changes)),
+            Some(user),
+        )?;
+        project.status = target;
+        project.updated_at = now;
+        Ok(project)
     }
 
     /// All projects ordered by key.
@@ -563,7 +797,8 @@ impl Lun {
     /// Writes a `CREATE` log entry.
     pub fn create_task(&self, spec: TaskSpec) -> Result<Task> {
         let user = spec.user.as_deref().unwrap_or(DEFAULT_USER);
-        let status = spec.status.unwrap_or_else(|| "todo".to_string());
+        let status = Self::normalize_task_status(spec.status.as_deref().unwrap_or("todo"));
+        Self::validate_task_status(&status)?;
         let priority = spec.priority.unwrap_or_else(|| "low".to_string());
         let labels = spec.labels.unwrap_or_else(|| "[]".to_string());
         let key = self.next_task_key()?;
@@ -866,6 +1101,8 @@ impl Lun {
             }
         }
         if let Some(status) = spec.status {
+            let status = Self::normalize_task_status(&status);
+            Self::validate_task_status(&status)?;
             if status != task.status {
                 changes.push(format!("status: {} -> {}", task.status, status));
                 task.status = status;
@@ -992,7 +1229,8 @@ impl Lun {
         user: Option<&str>,
     ) -> Result<Task> {
         let task = self.task_by_id(task_id)?;
-        let target_status = status.unwrap_or("in-progress");
+        let target_status = Self::normalize_task_status(status.unwrap_or("doing"));
+        Self::validate_task_status(&target_status)?;
         self.update_task(
             task_id,
             TaskUpdateSpec {

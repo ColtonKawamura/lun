@@ -72,9 +72,9 @@ pub enum TaskFocus {
     Links,
 }
 
-const TASK_STATUSES: [&str; 4] = ["todo", "in-progress", "review", "done"];
+const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const TASK_PRIORITIES: [&str; 3] = ["low", "med", "high"];
-const PROJECT_STATUSES: [&str; 4] = ["planning", "active", "in-progress", "done"];
+const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewTaskFormDraft {
@@ -139,6 +139,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         name: "/task",
         description: "View a task: /task <T-00N|title> (default: current task)",
         view: Some(View::Task),
+    },
+    SlashCommand {
+        name: "/new",
+        description: "Create a new item: /new task|proj",
+        view: Some(View::Placeholder),
     },
     SlashCommand {
         name: "/new-task",
@@ -284,7 +289,7 @@ impl App {
         self.form = Some(FormState::NewProject(NewProjectFormDraft {
             field: 0,
             name: String::new(),
-            status_index: 1, // active
+            status_index: 0, // active
         }));
     }
 
@@ -411,7 +416,10 @@ impl App {
                     return;
                 }
                 let Some(lun) = self.lun.as_ref() else {
-                    self.message = Some(("no store attached — create task unavailable".to_string(), true));
+                    self.message = Some((
+                        "no store attached — create task unavailable".to_string(),
+                        true,
+                    ));
                     return;
                 };
                 let Some(project) = self.data.projects.get(d.project_index) else {
@@ -457,7 +465,9 @@ impl App {
                         if let Some(pos) = self.data.tasks.iter().position(|t| t.id == task.id) {
                             self.task_selected = pos;
                         }
-                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == project_id) {
+                        if let Some(pos) =
+                            self.data.projects.iter().position(|p| p.id == project_id)
+                        {
                             self.data.current_project = pos;
                             self.project_selected = pos;
                         }
@@ -487,7 +497,10 @@ impl App {
                     return;
                 }
                 let Some(lun) = self.lun.as_ref() else {
-                    self.message = Some(("no store attached — create project unavailable".to_string(), true));
+                    self.message = Some((
+                        "no store attached — create project unavailable".to_string(),
+                        true,
+                    ));
                     return;
                 };
                 match lun.create_project(ProjectSpec {
@@ -498,7 +511,9 @@ impl App {
                 }) {
                     Ok(project) => {
                         let _ = self.refresh_from_store();
-                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == project.id) {
+                        if let Some(pos) =
+                            self.data.projects.iter().position(|p| p.id == project.id)
+                        {
                             self.data.current_project = pos;
                             self.project_selected = pos;
                         }
@@ -549,14 +564,18 @@ impl App {
                         if let Some(pos) = self.data.tasks.iter().position(|t| t.id == updated.id) {
                             self.task_selected = pos;
                         }
-                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == target.id) {
+                        if let Some(pos) = self.data.projects.iter().position(|p| p.id == target.id)
+                        {
                             self.data.current_project = pos;
                             self.project_selected = pos;
                         }
                         self.form = None;
                         self.view = View::Task;
                         self.message = Some((
-                            format!("Moved {} to {} [{}]", task_key, target.name, target.project_key),
+                            format!(
+                                "Moved {} to {} [{}]",
+                                task_key, target.name, target.project_key
+                            ),
                             false,
                         ));
                     }
@@ -708,6 +727,22 @@ impl App {
                 return;
             }
             Some(view) => {
+                if cmd.name == "/new" {
+                    let subject = rest.trim();
+                    if subject.eq_ignore_ascii_case("proj")
+                        || subject.eq_ignore_ascii_case("project")
+                    {
+                        self.enter_view(View::NewProject, "");
+                        return;
+                    }
+                    if subject.eq_ignore_ascii_case("task") {
+                        self.enter_view(View::NewTask, "");
+                        return;
+                    }
+                    self.close_palette();
+                    self.message = Some(("usage: /new proj  (or /new task)".to_string(), true));
+                    return;
+                }
                 self.enter_view(view, &rest);
             }
         }
@@ -1027,7 +1062,7 @@ impl App {
             return;
         };
         let result = if done {
-            lun.reopen_task(task_id, Some("in-progress"), None, None)
+            lun.reopen_task(task_id, Some("doing"), None, None)
         } else {
             lun.complete_task(task_id, None, None)
         };
@@ -1262,7 +1297,11 @@ impl App {
         }
         let _ = self.refresh_from_store();
         self.message = Some((
-            format!("Linked {} file path(s) on project {}", paths.len(), project.project_key),
+            format!(
+                "Linked {} file path(s) on project {}",
+                paths.len(),
+                project.project_key
+            ),
             false,
         ));
     }
@@ -1345,7 +1384,9 @@ impl App {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStringExt;
-            Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+            Some(std::path::PathBuf::from(std::ffi::OsString::from_vec(
+                bytes,
+            )))
         }
         #[cfg(not(unix))]
         {

@@ -80,8 +80,8 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         .unwrap();
     for (title, status, priority) in [
         ("set up sim", "todo", "med"),
-        ("tune damping", "in-progress", "high"),
-        ("write methods", "review", "low"),
+        ("tune damping", "doing", "high"),
+        ("write methods", "follow-up", "low"),
         ("implement restitution", "done", "med"),
     ] {
         lun.create_task(TaskSpec {
@@ -136,7 +136,8 @@ fn data_board_columns_partition_by_status() {
     assert_eq!(titles[0], vec!["set up sim"]);
     assert_eq!(titles[1], vec!["tune damping"]);
     assert_eq!(titles[2], vec!["write methods"]);
-    assert_eq!(titles[3], vec!["implement restitution"]);
+    assert_eq!(titles[3], Vec::<&str>::new());
+    assert_eq!(titles[4], vec!["implement restitution"]);
     drop(lun);
     drop(root);
 }
@@ -147,7 +148,7 @@ fn data_summary_counts_exact() {
     let d = data::load(&lun, "0.1.0", "p", "b".into(), None).unwrap();
     assert_eq!(
         d.summary(),
-        "2 projects \u{b7} 4 tasks (1 todo, 1 in-progress, 1 review, 1 done)"
+        "2 projects \u{b7} 4 tasks (1 todo, 1 doing, 1 follow-up, 0 blocked, 1 done)"
     );
     drop(lun);
     drop(root);
@@ -169,7 +170,7 @@ fn palette_opens_filters_and_executes() {
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     assert!(app.palette_open);
     assert_eq!(app.palette_query, "");
-    assert_eq!(app.filtered_commands().len(), 11);
+    assert_eq!(app.filtered_commands().len(), 12);
 
     // Filtering narrows the list (the plan's "/sta" example shape).
     term::handle_key(&mut app, &key(KeyCode::Char('s')));
@@ -308,7 +309,9 @@ fn initial_screen_renders_banner_context_and_board() {
     assert!(s.contains("main"));
     assert!(s.contains("Project:"));
     assert!(s.contains("paper-stack"));
-    assert!(s.contains("2 projects \u{b7} 4 tasks (1 todo, 1 in-progress, 1 review, 1 done)"));
+    assert!(
+        s.contains("2 projects \u{b7} 4 tasks (1 todo, 1 doing, 1 follow-up, 0 blocked, 1 done)")
+    );
 
     // Board preview sections + task keys/titles.
     assert!(s.contains("BOARD (PAPER-STACK)"));
@@ -456,14 +459,14 @@ fn status_view_lists_projects_and_all_tasks() {
 }
 
 #[test]
-fn board_view_renders_four_columns() {
+fn board_view_renders_five_columns() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     app.data.current_project = 1;
     app.view = View::Board;
     let s = screen(&app, 120, 24);
     assert!(s.contains("BOARD (PAPER-STACK)"));
-    for col in ["Todo", "In Progress", "Review", "Done"] {
+    for col in ["Todo", "Doing", "Follow-Up", "Blocked", "Done"] {
         assert!(s.contains(col), "missing column {col}");
     }
     assert!(s.contains("T-001"));

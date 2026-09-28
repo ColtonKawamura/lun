@@ -7,7 +7,7 @@
 //!
 //! Views: initial screen (banner, context, board preview, hint bar),
 //! slash command palette (`/`), `/status`, `/board`, `/project`, `/help`,
-//! plus task/log/detail flows and forms like `/new-task`, `/new-project`,
+//! plus task/log/detail flows and forms like `/new-task`, `/new proj`,
 //! and `/move` in later phases.
 
 pub mod app;

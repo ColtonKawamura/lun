@@ -171,7 +171,7 @@ fn fresh_init_reaches_current_schema_with_all_tables() {
     let root = temp_root("fresh");
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 5);
+    assert_eq!(schema_version(&conn), 6);
     assert_eq!(
         table_count(
             &conn,
@@ -209,7 +209,7 @@ fn fresh_init_reaches_current_schema_with_all_tables() {
         )
         .unwrap();
     assert_eq!(task_cols, 1);
-    assert_eq!(lun::db::CURRENT_VERSION, 5);
+    assert_eq!(lun::db::CURRENT_VERSION, 6);
     drop(conn);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -226,7 +226,7 @@ fn v1_database_upgrades_to_current_with_data_preserved() {
     // `lun init` on the existing directory must run the pending migrations in one shot.
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 5);
+    assert_eq!(schema_version(&conn), 6);
     assert_eq!(table_count(&conn, &["projects", "tasks", "prs"]), 3);
     // Data preservation: the legacy task + its log survive the upgrade.
     let title: String = conn
@@ -235,6 +235,12 @@ fn v1_database_upgrades_to_current_with_data_preserved() {
         })
         .unwrap();
     assert_eq!(title, "legacy task");
+    let status: String = conn
+        .query_row("SELECT status FROM tasks WHERE task_key='T-001'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(status, "doing", "legacy task status is normalized");
     let notes: String = conn
         .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
             r.get(0)
@@ -271,7 +277,7 @@ fn v2_database_upgrades_to_current_preserving_notes() {
     }
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 5);
+    assert_eq!(schema_version(&conn), 6);
     let notes: String = conn
         .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
             r.get(0)

@@ -8,7 +8,7 @@ Context: read docs/architecture.md, docs/plan.md (Phase 2 section has the full s
 
 1. **Schema** — tables:
    - `projects` (id, project_key P-001, name, status, created_at, updated_at)
-   - `tasks` (id, task_key T-008, project_id FK nullable, title, status todo|in-progress|review|done, priority low|med|high, assignee, branch, labels JSON, timestamps)
+   - `tasks` (id, task_key T-008, project_id FK nullable, title, status todo|doing|follow-up|done, priority low|med|high, assignee, branch, labels JSON, timestamps)
    - `logs` (id, entity_type project|task, entity_id, timestamp, user, action, message, details JSON)
    - `attachments` (id, task_id, filename, stored_path, created_at)
    - `links` (id, task_id/project_id, label, uri, created_at)

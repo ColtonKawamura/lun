@@ -12,12 +12,12 @@ is a human-facing view rendered from the DB.
 
 All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
-- DB layer + core CLI (`status`, `proj add task`, `task`, `log`)
+- DB layer + core CLI (`status`, `new proj`, `add task`, `task`, `move`, `log`)
 - Task workflows (`task ls|edit|complete|reopen|archive`) and project/task attachments
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
   views, task detail with vim-style keys, in-TUI logs, `/new-task`,
-  `/new-project`, `/move`, and focused link opening
+  `/new proj` (plus `/new-project` alias), `/move`, and focused link opening
   ([docs/tui.md](docs/tui.md))
 - Drag-and-drop file-path linking in the TUI (escaped/quoted/file URI paths,
   no file copy) and notes editing with log-on-write (`e`/`i` to edit, `Esc` to save)
@@ -31,16 +31,18 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 ```sh
 make                      # release build -> target/release/lun
 lun init                  # create .lun/lun.db in the current directory
-lun status                # projects + tasks overview
+lun status                # projects overview + per-project status counts
 lun                       # full-screen TUI (when run in a terminal)
 ```
 
 Examples:
 
 ```sh
-lun task ls --status review --sort updated
-lun task edit T-003 --status in-progress --priority high --branch feat/foo
-lun task complete T-003
+lun new proj "my new project"
+lun add task "task3" proj "my new project"
+lun task "task3" --status done
+lun proj "my new project" --status inactive
+lun status "my new project" --board
 lun attach project P-001 ./roadmap.md
 lun attach open task T-003 mock.png
 ```

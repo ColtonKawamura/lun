@@ -7,12 +7,12 @@
 
 | view          | how to get there                     | what it shows |
 | ------------- | ------------------------------------ | ------------- |
-| Status        | launch / `/status` / `:status`       | projects + all tasks + summary |
-| Board         | `/board`                             | kanban columns (todo / in-progress / review / done) for the current project |
+| Status        | launch / `/status` / `:status`       | projects + status counts + summary |
+| Board         | `/board`                             | kanban columns (todo / doing / follow-up / blocked / done) for the current project |
 | Project       | `/project`                           | project list; `enter` sets the current project |
 | Task          | `t` (current task) / `/task <q>`     | task detail: fields, notes, attachments, links, log history, **PRs** |
 | New Task      | `/new-task`                          | form to create a task (title, project, status, priority, assignee, branch, labels) |
-| New Project   | `/new-project`                       | form to create a project in the current workspace |
+| New Project   | `/new proj` (or `/new-project`)      | form to create a project in the current workspace |
 | Move Task     | `/move`                              | form to move the current task between projects (including `Unassigned`) |
 | Log           | `/log <project\|task>`               | commit-style history (newest first) |
 | Help          | `/help`                              | this keybinding reference |
