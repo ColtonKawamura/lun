@@ -69,7 +69,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         t::PROMPT,
         Style::default().fg(t::PURPLE),
     );
-    if app.palette_open || app.statusline_open {
+    if app.palette_open {
         put(
             buf,
             area.left() + 2,
@@ -77,11 +77,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
             "",
             Style::default().fg(t::CYAN),
         );
-        let query = if app.palette_open {
-            format!("{}_", app.current_command_prompt())
-        } else {
-            format!("status {}_", app.statusline_query)
-        };
+        let query = format!("{}_", app.current_command_prompt());
         put(
             buf,
             area.left() + 2,

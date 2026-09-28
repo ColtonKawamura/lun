@@ -608,8 +608,8 @@ fn log_view_without_subject_says_why() {
 fn statusline_renders_prompt_on_hint_bar() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
-    app.statusline_open = true;
-    app.statusline_query = "status T-001".into();
+    app.palette_open = true;
+    app.palette_query = "status T-001".into();
     let s = screen(&app, 80, 24);
     let last = s.lines().last().unwrap();
     assert!(last.contains("status T-001"));
@@ -827,6 +827,7 @@ fn tiny_screen_does_not_panic() {
     }
     app.mode = Mode::Insert;
     app.notes_draft = "x".into();
-    app.statusline_open = true;
+    app.palette_open = true;
+    app.palette_query = "status T-001".into();
     let _ = screen(&app, 5, 3);
 }

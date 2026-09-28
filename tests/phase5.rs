@@ -430,8 +430,8 @@ fn long_command_list_is_clamped_to_available_rows() {
 fn statusline_query_renders_on_bottom_prompt_line() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
-    app.statusline_open = true;
-    app.statusline_query = "project".to_string();
+    app.palette_open = true;
+    app.palette_query = "status project".to_string();
     let s = screen(&app, 80, 24);
     let lines: Vec<&str> = s.lines().collect();
     assert!(lines[23].contains("status project"));
