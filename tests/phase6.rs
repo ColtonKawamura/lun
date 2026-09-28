@@ -428,14 +428,14 @@ fn leader_space_f_f_opens_status_finder() {
 }
 
 #[test]
-fn leader_space_f_g_opens_log_finder() {
+fn leader_space_f_g_opens_text_grep_finder() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char(' ')));
     term::handle_key(&mut app, &key(KeyCode::Char('f')));
     term::handle_key(&mut app, &key(KeyCode::Char('g')));
     assert!(app.palette_open);
-    assert_eq!(app.palette_query, "log ");
+    assert_eq!(app.palette_query, "grep ");
     assert!(!app.palette_vim_nav);
 }
 

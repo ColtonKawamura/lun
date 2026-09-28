@@ -1405,7 +1405,7 @@ impl App {
 
     pub fn open_log_finder(&mut self) {
         self.open_palette();
-        self.palette_query = "log ".to_string();
+        self.palette_query = "grep ".to_string();
         self.palette_selected = 0;
     }
 

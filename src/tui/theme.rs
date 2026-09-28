@@ -22,6 +22,10 @@ pub const TEXT: Color = Color::Rgb(220, 220, 235);
 pub const DONE: Color = Color::Rgb(60, 220, 120);
 /// Bright red — errors.
 pub const ERROR: Color = Color::Rgb(255, 80, 80);
+/// Teal-green — active projects.
+pub const ACTIVE: Color = Color::Rgb(90, 220, 180);
+/// Muted lavender-gray — inactive projects.
+pub const INACTIVE: Color = Color::Rgb(150, 150, 180);
 
 /// `todo` = blue, `doing` = bright purple, `follow-up` = magenta,
 /// `blocked` = red, `done` = bright green.
@@ -39,6 +43,20 @@ pub fn status_color(status: &str) -> Color {
 /// Style for a status word in any view.
 pub fn status_style(status: &str) -> Style {
     Style::default().fg(status_color(status))
+}
+
+/// `active` = teal-green, `inactive` = muted lavender.
+pub fn project_status_color(status: &str) -> Color {
+    match status {
+        "active" => ACTIVE,
+        "inactive" => INACTIVE,
+        _ => TEXT,
+    }
+}
+
+/// Style for a project status word in any view.
+pub fn project_status_style(status: &str) -> Style {
+    Style::default().fg(project_status_color(status))
 }
 
 /// Section heading: ALL CAPS bold purple with a magenta underline row.

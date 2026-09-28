@@ -135,7 +135,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>, app: &mu
 /// notes draft, Enter is a newline, Esc returns to normal mode. Outside
 /// all of that (normal mode): `/` opens the palette, `:` opens the
 /// statusline, `<space> f f` opens finder (`status `), `<space> f g`
-/// opens log finder (`log `), `q` quits, `t` opens the current task, and in the
+/// opens text grep (`grep `), `q` quits, `t` opens the current task, and in the
 /// project view j/k/Enter navigate and select.
 pub fn handle_key(app: &mut App, key: &KeyEvent) {
     if app.form().is_some() {

@@ -24,6 +24,7 @@ attach open project P-001 roadmap.md
 link task T-003 "Design" "file:///absolute/path/design.pdf"
 open-link task T-003 "Design"
 log
+grep "methods"
 ```
 
 The last command result stays visible above the prompt while you type the next
@@ -87,7 +88,7 @@ their context-relative behavior.
 | `esc`     | command prompt  | after typing, enter vim prompt-nav mode (`j`/`k` cycle suggestions); press `esc` again to close |
 | `backspace` | command prompt / insert / detail views | edit the line, delete notes chars, or go back |
 | `<space> f f` | normal | open task/project finder prompt (`status ` prefilled) |
-| `<space> f g` | normal | open log finder prompt (`log ` prefilled) |
+| `<space> f g` | normal | open text grep prompt (`grep ` prefilled) |
 | `ctrl-s`  | insert (notes)  | save the notes draft (logs `UPDATE`; default message `update notes for <task>`) |
 | `q`       | normal          | quit (blocked while notes have unsaved edits) |
 

@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use lun::cli::{
-    create_task, log_view, resolve_entity, resolve_project, resolve_task, status_all,
+    create_task, grep_view, log_view, resolve_entity, resolve_project, resolve_task, status_all,
     status_project, status_project_board, status_target, task_archive, task_complete, task_edit,
     task_list, task_reopen, task_view, App, EXIT_USAGE,
 };
@@ -788,6 +788,36 @@ fn log_unknown_entity_errors() {
     assert_eq!(e.kind(), "not-found");
     let e = log_view(&app, "T-999").unwrap_err();
     assert_eq!(e.kind(), "not-found");
+}
+
+// ---------------------------------------------------------------------------
+// lun grep
+// ---------------------------------------------------------------------------
+
+#[test]
+fn grep_searches_projects_tasks_and_commits() {
+    let (_root, lun) = fixture();
+    let app = App { lun };
+    let out = grep_view(&app, "paper-stack").unwrap();
+    assert!(out.starts_with("Grep: paper-stack\n"), "header: {out}");
+    assert!(out.contains("Projects\n--------"), "project section: {out}");
+    assert!(out.contains("P-001   Name     paper-stack"), "project hit: {out}");
+    assert!(out.contains("Tasks\n-----"), "task section: {out}");
+    assert!(out.contains("T-001   Project   paper-stack"), "task hit: {out}");
+    assert!(out.contains("Commits\n-------"), "commit section: {out}");
+    assert!(
+        out.contains("T-003") && out.contains("Commit") && out.contains("paper-stack"),
+        "commit hit: {out}"
+    );
+    assert!(out.contains("Summary:"), "summary: {out}");
+}
+
+#[test]
+fn grep_requires_non_empty_query() {
+    let (_root, lun) = fixture();
+    let app = App { lun };
+    let e = grep_view(&app, "   ").unwrap_err();
+    assert_eq!(e.kind(), "usage");
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ use lun::tui::{data, render, term};
 use lun::{Lun, ProjectSpec, TaskSpec};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 use std::io::BufReader;
 use std::path::PathBuf;
 
@@ -85,6 +86,17 @@ fn screen(app: &App, w: u16, h: u16) -> String {
     out
 }
 
+fn cell(app: &App, w: u16, h: u16, x: u16, y: u16) -> (char, Color, bool) {
+    let mut buf = Buffer::empty(Rect::new(0, 0, w, h));
+    render::paint(&mut buf, Rect::new(0, 0, w, h), app);
+    let c = buf.get(x, y);
+    (
+        c.symbol().chars().next().unwrap_or(' '),
+        c.fg,
+        c.modifier.contains(Modifier::BOLD),
+    )
+}
+
 #[test]
 fn tui_task_command_matches_cli_output_for_quoted_title() {
     let (root, cli, mut tui) = fixture();
@@ -152,6 +164,41 @@ fn tui_log_without_subject_uses_current_task_in_task_view() {
     let tui_out = tui.output.as_ref().unwrap();
     assert_eq!(tui_out.text, cli_out);
     assert!(!tui_out.is_error);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tui_grep_matches_cli_output_for_text_search() {
+    let (root, cli, mut tui) = fixture();
+    let mut input = prompt_reader(&[]);
+    let cli_out =
+        run_result_with_reader(&cli, &["grep".into(), "paper".into()], &mut input).unwrap();
+
+    send_command(&mut tui, "grep paper");
+    let tui_out = tui.output.as_ref().unwrap();
+    assert!(!tui_out.is_error);
+    assert_eq!(tui_out.text, cli_out);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn command_output_colors_project_status_and_log_action() {
+    let (root, _cli, mut tui) = fixture();
+    tui.output = Some(CommandOutput {
+        command: "demo".into(),
+        text: "Projects\n--------\n\nID      Name         Status   Todo   Doing   Follow-Up   Blocked   Done\nP-001   paper-stack  active   1      0       0           0         0\n\n2026-09-28 19:54  me  CREATE".into(),
+        is_error: false,
+    });
+    tui.view = View::Output;
+
+    let (_status_ch, status_fg, _status_bold) = cell(&tui, 100, 24, 26, 6);
+    assert_eq!(status_fg, Color::Rgb(90, 220, 180));
+
+    let (_action_ch, action_fg, action_bold) = cell(&tui, 100, 24, 22, 8);
+    assert_eq!(action_fg, Color::Rgb(177, 121, 255));
+    assert!(action_bold);
 
     let _ = std::fs::remove_dir_all(&root);
 }
