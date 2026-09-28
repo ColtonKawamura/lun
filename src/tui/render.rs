@@ -89,7 +89,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         // Hint text depends on mode (Phase 6): insert mode advertises the
         // note-editing keys; the statusline shows its own prompt + query.
         let hint: String = if app.mode == super::app::Mode::Insert {
-            "inserting note — esc back to normal, ctrl-s to save".to_string()
+            "editing description — esc back to normal, ctrl-s to save".to_string()
         } else {
             " type \"/\" or \":\" for commands, \"q\" to quit".to_string()
         };
@@ -134,6 +134,13 @@ pub fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, style: Style) {
 pub fn put_two(buf: &mut Buffer, x: u16, y: u16, a: &str, sa: Style, b: &str, sb: Style) {
     put(buf, x, y, a, sa);
     put(buf, x.saturating_add(a.chars().count() as u16), y, b, sb);
+}
+
+fn put_segments(buf: &mut Buffer, mut x: u16, y: u16, segments: &[(&str, Style)]) {
+    for (text, style) in segments {
+        put(buf, x, y, text, *style);
+        x = x.saturating_add(text.chars().count() as u16);
+    }
 }
 
 /// ALL CAPS heading + magenta underline row.
@@ -370,6 +377,9 @@ fn paint_output_line(buf: &mut Buffer, x: u16, y: u16, line: &str, is_error: boo
         );
         return;
     }
+    if paint_indented_detail_line(buf, x, y, line) {
+        return;
+    }
     if let Some((prefix, status, rest)) = status_count_line(line) {
         put(buf, x, y, prefix, Style::default().fg(t::DIM));
         put(
@@ -386,6 +396,15 @@ fn paint_output_line(buf: &mut Buffer, x: u16, y: u16, line: &str, is_error: boo
             rest,
             Style::default().fg(t::TEXT),
         );
+        return;
+    }
+    if paint_project_status_row(buf, x, y, line) {
+        return;
+    }
+    if paint_task_status_row(buf, x, y, line) {
+        return;
+    }
+    if paint_log_header_line(buf, x, y, line) {
         return;
     }
     if table_header_line(line) {
@@ -417,8 +436,16 @@ fn is_rule_line(line: &str) -> bool {
 
 fn section_heading(line: &str) -> Option<String> {
     match line.trim() {
-        "Overview" | "Tasks" | "Checklist" | "Notes:" | "Attachments:" | "Links:" | "History"
-        | "History (log):" | "Last Commit:" | "Tasks by Status:" => {
+        "Overview"
+        | "Tasks"
+        | "Description:"
+        | "Notes:"
+        | "Attachments:"
+        | "Links:"
+        | "History"
+        | "History (log):"
+        | "Last Commit:"
+        | "Tasks by Status:" => {
             Some(line.trim_end_matches(':').to_string())
         }
         _ => None,
@@ -431,6 +458,11 @@ fn detail_label_value(line: &str) -> Option<(&str, &str, &str)> {
     }
     let colon = line.find(':')?;
     let label = &line[..=colon];
+    let label_body = label.trim_end_matches(':').trim();
+    let first = label_body.chars().next()?;
+    if !first.is_ascii_alphabetic() && first != '*' {
+        return None;
+    }
     if !label
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, ':' | ' ' | '-' | '*'))
@@ -446,10 +478,50 @@ fn detail_label_value(line: &str) -> Option<(&str, &str, &str)> {
 fn detail_value_style(label: &str, value: &str) -> Style {
     match label.trim_end_matches(':') {
         "ID" => Style::default().fg(t::LAVENDER),
-        "Status" => t::status_style(value.trim()),
+        "Status" => match value.trim() {
+            "active" | "inactive" => t::project_status_style(value.trim()),
+            _ => t::status_style(value.trim()),
+        },
         "Branch" => Style::default().fg(t::CYAN),
+        "Project" => Style::default().fg(t::PURPLE),
+        "File" | "Link" => Style::default().fg(t::CYAN),
         _ => Style::default().fg(t::TEXT),
     }
+}
+
+fn indented_detail_label_value(line: &str) -> Option<(&str, &str, &str, &str)> {
+    let indent_len = line.chars().take_while(|c| *c == ' ').count();
+    if indent_len == 0 {
+        return None;
+    }
+    let indent = &line[..indent_len];
+    let trimmed = &line[indent_len..];
+    let (label, spacing, value) = detail_label_value(trimmed)?;
+    Some((indent, label, spacing, value))
+}
+
+fn paint_indented_detail_line(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
+    let Some((indent, label, spacing, value)) = indented_detail_label_value(line) else {
+        return false;
+    };
+    put(buf, x, y, indent, Style::default().fg(t::DIM));
+    put(
+        buf,
+        x + indent.chars().count() as u16,
+        y,
+        label,
+        Style::default().fg(t::DIM).add_modifier(Modifier::BOLD),
+    );
+    let after_label = x + (indent.chars().count() + label.chars().count()) as u16;
+    put(buf, after_label, y, spacing, Style::default().fg(t::DIM));
+    put(
+        buf,
+        after_label + spacing.chars().count() as u16,
+        y,
+        value,
+        detail_value_style(label, value),
+    );
+    true
 }
 
 fn status_count_line(line: &str) -> Option<(&str, &str, &str)> {
@@ -466,9 +538,135 @@ fn status_count_line(line: &str) -> Option<(&str, &str, &str)> {
 }
 
 fn table_header_line(line: &str) -> bool {
-    line.starts_with("ID")
-        && (line.contains("Project") || line.contains("Title"))
-        && line.contains("Status")
+    (line.starts_with("ID")
+        && (line.contains("Project") || line.contains("Title") || line.contains("Field"))
+        && (line.contains("Status") || line.contains("Value")))
+        || (line.starts_with("When") && line.contains("Action"))
+        || (line.starts_with("Entity") && line.contains("Action"))
+}
+
+fn split_table_columns(line: &str) -> Vec<&str> {
+    let mut cols = Vec::new();
+    let mut start = 0usize;
+    let bytes = line.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b' ' {
+            let run_start = i;
+            while i < bytes.len() && bytes[i] == b' ' {
+                i += 1;
+            }
+            if i - run_start >= 3 {
+                cols.push(line[start..run_start].trim_end());
+                start = i;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    cols.push(line[start..].trim_end());
+    cols
+}
+
+fn paint_project_status_row(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
+    if !line.starts_with("P-") {
+        return false;
+    }
+    let cols = split_table_columns(line);
+    if cols.len() != 8 {
+        return false;
+    }
+    put_segments(
+        buf,
+        x,
+        y,
+        &[
+            (cols[0], Style::default().fg(t::LAVENDER)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[1], Style::default().fg(t::TEXT)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[2], t::project_status_style(cols[2])),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[3], t::status_style("todo")),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[4], t::status_style("doing")),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[5], t::status_style("follow-up")),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[6], t::status_style("blocked")),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[7], t::status_style("done")),
+        ],
+    );
+    true
+}
+
+fn paint_task_status_row(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
+    if !line.starts_with("T-") {
+        return false;
+    }
+    let cols = split_table_columns(line);
+    if cols.len() < 7 {
+        return false;
+    }
+    put_segments(
+        buf,
+        x,
+        y,
+        &[
+            (cols[0], Style::default().fg(t::LAVENDER)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[1], Style::default().fg(t::PURPLE)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[2], Style::default().fg(t::TEXT)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[3], t::status_style(cols[3])),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[4], Style::default().fg(t::TEXT)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[5], Style::default().fg(t::TEXT)),
+            ("   ", Style::default().fg(t::DIM)),
+            (cols[6], Style::default().fg(t::CYAN)),
+        ],
+    );
+    true
+}
+
+fn parse_log_header(line: &str) -> Option<(bool, &str, &str, &str)> {
+    let (bullet, rest) = match line.strip_prefix("- ") {
+        Some(rest) => (true, rest),
+        None => (false, line),
+    };
+    let mut parts = rest.splitn(3, "  ");
+    let ts = parts.next()?;
+    let user = parts.next()?;
+    let tail = parts.next()?;
+    if ts.len() != 16 {
+        return None;
+    }
+    Some((bullet, ts, user, tail))
+}
+
+fn paint_log_header_line(buf: &mut Buffer, x: u16, y: u16, line: &str) -> bool {
+    let Some((bullet, ts, user, tail)) = parse_log_header(line) else {
+        return false;
+    };
+    let mut segments = Vec::new();
+    if bullet {
+        segments.push(("- ", Style::default().fg(t::DIM)));
+    }
+    segments.push((ts, Style::default().fg(t::DIM)));
+    segments.push(("  ", Style::default().fg(t::DIM)));
+    segments.push((user, Style::default().fg(t::LAVENDER)));
+    segments.push(("  ", Style::default().fg(t::DIM)));
+    let tail_style = if tail.chars().all(|c| c.is_ascii_uppercase() || c == '-') {
+        Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(t::TEXT)
+    };
+    segments.push((tail, tail_style));
+    put_segments(buf, x, y, &segments);
+    true
 }
 
 fn project_counts(app: &App, project_id: i64) -> [usize; 5] {
@@ -539,7 +737,7 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
             area.left() + 27,
             y,
             &format!("{:<14}", p.status),
-            t::status_style(&p.status),
+            t::project_status_style(&p.status),
         );
         put(
             buf,
@@ -726,7 +924,7 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
                 "{:<9}todo {}  doing {}  follow-up {}  blocked {}  done {}",
                 p.status, counts[0], counts[1], counts[2], counts[3], counts[4]
             ),
-            t::status_style(&p.status),
+            t::project_status_style(&p.status),
         );
         y += 1;
     }
@@ -747,14 +945,14 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 24] = [
+    let rows: [(&str, &str); 25] = [
         ("/", "open the command palette"),
         ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
         ("j / k / ↑ / ↓", "navigate lists and focused task details"),
         (
             "h / l / ← / →",
-            "move task-detail focus between summary/notes/attachments/links",
+            "move task-detail focus between summary/description/attachments/links",
         ),
         ("gg / G", "jump to the first / last item"),
         ("PgUp / PgDn", "jump by larger steps"),
@@ -771,7 +969,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("c", "toggle the current task complete/reopen"),
         (
             "i / e",
-            "edit the current task's notes (task view; Esc back, Ctrl-S save)",
+            "edit the current task's description (task view; Esc back, Ctrl-S save)",
         ),
         (
             "↑ / ↓",
@@ -783,7 +981,8 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ),
         ("backspace", "palette line edit, or go back"),
         ("<space> f f", "open finder prompt (`status `)"),
-        ("<space> f g", "open log finder prompt (`log `)"),
+        ("<space> f g", "open text grep prompt (`grep `)"),
+        ("⇧⌘[ / ⇧⌘]", "back / forward through screen history"),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
         ("/new-task", "open the new-task form"),
@@ -919,7 +1118,7 @@ fn paint_new_project(buf: &mut Buffer, area: Rect, app: &App) {
         (
             "Status",
             ["active", "inactive"][draft.status_index].to_string(),
-            t::status_style(["active", "inactive"][draft.status_index]),
+            t::project_status_style(["active", "inactive"][draft.status_index]),
         ),
         (
             "Create",
@@ -1134,7 +1333,8 @@ fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str, focused: bool) -> 
 }
 
 /// Task detail view (docs/plan.md Phase 6 "Task View and Logs"): fields,
-/// checklist, notes (with the insert-mode draft), attachments, links, and
+/// description text (stored in notes, with the insert-mode draft),
+/// attachments, links, and
 /// history. History lines are the CLI's exact formatting
 /// (`cli::task_view_entry_lines`), rendered here with per-line styles.
 fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
@@ -1268,29 +1468,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         buf,
         x,
         y,
-        "Checklist:",
-        app.task_focus == super::app::TaskFocus::Summary,
-    );
-    if y >= bottom {
-        return;
-    }
-    put(
-        buf,
-        x,
-        y,
-        "- [ ] (checklist editing arrives in a later phase)",
-        Style::default().fg(t::DIM),
-    );
-    y += 2;
-    if y >= bottom {
-        return;
-    }
-
-    y = task_section(
-        buf,
-        x,
-        y,
-        "Notes:",
+        "Description:",
         app.task_focus == super::app::TaskFocus::Notes,
     );
     if y >= bottom {
@@ -1368,7 +1546,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             x,
             y,
-            "- (add notes with 'e' in the task view)",
+            "- (add a description with 'e' in the task view)",
             Style::default().fg(t::DIM),
         );
         y += 1;
@@ -1489,14 +1667,10 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             if y >= bottom {
                 return;
             }
-            // First line of an entry: timestamp (dim) + user (lavender) +
-            // ACTION (bold purple); the remainder renders as detail text.
-            let style = if line.starts_with('-') {
-                Style::default().fg(t::DIM)
-            } else {
-                Style::default().fg(t::DIM)
-            };
-            put(buf, x, y, &line, style);
+            if !paint_log_header_line(buf, x, y, &line) && !paint_indented_detail_line(buf, x, y, &line)
+            {
+                put(buf, x, y, &line, Style::default().fg(t::DIM));
+            }
             y += 1;
         }
     } else {
@@ -1586,15 +1760,15 @@ fn paint_log(buf: &mut Buffer, area: Rect, app: &App) {
             if y + 1 >= bottom {
                 return;
             }
-            if n == 0 {
-                // Header line: leading timestamp dim, rest plain.
-                put(buf, x, y, line, Style::default().fg(t::DIM));
-            } else if line.trim_start().starts_with("Commit:") {
-                put(buf, x, y, line, Style::default().fg(t::TEXT));
-            } else if line.trim_start().starts_with("Note:") {
-                put(buf, x, y, line, Style::default().fg(t::CYAN));
-            } else {
-                put(buf, x, y, line, Style::default().fg(t::DIM));
+            if !paint_log_header_line(buf, x, y, line)
+                && !paint_indented_detail_line(buf, x, y, line)
+            {
+                let style = if n == 0 {
+                    Style::default().fg(t::DIM)
+                } else {
+                    Style::default().fg(t::TEXT)
+                };
+                put(buf, x, y, line, style);
             }
             y += 1;
         }

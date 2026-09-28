@@ -10,6 +10,7 @@
 //! - `lun task <key|title>` — task fields, labels, timestamps, attachments,
 //!   links, log history.
 //! - `lun log <project|task>` — commit-style history.
+//! - `lun grep "<text>"` — substring search across projects, tasks, and commits.
 //!
 //! Phase 4 adds Mac linking & attachments:
 //! - `lun attach task <T-00N|title> /path/to/file` — copies repo files into
@@ -46,7 +47,7 @@ use crate::db::{
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 14] = [
+const TOP_LEVEL_COMMANDS: [&str; 15] = [
     "init",
     "add",
     "task",
@@ -55,6 +56,7 @@ const TOP_LEVEL_COMMANDS: [&str; 14] = [
     "move",
     "attach",
     "log",
+    "grep",
     "status",
     "link",
     "open-link",
@@ -437,6 +439,7 @@ Usage:\n\
   lun proj <project> --status <active|inactive>   Update project status\n\
   lun task complete|reopen|archive <task>   Update task lifecycle\n\
   lun log <project|task>    Commit-style history for a project or task\n\
+  lun grep \"<text>\"         Search project/task fields and commit text\n\
   lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)\n\
   lun attach ls <task|project> <key|title>   List attachments\n\
   lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments\n\
@@ -963,6 +966,175 @@ pub fn status_project_board(app: &App, query: &str) -> Result<String> {
     Ok(out.trim_end().to_string())
 }
 
+fn contains_insensitive(haystack: &str, needle: &str) -> bool {
+    haystack.to_lowercase().contains(&needle.to_lowercase())
+}
+
+fn inline_value(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX: usize = 96;
+    if collapsed.chars().count() <= MAX {
+        collapsed
+    } else {
+        format!("{}…", collapsed.chars().take(MAX.saturating_sub(1)).collect::<String>())
+    }
+}
+
+fn push_match_row(rows: &mut Vec<Vec<String>>, key: &str, field: &str, value: &str, needle: &str) {
+    if !value.trim().is_empty() && contains_insensitive(value, needle) {
+        rows.push(vec![key.to_string(), field.to_string(), inline_value(value)]);
+    }
+}
+
+fn push_commit_match_rows(
+    rows: &mut Vec<Vec<String>>,
+    entity_key: &str,
+    entry: &LogEntry,
+    needle: &str,
+) {
+    for line in task_log_entry_lines(entry) {
+        if !contains_insensitive(&line, needle) {
+            continue;
+        }
+        let trimmed = line.trim();
+        let (field, value) = if let Some(value) = trimmed.strip_prefix("Commit: ") {
+            ("Commit", value)
+        } else if let Some(value) = trimmed.strip_prefix("Project: ") {
+            ("Project", value)
+        } else if let Some(value) = trimmed.strip_prefix("Status:") {
+            ("Status", value.trim())
+        } else if let Some(value) = trimmed.strip_prefix("Priority:") {
+            ("Priority", value.trim())
+        } else if let Some(value) = trimmed.strip_prefix("Note: ") {
+            ("Note", value)
+        } else if let Some(value) = trimmed.strip_prefix("File: ") {
+            ("File", value)
+        } else if let Some(value) = trimmed.strip_prefix("Link: ") {
+            ("Link", value)
+        } else if trimmed == "Field changes:" {
+            ("Field", trimmed)
+        } else if line.starts_with("      ") {
+            ("Field", trimmed)
+        } else {
+            ("Header", trimmed)
+        };
+        rows.push(vec![
+            entity_key.to_string(),
+            display_ts(&entry.timestamp),
+            entry.action.clone(),
+            field.to_string(),
+            inline_value(value),
+        ]);
+    }
+}
+
+/// `lun grep "<text>"` — substring search across project/task fields and logs.
+pub fn grep_view(app: &App, query: &str) -> Result<String> {
+    let needle = query.trim();
+    if needle.is_empty() {
+        return Err(DbError::new("usage", "expected: lun grep <text>"));
+    }
+
+    let projects = app.lun.list_projects()?;
+    let tasks = app.lun.list_tasks_with(&TaskListSpec {
+        include_archived: true,
+        ..Default::default()
+    })?;
+
+    let mut project_rows = Vec::new();
+    for project in &projects {
+        push_match_row(&mut project_rows, &project.project_key, "ID", &project.project_key, needle);
+        push_match_row(&mut project_rows, &project.project_key, "Name", &project.name, needle);
+        push_match_row(
+            &mut project_rows,
+            &project.project_key,
+            "Status",
+            &project.status,
+            needle,
+        );
+    }
+
+    let mut task_rows = Vec::new();
+    for task in &tasks {
+        let project_name = app.lun.project_name_for_task(task);
+        push_match_row(&mut task_rows, &task.task_key, "ID", &task.task_key, needle);
+        push_match_row(&mut task_rows, &task.task_key, "Project", &project_name, needle);
+        push_match_row(&mut task_rows, &task.task_key, "Title", &task.title, needle);
+        push_match_row(&mut task_rows, &task.task_key, "Status", &task.status, needle);
+        push_match_row(&mut task_rows, &task.task_key, "Priority", &task.priority, needle);
+        push_match_row(
+            &mut task_rows,
+            &task.task_key,
+            "Assignee",
+            task.assignee.as_deref().unwrap_or_default(),
+            needle,
+        );
+        push_match_row(
+            &mut task_rows,
+            &task.task_key,
+            "Branch",
+            task.branch.as_deref().unwrap_or_default(),
+            needle,
+        );
+        push_match_row(&mut task_rows, &task.task_key, "Labels", &task.labels, needle);
+        push_match_row(&mut task_rows, &task.task_key, "Notes", &task.notes, needle);
+        if task.archived_at.is_some() {
+            push_match_row(&mut task_rows, &task.task_key, "Archived", "yes", needle);
+        }
+    }
+
+    let mut commit_rows = Vec::new();
+    for project in &projects {
+        for entry in app.lun.logs_for("project", project.id)? {
+            push_commit_match_rows(&mut commit_rows, &project.project_key, &entry, needle);
+        }
+    }
+    for task in &tasks {
+        for entry in app.lun.logs_for("task", task.id)? {
+            push_commit_match_rows(&mut commit_rows, &task.task_key, &entry, needle);
+        }
+    }
+
+    let mut out = String::new();
+    let header = format!("Grep: {needle}");
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push_str("\n\n");
+
+    if project_rows.is_empty() && task_rows.is_empty() && commit_rows.is_empty() {
+        out.push_str(&format!("No matches for \"{needle}\"."));
+        return Ok(out);
+    }
+
+    if !project_rows.is_empty() {
+        out.push_str("Projects\n--------\n\n");
+        out.push_str(&render_table(&["ID", "Field", "Value"], &project_rows));
+        out.push_str("\n\n");
+    }
+    if !task_rows.is_empty() {
+        out.push_str("Tasks\n-----\n\n");
+        out.push_str(&render_table(&["ID", "Field", "Value"], &task_rows));
+        out.push_str("\n\n");
+    }
+    if !commit_rows.is_empty() {
+        out.push_str("Commits\n-------\n\n");
+        out.push_str(&render_table(
+            &["ID", "When", "Action", "Field", "Value"],
+            &commit_rows,
+        ));
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(&format!(
+        "Summary: {} project hits · {} task hits · {} commit hits",
+        project_rows.len(),
+        task_rows.len(),
+        commit_rows.len()
+    ));
+    Ok(out)
+}
+
 pub fn status_target(app: &App, query: &str) -> Result<String> {
     match resolve_entity(&app.lun, query)? {
         Entity::Project(p) => status_project(app, &p.project_key),
@@ -985,11 +1157,9 @@ pub fn status_task(app: &App, query: &str) -> Result<String> {
     out.push_str(&format!("Assignee:  {}\n", t.assignee.unwrap_or_default()));
     out.push_str(&format!("Branch:    {}\n", t.branch.unwrap_or_default()));
     out.push_str(&format!("Created:   {}\n\n", display_ts(&t.created_at)));
-    out.push_str("Checklist:\n\n");
-    out.push_str("- [ ] (checklist editing arrives in a later phase)\n\n");
-    out.push_str("**Notes:**\n\n");
+    out.push_str("**Description:**\n\n");
     if t.notes.trim().is_empty() {
-        out.push_str("- (add notes with 'e' in the task view)\n\n");
+        out.push_str("- (add a description with 'e' in the task view)\n\n");
     } else {
         for line in t.notes.lines() {
             out.push_str(&format!("- {line}\n"));
@@ -1052,18 +1222,13 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     ));
     out.push_str(&format!("Created:   {}\n", display_ts(&t.created_at)));
     out.push_str(&format!("Updated:   {}\n", display_ts(&t.updated_at)));
-    out.push_str("\nChecklist:\n");
-    out.push_str(&format!(
-        "- [ ] (add checklist items with `lun task edit {}`)",
-        t.task_key
-    ));
-    out.push_str("\nNotes:\n");
+    out.push_str("\nDescription:\n");
     // Phase 7: notes are real data (TUI-editable). Show the saved text
     // when present; otherwise the add-hint (editing still lands with a
     // later CLI phase — the TUI edits them today).
     if t.notes.trim().is_empty() {
         out.push_str(&format!(
-            "- (add notes with `lun task edit {}`)",
+            "- (add a description with `lun task edit {} --notes \"...\"`)",
             t.task_key
         ));
     } else {
@@ -2696,6 +2861,10 @@ pub fn run_result_in_reader(
         Some("log") => match args.get(1) {
             Some(q) => log_view(app, q),
             None => Err(DbError::new("usage", "expected: lun log <project|task>")),
+        },
+        Some("grep") => match args.get(1) {
+            Some(q) => grep_view(app, q),
+            None => Err(DbError::new("usage", "expected: lun grep <text>")),
         },
         Some("attach") => match args.get(1).map(String::as_str) {
             Some("ls") => match (args.get(2), args.get(3)) {

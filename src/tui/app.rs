@@ -208,6 +208,7 @@ pub struct App {
     pub view: View,
     pub previous_view: View,
     pub view_history: Vec<View>,
+    pub forward_view_history: Vec<View>,
     pub mode: Mode,
     pub palette_open: bool,
     pub palette_query: String,
@@ -264,6 +265,7 @@ impl App {
             view: View::Initial,
             previous_view: View::Initial,
             view_history: Vec::new(),
+            forward_view_history: Vec::new(),
             mode: Mode::Normal,
             palette_open: false,
             palette_query: String::new(),
@@ -1131,6 +1133,7 @@ impl App {
             Ok(text) => {
                 let _ = self.refresh_from_store();
                 self.select_context_from_args(cli_app, args);
+                self.record_view_transition(View::Output);
                 self.output = Some(CommandOutput {
                     command,
                     text,
@@ -1139,6 +1142,7 @@ impl App {
             }
             Err(e) => {
                 let _ = self.refresh_from_store();
+                self.record_view_transition(View::Output);
                 self.output = Some(CommandOutput {
                     command,
                     text: format!("lun: {e}"),
@@ -1239,11 +1243,7 @@ impl App {
     /// line text after the command name.
     pub fn enter_view(&mut self, view: View, rest: &str) {
         self.close_palette();
-        if self.notes_modified() {
-            self.message = Some((
-                "unsaved note edits — press Esc in insert mode first".to_string(),
-                true,
-            ));
+        if !self.can_leave_current_view() {
             return;
         }
         self.mode = Mode::Normal;
@@ -1251,12 +1251,9 @@ impl App {
         self.statusline_open = false;
         self.statusline_query.clear();
         self.message = None;
-        if self.view != view {
-            self.view_history.push(self.view);
-        }
-        self.previous_view = self.view;
         match view {
             View::Output => {
+                self.record_view_transition(View::Output);
                 self.view = View::Output;
             }
             View::Task => {
@@ -1269,6 +1266,7 @@ impl App {
                     self.message = Some((e, true));
                     return;
                 }
+                self.record_view_transition(View::Task);
                 self.task_focus = TaskFocus::Summary;
                 self.task_item_selected = 0;
                 self.view = View::Task;
@@ -1287,6 +1285,7 @@ impl App {
                         }
                     }
                 }
+                self.record_view_transition(View::Log);
                 self.view = View::Log;
             }
             View::NewTask => {
@@ -1296,18 +1295,45 @@ impl App {
                         d.title = rest.trim().to_string();
                     }
                 }
+                self.record_view_transition(View::NewTask);
                 self.view = View::NewTask;
             }
             View::NewProject => {
                 self.begin_new_project_form();
+                self.record_view_transition(View::NewProject);
                 self.view = View::NewProject;
             }
             View::MoveTask => match self.begin_move_task_form() {
-                Ok(()) => self.view = View::MoveTask,
+                Ok(()) => {
+                    self.record_view_transition(View::MoveTask);
+                    self.view = View::MoveTask;
+                }
                 Err(e) => self.message = Some((e, true)),
             },
-            _ => self.view = view,
+            _ => {
+                self.record_view_transition(view);
+                self.view = view;
+            }
         }
+    }
+
+    fn can_leave_current_view(&mut self) -> bool {
+        if self.notes_modified() {
+            self.message = Some((
+                "unsaved note edits — press Esc in insert mode first".to_string(),
+                true,
+            ));
+            return false;
+        }
+        true
+    }
+
+    fn record_view_transition(&mut self, next: View) {
+        if self.view != next {
+            self.view_history.push(self.view);
+            self.forward_view_history.clear();
+        }
+        self.previous_view = self.view;
     }
 
     /// Select a task from a key or exact title; sets `task_selected`.
@@ -1405,7 +1431,7 @@ impl App {
 
     pub fn open_log_finder(&mut self) {
         self.open_palette();
-        self.palette_query = "log ".to_string();
+        self.palette_query = "grep ".to_string();
         self.palette_selected = 0;
     }
 
@@ -1577,11 +1603,7 @@ impl App {
     }
 
     pub fn go_back(&mut self) {
-        if self.notes_modified() {
-            self.message = Some((
-                "unsaved note edits — press Esc in insert mode first".to_string(),
-                true,
-            ));
+        if !self.can_leave_current_view() {
             return;
         }
         if self.view == View::Task && self.task_focus != TaskFocus::Summary {
@@ -1589,11 +1611,32 @@ impl App {
             self.task_item_selected = 0;
             return;
         }
+        self.go_view_back();
+    }
+
+    pub fn go_view_back(&mut self) {
+        if !self.can_leave_current_view() {
+            return;
+        }
         if self.view != View::Initial {
             if let Some(prev) = self.view_history.pop() {
+                self.forward_view_history.push(self.view);
                 self.previous_view = self.view;
                 self.view = prev;
             }
+        }
+    }
+
+    pub fn go_view_forward(&mut self) {
+        if !self.can_leave_current_view() {
+            return;
+        }
+        if let Some(next) = self.forward_view_history.pop() {
+            if self.view != next {
+                self.view_history.push(self.view);
+            }
+            self.previous_view = self.view;
+            self.view = next;
         }
     }
 
@@ -1658,8 +1701,7 @@ impl App {
             return;
         }
         self.mode = Mode::Normal;
-        self.previous_view = self.view;
-        self.view_history.push(self.view);
+        self.record_view_transition(View::Task);
         self.statusline_open = false;
         self.statusline_query.clear();
         self.task_focus = TaskFocus::Summary;
@@ -1908,6 +1950,7 @@ impl App {
         }
         match super::data::resolve_log_query(&self.data, rest) {
             Ok(subject) => {
+                self.record_view_transition(View::Log);
                 self.log_subject = Some(subject);
                 self.view = View::Log;
                 self.mode = Mode::Normal;
