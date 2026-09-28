@@ -405,6 +405,14 @@ impl Lun {
     }
 
     fn migrate(conn: &mut Connection) -> Result<()> {
+        let user_tables_before: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE type = 'table'
+                AND name != 'sqlite_sequence'",
+            [],
+            |r| r.get(0),
+        )?;
+
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS migrations (
                 version    INTEGER PRIMARY KEY,
@@ -420,15 +428,7 @@ impl Lun {
             )
             .unwrap_or(0);
 
-        let non_migration_tables: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master
-              WHERE type = 'table'
-                AND name NOT IN ('migrations', 'sqlite_sequence')",
-            [],
-            |r| r.get(0),
-        )?;
-
-        if version == 0 && non_migration_tables == 0 {
+        if version == 0 && user_tables_before == 0 {
             Self::bootstrap_current_schema(conn)?;
         } else {
             if version < 1 {
