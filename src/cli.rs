@@ -35,6 +35,7 @@
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::{Mutex, OnceLock};
 
 use crate::db::Result;
 use crate::db::{
@@ -123,7 +124,14 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
             Some("ls") => {
                 extend_unique(
                     &mut out,
-                    ["--all", "--project", "--status", "--priority", "--assignee", "--sort"],
+                    [
+                        "--all",
+                        "--project",
+                        "--status",
+                        "--priority",
+                        "--assignee",
+                        "--sort",
+                    ],
                 );
             }
             Some("edit") => {
@@ -200,7 +208,9 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     Some("link" | "open-link" | "attach")
                 ) || (tokens.first().map(String::as_str) == Some("open-uri")
                     && matches!(
-                        tokens.get(tokens.len().saturating_sub(2)).map(String::as_str),
+                        tokens
+                            .get(tokens.len().saturating_sub(2))
+                            .map(String::as_str),
                         Some("--on")
                     )) =>
             {
@@ -233,14 +243,15 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     out.extend(task_candidates(app));
                 }
                 Some("task")
-                    if matches!(tokens.get(1).map(String::as_str), Some("edit" | "complete" | "reopen" | "archive"))
-                        && tokens.len() == 2 =>
+                    if matches!(
+                        tokens.get(1).map(String::as_str),
+                        Some("edit" | "complete" | "reopen" | "archive")
+                    ) && tokens.len() == 2 =>
                 {
                     out.extend(task_candidates(app));
                 }
                 Some("task")
-                    if tokens.len() == 1
-                        || (tokens.len() == 2 && !tokens[1].starts_with('-')) =>
+                    if tokens.len() == 1 || (tokens.len() == 2 && !tokens[1].starts_with('-')) =>
                 {
                     out.extend(task_candidates(app));
                 }
@@ -252,17 +263,23 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     out.extend(project_candidates(app));
                     out.extend(task_candidates(app));
                 }
-                Some("pr") if tokens.get(1).map(String::as_str) == Some("new") && tokens.len() == 2 => {
+                Some("pr")
+                    if tokens.get(1).map(String::as_str) == Some("new") && tokens.len() == 2 =>
+                {
                     out.extend(task_candidates(app));
                 }
-                Some("proj" | "project") if tokens.len() == 1 => out.extend(project_candidates(app)),
+                Some("proj" | "project") if tokens.len() == 1 => {
+                    out.extend(project_candidates(app))
+                }
                 Some("link" | "open-link" | "attach")
-                    if matches!(tokens.get(1).map(String::as_str), Some("task")) && tokens.len() == 2 =>
+                    if matches!(tokens.get(1).map(String::as_str), Some("task"))
+                        && tokens.len() == 2 =>
                 {
                     out.extend(task_candidates(app));
                 }
                 Some("link" | "open-link" | "attach")
-                    if matches!(tokens.get(1).map(String::as_str), Some("project")) && tokens.len() == 2 =>
+                    if matches!(tokens.get(1).map(String::as_str), Some("project"))
+                        && tokens.len() == 2 =>
                 {
                     out.extend(project_candidates(app));
                 }
@@ -320,6 +337,68 @@ pub fn complete_output(app: Option<&App>, args: &[String]) -> String {
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_RUNTIME: u8 = 1;
 
+pub fn cwd_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn ends_with_whitespace(input: &str) -> bool {
+    input
+        .chars()
+        .last()
+        .map(|c| c.is_whitespace())
+        .unwrap_or(false)
+}
+
+fn tokenize_command_line(
+    input: &str,
+    allow_unclosed_quotes: bool,
+) -> std::result::Result<(Vec<String>, bool), String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                } else {
+                    cur.push('\\');
+                }
+            }
+            '\'' if !in_double => in_single = !in_single,
+            '"' if !in_single => in_double = !in_double,
+            c if c.is_whitespace() && !in_single && !in_double => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if (in_single || in_double) && !allow_unclosed_quotes {
+        return Err("unterminated quoted string".to_string());
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    Ok((out, ends_with_whitespace(input)))
+}
+
+pub fn split_command_line(input: &str) -> std::result::Result<Vec<String>, String> {
+    tokenize_command_line(input, false).map(|(words, _)| words)
+}
+
+pub fn complete_line(app: Option<&App>, input: &str) -> Vec<String> {
+    let (mut words, trailing_ws) = tokenize_command_line(input, true).unwrap_or_default();
+    if trailing_ws {
+        words.push(String::new());
+    }
+    completion_candidates(app, &words)
+}
+
 /// An opened lun database rooted at an explicit directory (tests) or the CWD
 /// (the binary).
 pub struct App {
@@ -334,6 +413,52 @@ impl App {
             lun: Lun::open(root)?,
         })
     }
+}
+
+pub fn help_text(version: &str) -> String {
+    format!(
+        "lun v{version} — CLI-first markdown task & project tracker\n\n\
+Usage:\n\
+  lun                     Show banner\n\
+  lun init                Create .lun/lun.db in the current directory (idempotent)\n\
+  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\
+  lun new proj \"<name>\"  Create a project\n\
+  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\
+  lun move \"<task>\" \"<project>\"   Move a task to a project\n\
+  lun task <T-00N|title>    View a task (fields, labels, history)\n\
+  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status\n\
+  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)\n\
+  lun task edit <task> [--field value]   Edit task fields\n\
+  lun proj <project> --status <active|inactive>   Update project status\n\
+  lun task complete|reopen|archive <task>   Update task lifecycle\n\
+  lun log <project|task>    Commit-style history for a project or task\n\
+  lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)\n\
+  lun attach ls <task|project> <key|title>   List attachments\n\
+  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments\n\
+  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link\n\
+  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`\n\
+  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)\n\
+  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR (defaults: task's branch -> main)\n\
+  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)\n\
+  lun pr ls               List open and merged PRs\n\
+  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)\n\
+  lun --version             Print version\n\
+  lun --help                Print this help\n\n\
+Planned (later phases):\n\
+  lun (no args in TUI mode) Full-screen TUI (Phase 5+)"
+    )
+}
+
+pub fn init_db_command(app: &App) -> Result<String> {
+    let version = app.lun.schema_version()?;
+    let mut out = String::new();
+    if version == crate::db::CURRENT_VERSION {
+        out.push_str(&format!(
+            "lun init: .lun/lun.db ready (schema v{version})\n"
+        ));
+    }
+    out.push_str("lun init: re-run anytime — migrations are idempotent.");
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -2333,9 +2458,17 @@ fn run_pr(app: &App, args: &[String]) -> Result<String> {
     }
 }
 
-fn run_result(app: &App, args: &[String]) -> Result<String> {
+pub fn run_result_in_reader(
+    app: &App,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+    root_override: Option<&Path>,
+) -> Result<String> {
     match args.first().map(String::as_str) {
         Some("complete") => Ok(complete_output(Some(app), &args[1..])),
+        Some("init") => init_db_command(app),
+        Some("help") | Some("--help") => Ok(help_text(env!("CARGO_PKG_VERSION"))),
+        Some("--version") => Ok(format!("lun v{}", env!("CARGO_PKG_VERSION"))),
         Some("status") => match args.get(1) {
             None => status_all(app),
             Some(q) => {
@@ -2373,9 +2506,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                         }
                     }
                 }
-                let stdin = std::io::stdin();
-                let mut reader = std::io::BufReader::new(stdin.lock());
-                create_project_command(app, name, status, message, &mut reader)
+                create_project_command(app, name, status, message, stdin)
             }
             _ => Err(DbError::new(
                 "usage",
@@ -2408,9 +2539,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                         }
                     }
                 }
-                let stdin = std::io::stdin();
-                let mut reader = std::io::BufReader::new(stdin.lock());
-                create_task(app, title, project_query, &mut reader)
+                create_task(app, title, project_query, stdin)
             }
             _ => Err(DbError::new(
                 "usage",
@@ -2429,9 +2558,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                 } else {
                     None
                 };
-                let stdin = std::io::stdin();
-                let mut reader = std::io::BufReader::new(stdin.lock());
-                create_task(app, title, project_query, &mut reader)
+                create_task(app, title, project_query, stdin)
             }
             _ => {
                 let query = args
@@ -2464,9 +2591,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                         "expected: lun proj <name|P-00N> --status <active|inactive> [--message \"...\"]",
                     )
                 })?;
-                let stdin = std::io::stdin();
-                let mut reader = std::io::BufReader::new(stdin.lock());
-                project_set_status(app, query, status, message, &mut reader)
+                project_set_status(app, query, status, message, stdin)
             }
         },
         Some("move") => {
@@ -2477,42 +2602,24 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                 .get(2)
                 .ok_or_else(|| DbError::new("usage", "expected: lun move \"<task>\" \"<project>\""))?;
             let (_, message) = parse_message_flag(&args[3..])?;
-            let stdin = std::io::stdin();
-            let mut reader = std::io::BufReader::new(stdin.lock());
-            move_task(app, task_query, project_query, message, &mut reader)
+            move_task(app, task_query, project_query, message, stdin)
         }
         Some("task") => match args.get(1) {
             Some(sub) if sub == "ls" => task_list(app, &args[2..]),
             Some(sub) if sub == "edit" => match args.get(2) {
-                Some(q) => {
-                    let stdin = std::io::stdin();
-                    let mut reader = std::io::BufReader::new(stdin.lock());
-                    task_edit(app, q, &args[3..], &mut reader)
-                }
+                Some(q) => task_edit(app, q, &args[3..], stdin),
                 None => Err(DbError::new("usage", "expected: lun task edit <key|title> [flags]")),
             },
             Some(sub) if sub == "complete" => match args.get(2) {
-                Some(q) => {
-                    let stdin = std::io::stdin();
-                    let mut reader = std::io::BufReader::new(stdin.lock());
-                    task_complete(app, q, &mut reader)
-                }
+                Some(q) => task_complete(app, q, stdin),
                 None => Err(DbError::new("usage", "expected: lun task complete <key|title>")),
             },
             Some(sub) if sub == "reopen" => match args.get(2) {
-                Some(q) => {
-                    let stdin = std::io::stdin();
-                    let mut reader = std::io::BufReader::new(stdin.lock());
-                    task_reopen(app, q, &args[3..], &mut reader)
-                }
+                Some(q) => task_reopen(app, q, &args[3..], stdin),
                 None => Err(DbError::new("usage", "expected: lun task reopen <key|title>")),
             },
             Some(sub) if sub == "archive" || sub == "delete" => match args.get(2) {
-                Some(q) => {
-                    let stdin = std::io::stdin();
-                    let mut reader = std::io::BufReader::new(stdin.lock());
-                    task_archive(app, q, &mut reader)
-                }
+                Some(q) => task_archive(app, q, stdin),
                 None => Err(DbError::new("usage", "expected: lun task archive <key|title>")),
             },
             Some(q) => {
@@ -2546,9 +2653,7 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
                             "expected: lun task <key|title> [--status <todo|doing|follow-up|blocked|done>] [--message \"...\"]",
                         )
                     })?;
-                    let stdin = std::io::stdin();
-                    let mut reader = std::io::BufReader::new(stdin.lock());
-                    task_set_status(app, q, status, message, &mut reader)
+                    task_set_status(app, q, status, message, stdin)
                 }
             }
             None => Err(DbError::new(
@@ -2584,12 +2689,12 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
             },
             Some(kind) if kind == "task" || kind == "project" => match (args.get(1), args.get(2), args.get(3)) {
                 (Some(kind), Some(q), Some(file)) => {
-                let stdin = std::io::stdin();
-                let mut reader = std::io::BufReader::new(stdin.lock());
-                match std::env::current_dir() {
-                    Ok(root) => attach_entity_file(app, &root, kind, q, file, &mut reader),
-                    Err(e) => Err(DbError::new("io", format!("resolving CWD: {e}"))),
-                }
+                let root = match root_override {
+                    Some(root) => Ok(root.to_path_buf()),
+                    None => std::env::current_dir()
+                        .map_err(|e| DbError::new("io", format!("resolving CWD: {e}"))),
+                }?;
+                attach_entity_file(app, &root, kind, q, file, stdin)
             }
                 _ => Err(DbError::new(
                     "usage",
@@ -2618,13 +2723,32 @@ fn run_result(app: &App, args: &[String]) -> Result<String> {
             )),
         },
         Some("open-uri") => open_uri(app, &args[1..]),
-        Some("pr") => run_pr(app, &args[1..]),
+        Some("pr") => match args.get(1).map(String::as_str) {
+            Some("merge") if root_override.is_some() && args.len() == 3 => {
+                pr_merge(app, &args[2], root_override.unwrap())
+            }
+            _ => run_pr(app, &args[1..]),
+        },
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),
         )),
         None => Err(DbError::new("usage", "no command given (see `lun --help`)")),
     }
+}
+
+pub fn run_result_with_reader(
+    app: &App,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    run_result_in_reader(app, args, stdin, None)
+}
+
+fn run_result(app: &App, args: &[String]) -> Result<String> {
+    let stdin = std::io::stdin();
+    let mut reader = std::io::BufReader::new(stdin.lock());
+    run_result_with_reader(app, args, &mut reader)
 }
 
 /// Dispatch already-split argv (without the program name) to a command.

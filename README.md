@@ -19,6 +19,9 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
   views, task detail with vim-style keys, in-TUI logs, `/new-task`,
   `/new proj` (plus `/new-project` alias), `/move`, and focused link opening
   ([docs/tui.md](docs/tui.md))
+- TUI command prompt parity with the CLI: press `/` or `:` and run the same
+  `lun ...` commands without the `lun` prefix; the latest command output stays
+  on screen until another command replaces it
 - Drag-and-drop file-path linking in the TUI (escaped/quoted/file URI paths,
   no file copy) and notes editing with log-on-write (`e`/`i` to edit, `Esc` to save)
 - PRs & git glue (`lun pr new|show|ls|merge`): GitHub-style PRs over tasks,
@@ -48,6 +51,30 @@ lun attach open task T-003 mock.png
 ```
 
 `lun --help` lists all CLI commands.
+
+Inside the TUI, press `/` or `:` and type the same commands you would run in
+the shell, but without the leading `lun`. Examples:
+
+```sh
+status
+status P-001 --board
+task T-003
+add task "My task"
+attach project P-001 "./road map.md"
+attach open project P-001 "road map.md"
+```
+
+TUI command defaults are context-relative:
+
+- `log` uses the current project, or the current task when you're already in a
+  task view
+- `add task "..."` uses the current project when you do not pass `proj ...`
+- `task` uses the current task
+- `status --board` uses the current project
+
+Interactive command prompts (commit messages, task-creation questions, and
+external-file confirmation) stay inside the bottom command prompt, and the last
+command result remains visible while you type the next command.
 
 ## Install
 

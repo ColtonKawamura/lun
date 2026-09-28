@@ -28,6 +28,7 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
 
     match app.view {
         View::Initial => paint_initial(buf, content, app),
+        View::Output => paint_output(buf, content, app),
         View::Status => paint_status(buf, content, app),
         View::Board => paint_board(buf, content, app),
         View::Project => paint_project(buf, content, app),
@@ -73,13 +74,13 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left() + 2,
             prompt_y,
-            "/",
+            "",
             Style::default().fg(t::CYAN),
         );
-        let query = format!("{}_", app.palette_query);
+        let query = format!("{}_", app.current_command_prompt());
         put(
             buf,
-            area.left() + 3,
+            area.left() + 2,
             prompt_y,
             &query,
             Style::default().fg(t::CYAN),
@@ -87,25 +88,21 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
     } else {
         // Hint text depends on mode (Phase 6): insert mode advertises the
         // note-editing keys; the statusline shows its own prompt + query.
-        let hint: String = if app.statusline_open {
-            format!("status {}", app.statusline_query)
-        } else if app.mode == super::app::Mode::Insert {
+        let hint: String = if app.mode == super::app::Mode::Insert {
             "inserting note — esc back to normal, ctrl-s to save".to_string()
         } else {
-            " type \"/\" for commands, \":\" for quick actions, \"q\" to quit".to_string()
+            " type \"/\" or \":\" for commands, \"q\" to quit".to_string()
         };
         put(
             buf,
             area.left() + 2,
             prompt_y,
             hint.as_str(),
-            Style::default().fg(
-                if app.statusline_open || app.mode == super::app::Mode::Insert {
-                    t::CYAN
-                } else {
-                    t::DIM
-                },
-            ),
+            Style::default().fg(if app.mode == super::app::Mode::Insert {
+                t::CYAN
+            } else {
+                t::DIM
+            }),
         );
     }
 
@@ -250,6 +247,42 @@ fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
                 );
                 y += 1;
             }
+        }
+    }
+}
+
+fn paint_output(buf: &mut Buffer, area: Rect, app: &App) {
+    let mut y = heading(buf, area.left(), area.top(), "Command Output");
+    if y >= area.bottom() {
+        return;
+    }
+    let Some(output) = app.output.as_ref() else {
+        put(
+            buf,
+            area.left(),
+            y,
+            "Run a command with / or : to display output here.",
+            Style::default().fg(t::DIM),
+        );
+        return;
+    };
+    put(
+        buf,
+        area.left(),
+        y,
+        &format!("$ {}", output.command),
+        Style::default().fg(t::CYAN),
+    );
+    y += 2;
+    let max_rows = area.bottom().saturating_sub(y) as usize;
+    let total_lines = output.text.lines().count();
+    let start = app.output_scroll.min(total_lines.saturating_sub(max_rows));
+    let fg = if output.is_error { t::ERROR } else { t::TEXT };
+    for line in output.text.lines().skip(start).take(max_rows) {
+        put(buf, area.left(), y, line, Style::default().fg(fg));
+        y += 1;
+        if y >= area.bottom() {
+            break;
         }
     }
 }
@@ -807,7 +840,7 @@ fn paint_placeholder(buf: &mut Buffer, area: Rect, app: &App) {
     }
 }
 
-/// The slash-command palette overlay (bottom-anchored above the separator).
+/// The command-completion overlay (bottom-anchored above the separator).
 fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
     let sep_y = area.bottom().saturating_sub(2);
     let available_rows = sep_y.saturating_sub(area.top()) as usize;
@@ -815,25 +848,30 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    let filtered = app.filtered_commands();
-    if filtered.is_empty() {
+    if app.prompt_session.is_some() {
+        return;
+    }
+    let suggestions = app.command_suggestions();
+    if suggestions.is_empty() {
         put(
             buf,
             area.left(),
             sep_y.saturating_sub(1),
-            &format!("(no command matches \"/{}\")", app.palette_query),
+            &format!("(no completion matches \"{}\")", app.palette_query),
             Style::default().fg(t::ERROR),
         );
         return;
     }
 
-    let total_rows = filtered.len() + 2; // heading + underline + command rows
+    let total_rows = suggestions.len() + 2; // heading + underline + rows
     let render_rows = total_rows.min(available_rows);
     if render_rows == 0 {
         return;
     }
 
-    let selected = app.palette_selected.min(filtered.len().saturating_sub(1));
+    let selected = app
+        .palette_selected
+        .min(suggestions.len().saturating_sub(1));
     let selected_row = selected + 2;
     let mut start = total_rows.saturating_sub(render_rows); // bottom-anchored by default
     if selected_row < start {
@@ -861,7 +899,7 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
             continue;
         }
         let i = row - 2;
-        let cmd = filtered[i];
+        let suggestion = &suggestions[i];
         let style = if i == selected {
             t::selected_style()
         } else {
@@ -871,11 +909,9 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            cmd.name,
+            suggestion,
             style.fg(if i == selected { t::BG } else { t::CYAN }),
         );
-        let desc_style = Style::default().fg(if i == selected { t::BG } else { t::DIM });
-        put(buf, area.left() + 16, y, cmd.description, desc_style);
         y += 1;
     }
 }

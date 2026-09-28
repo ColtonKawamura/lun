@@ -11,7 +11,7 @@ use lun::cli::{
     log_view, open_attachment_command, remove_attachment_command, resolve_link, task_view, App,
 };
 use lun::{Lun, ProjectSpec, TaskSpec};
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::path::PathBuf;
 
 fn prompt_reader(lines: &[&str]) -> BufReader<std::io::Cursor<Vec<u8>>> {

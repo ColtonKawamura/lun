@@ -10,6 +10,7 @@
 //! - The palette and the statusline have their own key handling too.
 
 use std::path::PathBuf;
+use std::{io::BufReader, io::Cursor};
 
 use super::data::TuiData;
 use crate::db::{LinkTarget, Lun, ProjectSpec, TaskSpec, TaskUpdateSpec};
@@ -18,6 +19,7 @@ use crate::db::{LinkTarget, Lun, ProjectSpec, TaskSpec, TaskUpdateSpec};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Initial,
+    Output,
     Status,
     Board,
     Project,
@@ -40,6 +42,7 @@ impl View {
     pub fn title(self) -> &'static str {
         match self {
             View::Initial => "Initial",
+            View::Output => "Output",
             View::Status => "Status",
             View::Board => "Board",
             View::Project => "Project",
@@ -106,6 +109,20 @@ pub enum FormState {
     NewTask(NewTaskFormDraft),
     NewProject(NewProjectFormDraft),
     MoveTask(MoveTaskFormDraft),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub command: String,
+    pub text: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptSession {
+    pub args: Vec<String>,
+    pub prompts: Vec<String>,
+    pub answers: Vec<String>,
 }
 
 /// A slash command in the palette.
@@ -193,6 +210,10 @@ pub struct App {
     pub palette_open: bool,
     pub palette_query: String,
     pub palette_selected: usize,
+    pub output: Option<CommandOutput>,
+    pub output_scroll: usize,
+    pub output_page_rows: usize,
+    pub prompt_session: Option<PromptSession>,
     pub project_selected: usize,
     /// Task list selection; doubles as the "current task" for the task
     /// view and note editing.
@@ -237,6 +258,10 @@ impl App {
             palette_open: false,
             palette_query: String::new(),
             palette_selected: 0,
+            output: None,
+            output_scroll: 0,
+            output_page_rows: 5,
+            prompt_session: None,
             project_selected: 0,
             task_selected: 0,
             task_focus: TaskFocus::Summary,
@@ -666,86 +691,395 @@ impl App {
         Ok(())
     }
 
-    /// Palette rows after filtering by the current query.
-    ///
-    /// The query is typed WITHOUT the leading `/` (the prompt shows `› /<query>`),
-    /// so compare against the command name minus its slash. Phase 6: the
-    /// query may carry a command line after the command word (e.g.
-    /// `task T-001`); only the word before the first space filters.
-    pub fn filtered_commands(&self) -> Vec<&'static SlashCommand> {
-        let prefix = self
-            .palette_query
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
-        SLASH_COMMANDS
-            .iter()
-            .filter(|c| c.name.trim_start_matches('/').starts_with(&prefix))
-            .collect()
+    pub fn current_command_prompt(&self) -> String {
+        if let Some(prompt) = self.current_prompt_label() {
+            prompt
+        } else {
+            format!("/{}", self.palette_query)
+        }
     }
 
-    /// Execute the selected (or given) slash command.
-    pub fn run_command(&mut self, index: usize) {
-        let filtered = self.filtered_commands();
-        let Some(cmd) = filtered.get(index) else {
-            let query = self.palette_query.clone();
-            self.close_palette();
-            self.message = Some((format!("no command matches '{query}'"), true));
+    pub fn current_prompt_label(&self) -> Option<String> {
+        self.prompt_session
+            .as_ref()
+            .and_then(|s| s.prompts.get(s.answers.len()).cloned())
+    }
+
+    fn completion_app(&self) -> Option<crate::cli::App> {
+        self.root
+            .as_deref()
+            .and_then(|root| crate::cli::App::open(root).ok())
+    }
+
+    pub fn command_suggestions(&self) -> Vec<String> {
+        if self.prompt_session.is_some() {
+            return Vec::new();
+        }
+        let app = self.completion_app();
+        crate::cli::complete_line(app.as_ref(), &self.palette_query)
+    }
+
+    pub fn filtered_commands(&self) -> Vec<String> {
+        self.command_suggestions()
+    }
+
+    fn quote_completion(value: &str) -> String {
+        let has_ws = value.chars().any(|c| c.is_whitespace());
+        if value.is_empty() || (!has_ws && !value.contains('"') && !value.contains('\\')) {
+            return value.to_string();
+        }
+        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+
+    pub fn apply_selected_suggestion(&mut self) {
+        let suggestions = self.command_suggestions();
+        let Some(suggestion) = suggestions.get(self.palette_selected).cloned() else {
             return;
         };
-        // Anything after the command name in the palette query is the
-        // command line (e.g. `/task T-002` or `/log paper-stack`).
-        let rest = {
-            let rest = self.palette_query.as_str();
-            let name = cmd.name.trim_start_matches('/');
-            if rest.len() > name.len() {
-                let after = &rest[name.len()..];
-                if after.starts_with(char::is_whitespace) {
-                    after.trim_start().to_string()
-                } else {
-                    String::new()
+        let mut words =
+            crate::cli::split_command_line(&self.palette_query).unwrap_or_else(|_| Vec::new());
+        let trailing_ws = self
+            .palette_query
+            .chars()
+            .last()
+            .map(|c| c.is_whitespace())
+            .unwrap_or(false);
+        let suggestion = Self::quote_completion(&suggestion);
+        if trailing_ws || words.is_empty() {
+            words.push(suggestion);
+        } else if let Some(last) = words.last_mut() {
+            *last = suggestion;
+        }
+        self.palette_query = words.join(" ");
+    }
+
+    fn current_context_project_key(&self) -> Option<String> {
+        if self.view == View::Task {
+            if let Some(pid) = self.current_task().and_then(|t| t.project_id) {
+                if let Some(project) = self.data.projects.iter().find(|p| p.id == pid) {
+                    return Some(project.project_key.clone());
                 }
-            } else {
-                String::new()
-            }
-        };
-        match cmd.view {
-            None => {
-                self.palette_open = false;
-                self.palette_query.clear();
-                self.palette_selected = 0;
-                // `q` guards unsaved notes like quit does.
-                if self.notes_modified() {
-                    self.message = Some((
-                        "unsaved note edits — press Esc in insert mode first".to_string(),
-                        true,
-                    ));
-                    return;
-                }
-                self.quit = true;
-                return;
-            }
-            Some(view) => {
-                if cmd.name == "/new" {
-                    let subject = rest.trim();
-                    if subject.eq_ignore_ascii_case("proj")
-                        || subject.eq_ignore_ascii_case("project")
-                    {
-                        self.enter_view(View::NewProject, "");
-                        return;
-                    }
-                    if subject.eq_ignore_ascii_case("task") {
-                        self.enter_view(View::NewTask, "");
-                        return;
-                    }
-                    self.close_palette();
-                    self.message = Some(("usage: /new proj  (or /new task)".to_string(), true));
-                    return;
-                }
-                self.enter_view(view, &rest);
             }
         }
+        self.data.current().map(|p| p.project_key.clone())
+    }
+
+    fn normalize_command_args(&self, args: Vec<String>) -> Vec<String> {
+        let mut args = args;
+        if args.is_empty() {
+            return args;
+        }
+        match args.first().map(String::as_str) {
+            Some("task") if args.len() == 1 => {
+                if let Some(task) = self.current_task() {
+                    args.push(task.task_key.clone());
+                }
+            }
+            Some("log") if args.len() == 1 => {
+                if self.view == View::Task {
+                    if let Some(task) = self.current_task() {
+                        args.push(task.task_key.clone());
+                    }
+                } else if let Some(project) = self.data.current() {
+                    args.push(project.project_key.clone());
+                }
+            }
+            Some("status") if args.len() == 2 && args[1] == "--board" => {
+                if let Some(project) = self.data.current() {
+                    args.insert(1, project.project_key.clone());
+                }
+            }
+            Some("add")
+                if args.get(1).map(String::as_str) == Some("task")
+                    && !args.iter().any(|a| a == "proj" || a == "project") =>
+            {
+                if let Some(project_key) = self.current_context_project_key() {
+                    args.push("proj".to_string());
+                    args.push(project_key);
+                }
+            }
+            _ => {}
+        }
+        args
+    }
+
+    fn prompt_labels_for_command(&self, args: &[String]) -> Result<Vec<String>, String> {
+        let mut prompts = Vec::new();
+        match args.first().map(String::as_str) {
+            Some("add") if args.get(1).map(String::as_str) == Some("task") => {
+                prompts.extend([
+                    "Status? (todo, doing, follow-up, blocked, done): ".to_string(),
+                    "Priority? (low, med, or high): ".to_string(),
+                    "Assignee? (default: me): ".to_string(),
+                    "Commit Message: ".to_string(),
+                ]);
+            }
+            Some("new") if matches!(args.get(1).map(String::as_str), Some("proj" | "project")) => {
+                if !args.iter().any(|a| a == "--message") {
+                    prompts.push("Commit Message: ".to_string());
+                }
+            }
+            Some("move") if !args.iter().any(|a| a == "--message") => {
+                prompts.push("Commit Message: ".to_string());
+            }
+            Some("task") => match args.get(1).map(String::as_str) {
+                Some("edit") if !args.iter().any(|a| a == "--message") => {
+                    prompts.push("Commit Message: ".to_string());
+                }
+                Some("complete") | Some("archive") | Some("delete") => {
+                    prompts.push("Commit Message: ".to_string());
+                }
+                Some("reopen") => prompts.push("Commit Message: ".to_string()),
+                Some(_)
+                    if args.iter().any(|a| a == "--status")
+                        && !args.iter().any(|a| a == "--message") =>
+                {
+                    prompts.push("Commit Message: ".to_string());
+                }
+                _ => {}
+            },
+            Some("proj") | Some("project")
+                if args.iter().any(|a| a == "--status")
+                    && !args.iter().any(|a| a == "--message") =>
+            {
+                prompts.push("Commit Message: ".to_string());
+            }
+            Some("attach")
+                if matches!(args.get(1).map(String::as_str), Some("task" | "project")) =>
+            {
+                let Some(root) = self.root.as_deref() else {
+                    return Ok(prompts);
+                };
+                let Some(file) = args.get(3) else {
+                    return Ok(prompts);
+                };
+                let src = std::path::Path::new(file);
+                let inside = std::path::absolute(src)
+                    .ok()
+                    .zip(std::path::absolute(root).ok())
+                    .map(|(s, r)| s.starts_with(&r))
+                    .unwrap_or(false);
+                if !inside {
+                    prompts.push(
+                        "This path is outside the current repo. Link anyway? [y/N] ".to_string(),
+                    );
+                }
+            }
+            _ => {}
+        }
+        Ok(prompts)
+    }
+
+    fn select_context_from_args(&mut self, cli_app: &crate::cli::App, args: &[String]) {
+        match args.first().map(String::as_str) {
+            Some("task") => {
+                let query = match args.get(1).map(String::as_str) {
+                    Some("ls" | "edit" | "complete" | "reopen" | "archive" | "delete") => {
+                        args.get(2).map(String::as_str)
+                    }
+                    other => other,
+                };
+                if let Some(query) = query {
+                    if let Ok(task) = crate::cli::resolve_task(&cli_app.lun, query) {
+                        if let Some(pos) = self.data.tasks.iter().position(|t| t.id == task.id) {
+                            self.task_selected = pos;
+                        }
+                    }
+                }
+            }
+            Some("status") | Some("log") => {
+                if let Some(query) = args.get(1) {
+                    match crate::cli::resolve_entity(&cli_app.lun, query) {
+                        Ok(crate::cli::Entity::Project(project)) => {
+                            if let Some(pos) =
+                                self.data.projects.iter().position(|p| p.id == project.id)
+                            {
+                                self.data.current_project = pos;
+                                self.project_selected = pos;
+                            }
+                        }
+                        Ok(crate::cli::Entity::Task(task)) => {
+                            if let Some(pos) = self.data.tasks.iter().position(|t| t.id == task.id)
+                            {
+                                self.task_selected = pos;
+                            }
+                        }
+                        Err(_) => {}
+                    }
+                }
+            }
+            Some("proj") | Some("project") => {
+                if let Some(query) = args.get(1) {
+                    if let Ok(project) = crate::cli::resolve_project(&cli_app.lun, query) {
+                        if let Some(pos) =
+                            self.data.projects.iter().position(|p| p.id == project.id)
+                        {
+                            self.data.current_project = pos;
+                            self.project_selected = pos;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn execute_cli_args(&mut self, args: Vec<String>, command: String) {
+        let Some(root) = self.root.as_deref() else {
+            self.close_palette();
+            self.message = Some((
+                "no store attached — command execution unavailable".to_string(),
+                true,
+            ));
+            return;
+        };
+        let cli_app = match crate::cli::App::open(root) {
+            Ok(app) => app,
+            Err(e) => {
+                self.close_palette();
+                self.message = Some((format!("opening command app failed: {e}"), true));
+                return;
+            }
+        };
+        let prompts = match self.prompt_labels_for_command(&args) {
+            Ok(prompts) => prompts,
+            Err(e) => {
+                self.close_palette();
+                self.message = Some((e, true));
+                return;
+            }
+        };
+        if !prompts.is_empty() {
+            self.prompt_session = Some(PromptSession {
+                args,
+                prompts,
+                answers: Vec::new(),
+            });
+            self.palette_query.clear();
+            self.palette_selected = 0;
+            if self.output.is_some() {
+                self.view = View::Output;
+            }
+            self.message = None;
+            return;
+        }
+        let mut reader = BufReader::new(Cursor::new(Vec::<u8>::new()));
+        let result = crate::cli::run_result_in_reader(&cli_app, &args, &mut reader, Some(root));
+        self.finish_command(command, &cli_app, &args, result);
+    }
+
+    fn finish_command(
+        &mut self,
+        command: String,
+        cli_app: &crate::cli::App,
+        args: &[String],
+        result: crate::db::Result<String>,
+    ) {
+        match result {
+            Ok(text) => {
+                let _ = self.refresh_from_store();
+                self.select_context_from_args(cli_app, args);
+                self.output = Some(CommandOutput {
+                    command,
+                    text,
+                    is_error: false,
+                });
+            }
+            Err(e) => {
+                let _ = self.refresh_from_store();
+                self.output = Some(CommandOutput {
+                    command,
+                    text: format!("lun: {e}"),
+                    is_error: true,
+                });
+            }
+        }
+        self.output_scroll = 0;
+        self.view = View::Output;
+        self.close_palette();
+        self.message = None;
+    }
+
+    fn submit_prompt_answer(&mut self) {
+        let answer = std::mem::take(&mut self.palette_query);
+        let Some(session) = self.prompt_session.as_mut() else {
+            return;
+        };
+        session.answers.push(answer);
+        if session.answers.len() < session.prompts.len() {
+            self.palette_selected = 0;
+            return;
+        }
+        let command = session.args.join(" ");
+        let args = session.args.clone();
+        let mut bytes = Vec::new();
+        for answer in &session.answers {
+            bytes.extend_from_slice(answer.as_bytes());
+            bytes.push(b'\n');
+        }
+        self.prompt_session = None;
+        let Some(root) = self.root.as_deref() else {
+            self.close_palette();
+            self.message = Some((
+                "no store attached — command execution unavailable".to_string(),
+                true,
+            ));
+            return;
+        };
+        let cli_app = match crate::cli::App::open(root) {
+            Ok(app) => app,
+            Err(e) => {
+                self.close_palette();
+                self.message = Some((format!("opening command app failed: {e}"), true));
+                return;
+            }
+        };
+        let mut reader = BufReader::new(Cursor::new(bytes));
+        let result = crate::cli::run_result_in_reader(&cli_app, &args, &mut reader, Some(root));
+        self.finish_command(command, &cli_app, &args, result);
+    }
+
+    /// Execute the current TUI command line.
+    pub fn run_command(&mut self) {
+        if self.prompt_session.is_some() {
+            self.submit_prompt_answer();
+            return;
+        }
+        let line = self.palette_query.trim().to_string();
+        if line.is_empty() {
+            self.close_palette();
+            if self.output.is_some() {
+                self.view = View::Output;
+            }
+            return;
+        }
+        if line == "quit" {
+            self.close_palette();
+            if self.notes_modified() {
+                self.message = Some((
+                    "unsaved note edits — press Esc in insert mode first".to_string(),
+                    true,
+                ));
+                return;
+            }
+            self.quit = true;
+            return;
+        }
+        let args = match crate::cli::split_command_line(&line) {
+            Ok(args) => self.normalize_command_args(args),
+            Err(e) => {
+                self.output = Some(CommandOutput {
+                    command: line.clone(),
+                    text: format!("lun: {e}"),
+                    is_error: true,
+                });
+                self.output_scroll = 0;
+                self.view = View::Output;
+                self.close_palette();
+                return;
+            }
+        };
+        self.execute_cli_args(args, line);
     }
 
     /// Switch views, resolving task/log subjects. `rest` is the command
@@ -769,6 +1103,9 @@ impl App {
         }
         self.previous_view = self.view;
         match view {
+            View::Output => {
+                self.view = View::Output;
+            }
             View::Task => {
                 if rest.is_empty() {
                     if self.current_task().is_none() {
@@ -866,20 +1203,30 @@ impl App {
     /// Open the palette (reset state).
     pub fn open_palette(&mut self) {
         self.palette_open = true;
-        self.palette_query.clear();
+        if self.prompt_session.is_none() {
+            self.palette_query.clear();
+        }
         self.palette_selected = 0;
+    }
+
+    pub fn close_command_prompt(&mut self) {
+        self.close_palette();
+        if self.output.is_some() {
+            self.view = View::Output;
+        }
     }
 
     fn close_palette(&mut self) {
         self.palette_open = false;
         self.palette_query.clear();
         self.palette_selected = 0;
+        self.prompt_session = None;
     }
 
     /// Append a typed character to the palette query; clamp selection.
     pub fn palette_type(&mut self, ch: char) {
         self.palette_query.push(ch);
-        let n = self.filtered_commands().len();
+        let n = self.command_suggestions().len();
         if n == 0 {
             self.palette_selected = 0;
         } else if self.palette_selected >= n {
@@ -889,7 +1236,10 @@ impl App {
 
     pub fn palette_backspace(&mut self) {
         self.palette_query.pop();
-        let n = self.filtered_commands().len();
+        if self.prompt_session.is_some() {
+            return;
+        }
+        let n = self.command_suggestions().len();
         if n == 0 {
             self.palette_selected = 0;
         } else if self.palette_selected >= n {
@@ -898,7 +1248,7 @@ impl App {
     }
 
     pub fn palette_up(&mut self) {
-        let n = self.filtered_commands().len();
+        let n = self.command_suggestions().len();
         if n == 0 {
             return;
         }
@@ -910,7 +1260,7 @@ impl App {
     }
 
     pub fn palette_down(&mut self) {
-        let n = self.filtered_commands().len();
+        let n = self.command_suggestions().len();
         if n == 0 {
             return;
         }
@@ -941,6 +1291,10 @@ impl App {
 
     /// j/k task-list navigation (board/status/task views); wraps around.
     pub fn task_nav(&mut self, dir: i32) {
+        if self.view == View::Output {
+            self.output_scroll_by(dir);
+            return;
+        }
         if self.data.tasks.is_empty() {
             return;
         }
@@ -952,6 +1306,7 @@ impl App {
     pub fn jump_top(&mut self) {
         self.pending_g = false;
         match self.view {
+            View::Output => self.output_scroll = 0,
             View::Project => self.project_selected = 0,
             _ => self.task_selected = 0,
         }
@@ -960,6 +1315,13 @@ impl App {
     pub fn jump_bottom(&mut self) {
         self.pending_g = false;
         match self.view {
+            View::Output => {
+                self.output_scroll = self
+                    .output
+                    .as_ref()
+                    .map(|o| o.text.lines().count().saturating_sub(1))
+                    .unwrap_or(0);
+            }
             View::Project => {
                 self.project_selected = self.data.projects.len().saturating_sub(1);
             }
@@ -971,9 +1333,19 @@ impl App {
 
     pub fn page_nav(&mut self, dir: i32) {
         match self.view {
+            View::Output => self.output_scroll_by(dir * self.output_page_rows.max(1) as i32),
             View::Project => self.project_nav(dir * 5, false),
             _ => self.task_nav(dir * 5),
         }
+    }
+
+    pub fn output_scroll_by(&mut self, dir: i32) {
+        let current = self.output_scroll as i32;
+        self.output_scroll = (current + dir).max(0) as usize;
+    }
+
+    pub fn update_layout_metrics(&mut self, total_height: u16) {
+        self.output_page_rows = total_height.saturating_sub(5).max(1) as usize;
     }
 
     pub fn task_focus_next(&mut self) {
