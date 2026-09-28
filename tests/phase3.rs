@@ -10,7 +10,8 @@ use std::path::PathBuf;
 
 use lun::cli::{
     create_task, log_view, resolve_entity, resolve_project, resolve_task, status_all,
-    status_project, task_view, App, EXIT_USAGE,
+    status_project, task_archive, task_complete, task_edit, task_list, task_reopen, task_view, App,
+    EXIT_USAGE,
 };
 use lun::{Lun, ProjectSpec, TaskSpec};
 
@@ -44,11 +45,7 @@ fn split_cols(line: &str) -> Vec<String> {
 fn temp_root(name: &str) -> PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p3-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("lun-p3-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -109,7 +106,14 @@ fn fixture() -> (PathBuf, Lun) {
         "high",
         Some("feat/damping-sweep"),
     );
-    let t011 = t(&lun, Some(ps.id), "Analyze restitution vs stack size", "todo", "med", None);
+    let t011 = t(
+        &lun,
+        Some(ps.id),
+        "Analyze restitution vs stack size",
+        "todo",
+        "med",
+        None,
+    );
     let t012 = t(
         &lun,
         Some(ps.id),
@@ -118,7 +122,14 @@ fn fixture() -> (PathBuf, Lun) {
         "high",
         Some("feat/methods-draft"),
     );
-    t(&lun, Some(ps.id), "Set up ball–chain simulation", "done", "high", Some("feat/chain-sim"));
+    t(
+        &lun,
+        Some(ps.id),
+        "Set up ball–chain simulation",
+        "done",
+        "high",
+        Some("feat/chain-sim"),
+    );
     t(
         &lun,
         Some(ps.id),
@@ -127,11 +138,46 @@ fn fixture() -> (PathBuf, Lun) {
         "high",
         Some("feat/restitution"),
     );
-    t(&lun, Some(ps.id), "Explore stack length sweep", "done", "med", None);
-    t(&lun, Some(ps.id), "Document dimensionless parameters", "done", "med", None);
-    t(&lun, Some(ps.id), "Validate negligible-gravity regime", "done", "med", None);
-    t(&lun, Some(ps.id), "Prepare figures for restitution plot", "done", "med", None);
-    t(&lun, Some(ps.id), "Draft introduction section", "done", "low", None);
+    t(
+        &lun,
+        Some(ps.id),
+        "Explore stack length sweep",
+        "done",
+        "med",
+        None,
+    );
+    t(
+        &lun,
+        Some(ps.id),
+        "Document dimensionless parameters",
+        "done",
+        "med",
+        None,
+    );
+    t(
+        &lun,
+        Some(ps.id),
+        "Validate negligible-gravity regime",
+        "done",
+        "med",
+        None,
+    );
+    t(
+        &lun,
+        Some(ps.id),
+        "Prepare figures for restitution plot",
+        "done",
+        "med",
+        None,
+    );
+    t(
+        &lun,
+        Some(ps.id),
+        "Draft introduction section",
+        "done",
+        "low",
+        None,
+    );
 
     // T-011..: granE-friction (2 todo)
     t(
@@ -142,7 +188,14 @@ fn fixture() -> (PathBuf, Lun) {
         "high",
         None,
     );
-    t(&lun, Some(ge.id), "Save contact histories in pack.m", "todo", "med", None);
+    t(
+        &lun,
+        Some(ge.id),
+        "Save contact histories in pack.m",
+        "todo",
+        "med",
+        None,
+    );
 
     // lun-cli: 1 in-progress, 1 done
     t(
@@ -163,8 +216,22 @@ fn fixture() -> (PathBuf, Lun) {
     );
 
     // Unassigned: 2 todo
-    t(&lun, None, "Sketch ideas for `lun board`", "todo", "med", None);
-    t(&lun, None, "Refactor personal dotfiles", "todo", "low", None);
+    t(
+        &lun,
+        None,
+        "Sketch ideas for `lun board`",
+        "todo",
+        "med",
+        None,
+    );
+    t(
+        &lun,
+        None,
+        "Refactor personal dotfiles",
+        "todo",
+        "low",
+        None,
+    );
 
     let _ = (t010, t011, t012);
     (root, lun)
@@ -181,7 +248,10 @@ fn status_all_matches_plan_format() {
     let out = status_all(&app).unwrap();
 
     // Section headers
-    assert!(out.starts_with("Projects\n--------\n\n"), "Projects header: {out}");
+    assert!(
+        out.starts_with("Projects\n--------\n\n"),
+        "Projects header: {out}"
+    );
     assert!(out.contains("\nTasks\n-----\n\n"), "Tasks header: {out}");
 
     // Project rows: key, name, status, Open, Review, Done
@@ -193,9 +263,18 @@ fn status_all_matches_plan_format() {
         .collect();
     assert_eq!(proj_rows.len(), 4, "four project rows: {out}");
     let row = |key: &str| proj_rows.iter().find(|r| r[0] == key).unwrap();
-    assert_eq!(row("P-000"), &["P-000", "Unassigned", "active", "2", "0", "0"]);
-    assert_eq!(row("P-001"), &["P-001", "paper-stack", "in-progress", "2", "1", "7"]);
-    assert_eq!(row("P-002"), &["P-002", "granE-friction", "planning", "2", "0", "0"]);
+    assert_eq!(
+        row("P-000"),
+        &["P-000", "Unassigned", "active", "2", "0", "0"]
+    );
+    assert_eq!(
+        row("P-001"),
+        &["P-001", "paper-stack", "in-progress", "2", "1", "7"]
+    );
+    assert_eq!(
+        row("P-002"),
+        &["P-002", "granE-friction", "planning", "2", "0", "0"]
+    );
     assert_eq!(row("P-003"), &["P-003", "lun-cli", "active", "1", "0", "1"]);
 
     // Task rows: T-001 row with branch, T-015 unassigned row (empty branch)
@@ -207,11 +286,26 @@ fn status_all_matches_plan_format() {
     assert_eq!(task_rows.len(), 16, "sixteen task rows: {out}");
     assert_eq!(
         task_rows[0],
-        &["T-001", "paper-stack", "Tune ball–chain damping params", "in-progress", "high", "me", "feat/damping-sweep"]
+        &[
+            "T-001",
+            "paper-stack",
+            "Tune ball–chain damping params",
+            "in-progress",
+            "high",
+            "me",
+            "feat/damping-sweep"
+        ]
     );
     assert_eq!(
         task_rows[14],
-        &["T-015", "Unassigned", "Sketch ideas for `lun board`", "todo", "med", "me"]
+        &[
+            "T-015",
+            "Unassigned",
+            "Sketch ideas for `lun board`",
+            "todo",
+            "med",
+            "me"
+        ]
     );
 
     // Summary line: 4 projects, 16 tasks (5 todo, 2 in-progress, 1 review, 8 done)
@@ -235,7 +329,9 @@ fn status_project_matches_plan_format() {
 
     // Overview block
     assert!(
-        out.contains("Overview\n--------\n\nID:      P-001\nName:    paper-stack\nStatus:  in-progress\n"),
+        out.contains(
+            "Overview\n--------\n\nID:      P-001\nName:    paper-stack\nStatus:  in-progress\n"
+        ),
         "overview: {out}"
     );
 
@@ -254,7 +350,14 @@ fn status_project_matches_plan_format() {
     assert_eq!(t_rows.len(), 10, "ten task rows: {out}");
     assert_eq!(
         t_rows[0],
-        &["T-001", "Tune ball–chain damping params", "in-progress", "high", "me", "feat/damping-sweep"]
+        &[
+            "T-001",
+            "Tune ball–chain damping params",
+            "in-progress",
+            "high",
+            "me",
+            "feat/damping-sweep"
+        ]
     );
 
     // Summary: 1 project · 10 tasks
@@ -373,8 +476,14 @@ fn create_task_with_single_project_defaults_to_it() {
     let app = App { lun };
     let mut input = prompt_reader(&["in-progress", "high", "me", "custom commit message"]);
     let out = create_task(&app, "solo task", &mut input).unwrap();
-    assert_eq!(out.lines().next().unwrap(), "Created task T-001 in project solo");
-    assert_eq!(out.lines().nth(1).unwrap(), "Committed: custom commit message");
+    assert_eq!(
+        out.lines().next().unwrap(),
+        "Created task T-001 in project solo"
+    );
+    assert_eq!(
+        out.lines().nth(1).unwrap(),
+        "Committed: custom commit message"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -386,7 +495,10 @@ fn create_task_defaults_project_to_unassigned_when_no_projects() {
     let app = App { lun };
     let mut input = prompt_reader(&["todo", "med", "", ""]);
     let out = create_task(&app, "unhome task", &mut input).unwrap();
-    assert_eq!(out.lines().next().unwrap(), "Created task T-001 in project Unassigned");
+    assert_eq!(
+        out.lines().next().unwrap(),
+        "Created task T-001 in project Unassigned"
+    );
     assert_eq!(
         out.lines().nth(1).unwrap(),
         "Committed: add task \"unhome task\" to Unassigned"
@@ -443,7 +555,10 @@ fn task_view_matches_plan_format() {
     );
 
     // Fields
-    assert!(out.contains("Project:   paper-stack\n"), "project field: {out}");
+    assert!(
+        out.contains("Project:   paper-stack\n"),
+        "project field: {out}"
+    );
     assert!(
         out.contains("Title:     Write methods section draft\n"),
         "title field: {out}"
@@ -501,6 +616,71 @@ fn task_view_unknown_and_ambiguous() {
     assert_eq!(e.kind(), "not-found");
 }
 
+#[test]
+fn task_list_edit_complete_reopen_and_archive_work() {
+    let (_root, lun) = fixture();
+    let app = App { lun };
+
+    let listed = task_list(
+        &app,
+        &[
+            "--project".into(),
+            "paper-stack".into(),
+            "--status".into(),
+            "review".into(),
+            "--sort".into(),
+            "title".into(),
+        ],
+    )
+    .unwrap();
+    assert!(listed.contains("T-003"));
+    assert!(!listed.contains("T-001"));
+
+    let edited = task_edit(
+        &app,
+        "T-003",
+        &[
+            "--status".into(),
+            "in-progress".into(),
+            "--priority".into(),
+            "med".into(),
+            "--branch".into(),
+            "feat/edited".into(),
+            "--labels".into(),
+            "docs,phase11".into(),
+        ],
+    )
+    .unwrap();
+    assert!(edited.contains("Updated T-003"));
+
+    let out = task_view(&app, "T-003").unwrap();
+    assert!(out.contains("Status:    in-progress"));
+    assert!(out.contains("Priority:  med"));
+    assert!(out.contains("Branch:    feat/edited"));
+    assert!(out.contains("Labels:    [\"docs\", \"phase11\"]"));
+
+    let completed = task_complete(&app, "T-003").unwrap();
+    assert!(completed.contains("Completed T-003"));
+    assert!(task_view(&app, "T-003")
+        .unwrap()
+        .contains("Status:    done"));
+
+    let reopened = task_reopen(&app, "T-003").unwrap();
+    assert!(reopened.contains("Reopened T-003"));
+    assert!(task_view(&app, "T-003")
+        .unwrap()
+        .contains("Status:    todo"));
+
+    let archived = task_archive(&app, "T-003").unwrap();
+    assert!(archived.contains("Archived T-003"));
+    let archived_view = task_view(&app, "T-003").unwrap();
+    assert!(archived_view.contains("Archived:  yes"));
+    assert!(!task_list(&app, &[]).unwrap().contains("T-003"));
+    assert!(task_list(&app, &["--all".into()])
+        .unwrap()
+        .contains("T-003"));
+}
+
 // ---------------------------------------------------------------------------
 // lun log
 // ---------------------------------------------------------------------------
@@ -517,7 +697,10 @@ fn log_for_task_matches_plan_format() {
         "header: {out}"
     );
     assert!(
-        out.lines().next().unwrap().ends_with("\"Write methods section draft\""),
+        out.lines()
+            .next()
+            .unwrap()
+            .ends_with("\"Write methods section draft\""),
         "header ends with title: {out}"
     );
     let underline = out.lines().nth(1).unwrap();
@@ -552,7 +735,9 @@ fn log_for_project_lists_task_history_newest_first() {
     );
 
     // Newest first: the last-created paper-stack task must appear before the first.
-    let last = out.find("Draft introduction section").expect("last task in log");
+    let last = out
+        .find("Draft introduction section")
+        .expect("last task in log");
     let first = out
         .find("Set up ball–chain simulation")
         .expect("first task in log");

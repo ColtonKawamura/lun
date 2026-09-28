@@ -17,7 +17,7 @@ pub struct TuiData {
     pub tasks: Vec<Task>,
     /// Index into [`TuiData::projects`] for the current project.
     pub current_project: usize,
-    /// Attachments for all tasks (appended in task order).
+    /// Attachments for all tasks/projects.
     pub attachments: Vec<Attachment>,
     /// Links for all tasks (appended in task order).
     pub links: Vec<Link>,
@@ -41,7 +41,11 @@ impl TuiData {
     /// Tasks belonging to a project (None -> no tasks).
     pub fn tasks_for(&self, project_id: Option<i64>) -> Vec<&Task> {
         match project_id {
-            Some(pid) => self.tasks.iter().filter(|t| t.project_id == Some(pid)).collect(),
+            Some(pid) => self
+                .tasks
+                .iter()
+                .filter(|t| t.project_id == Some(pid))
+                .collect(),
             None => Vec::new(),
         }
     }
@@ -49,7 +53,11 @@ impl TuiData {
     /// Board columns for a project: (todo, in-progress, review, done).
     pub fn board_columns(&self, project_id: i64) -> [Vec<&Task>; 4] {
         let mut cols: [Vec<&Task>; 4] = [vec![], vec![], vec![], vec![]];
-        for t in self.tasks.iter().filter(|t| t.project_id == Some(project_id)) {
+        for t in self
+            .tasks
+            .iter()
+            .filter(|t| t.project_id == Some(project_id))
+        {
             match t.status.as_str() {
                 "todo" => cols[0].push(t),
                 "in-progress" => cols[1].push(t),
@@ -85,16 +93,32 @@ impl TuiData {
     }
 
     pub fn attachments_for_task(&self, task_id: i64) -> Vec<&Attachment> {
-        self.attachments.iter().filter(|a| a.task_id == task_id).collect()
+        self.attachments
+            .iter()
+            .filter(|a| a.task_id == Some(task_id))
+            .collect()
+    }
+
+    pub fn attachments_for_project(&self, project_id: i64) -> Vec<&Attachment> {
+        self.attachments
+            .iter()
+            .filter(|a| a.project_id == Some(project_id))
+            .collect()
     }
 
     pub fn links_for_task(&self, task_id: i64) -> Vec<&Link> {
-        self.links.iter().filter(|l| l.task_id == Some(task_id)).collect()
+        self.links
+            .iter()
+            .filter(|l| l.task_id == Some(task_id))
+            .collect()
     }
 
     /// Log entries for one task, newest first (DB order preserved).
     pub fn logs_for_task(&self, task_id: i64) -> Vec<&LogEntry> {
-        self.logs.iter().filter(|e| e.entity_id == task_id).collect()
+        self.logs
+            .iter()
+            .filter(|e| e.entity_id == task_id)
+            .collect()
     }
 
     /// A project's full log: its own entries plus every task entry in the
@@ -208,6 +232,9 @@ pub fn load(
         attachments.extend(lun.attachments_for_task(t.id)?);
         links.extend(lun.links_for_task(t.id)?);
         logs.extend(lun.logs_for("task", t.id)?);
+    }
+    for p in &projects {
+        attachments.extend(lun.attachments_for_project(p.id)?);
     }
     let mut project_logs = Vec::new();
     for p in &projects {

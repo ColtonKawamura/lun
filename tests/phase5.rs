@@ -62,11 +62,7 @@ fn line_with(haystack: &[&str], needle: &str) -> Option<usize> {
 fn temp_root(name: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p5-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("lun-p5-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -133,7 +129,10 @@ fn data_board_columns_partition_by_status() {
     let (root, lun) = fixture();
     let d = data::load(&lun, "0.1.0", "p", "b".into(), Some("P-001")).unwrap();
     let cols = d.board_columns(2); // paper-stack is row id 2 (P-000=1)
-    let titles: Vec<Vec<&str>> = cols.iter().map(|c| c.iter().map(|t| t.title.as_str()).collect()).collect();
+    let titles: Vec<Vec<&str>> = cols
+        .iter()
+        .map(|c| c.iter().map(|t| t.title.as_str()).collect())
+        .collect();
     assert_eq!(titles[0], vec!["set up sim"]);
     assert_eq!(titles[1], vec!["tune damping"]);
     assert_eq!(titles[2], vec!["write methods"]);
@@ -177,7 +176,10 @@ fn palette_opens_filters_and_executes() {
     term::handle_key(&mut app, &key(KeyCode::Char('t')));
     term::handle_key(&mut app, &key(KeyCode::Char('a')));
     assert_eq!(
-        app.filtered_commands().iter().map(|c| c.name).collect::<Vec<_>>(),
+        app.filtered_commands()
+            .iter()
+            .map(|c| c.name)
+            .collect::<Vec<_>>(),
         vec!["/status"]
     );
 
@@ -528,7 +530,14 @@ fn message_line_overlays_above_hint_bar() {
 fn tiny_screen_does_not_panic() {
     let (root, _lun) = fixture();
     let mut app = app_for(&root);
-    for view in [View::Initial, View::Status, View::Board, View::Project, View::Help, View::Placeholder] {
+    for view in [
+        View::Initial,
+        View::Status,
+        View::Board,
+        View::Project,
+        View::Help,
+        View::Placeholder,
+    ] {
         app.view = view;
         let _ = screen(&app, 5, 3);
     }

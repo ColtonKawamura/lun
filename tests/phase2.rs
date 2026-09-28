@@ -1,7 +1,7 @@
 //! Phase 2 tests: init idempotency, key generation, log-on-write,
 //! P-000 fallback, and attachment/link records.
 
-use lun::{Lun, LinkTarget, ProjectSpec, TaskSpec};
+use lun::{LinkTarget, Lun, ProjectSpec, TaskSpec};
 
 fn temp_root(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lun-test-{}-{}", name, std::process::id()));
@@ -140,9 +140,7 @@ fn log_entry_written_for_every_state_change() {
     let root = temp_root("logonwrite");
     let lun = Lun::init(&root).unwrap();
     let conn = side_conn(&root);
-    let count = |sql: &str| -> i64 {
-        conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap()
-    };
+    let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap() };
 
     // The seed write itself is logged.
     assert_eq!(

@@ -8,7 +8,7 @@
 //! - `tui::data` — snapshot loading (logs, attachments, links) and the
 //!   `:status` / `/log` query resolver against a real DB fixture.
 
-use lun::tui::app::{App, Mode, View};
+use lun::tui::app::{App, Mode, TaskFocus, View};
 use lun::tui::data;
 use lun::tui::render;
 use lun::tui::term;
@@ -44,11 +44,7 @@ fn screen(app: &App, w: u16, h: u16) -> String {
 fn temp_root(name: &str) -> std::path::PathBuf {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!(
-        "lun-p6-test-{name}-{}-{}",
-        std::process::id(),
-        n
-    ));
+    let dir = std::env::temp_dir().join(format!("lun-p6-test-{name}-{}-{}", std::process::id(), n));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -86,7 +82,8 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         .unwrap();
     }
     // T-001 = "set up sim" (first real task, row id 1).
-    lun.add_attachment(1, "mock.png", "/tmp/mock.png", None, None).unwrap();
+    lun.add_attachment(1, "mock.png", "/tmp/mock.png", None, None)
+        .unwrap();
     lun.add_link(
         lun::LinkTarget::Task(1),
         "obsidian",
@@ -95,8 +92,15 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         None,
     )
     .unwrap();
-    lun.log("task", 1, "COMMENT", "", "{\"note\": \"watch damping\"}", None)
-        .unwrap();
+    lun.log(
+        "task",
+        1,
+        "COMMENT",
+        "",
+        "{\"note\": \"watch damping\"}",
+        None,
+    )
+    .unwrap();
     (root, lun)
 }
 
@@ -104,6 +108,12 @@ fn app_for(root: &std::path::Path) -> App {
     let lun = Lun::open(root).unwrap();
     let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
     App::new(d)
+}
+
+fn app_with_store(root: &std::path::Path) -> App {
+    let lun = Lun::open(root).unwrap();
+    let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
+    App::with_store(d, root.to_path_buf(), lun)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,10 +365,7 @@ fn statusline_status_query_opens_log_view() {
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(!app.statusline_open);
     assert_eq!(app.view, View::Log);
-    assert!(matches!(
-        app.log_subject,
-        Some(data::LogSubject::Task(0))
-    ));
+    assert!(matches!(app.log_subject, Some(data::LogSubject::Task(0))));
 }
 
 #[test]
@@ -478,10 +485,7 @@ fn palette_log_command_line_selects_subject() {
     let mut app = app_for(&root);
     open_palette_and_run(&mut app, "log T-004");
     assert_eq!(app.view, View::Log);
-    assert!(matches!(
-        app.log_subject,
-        Some(data::LogSubject::Task(3))
-    ));
+    assert!(matches!(app.log_subject, Some(data::LogSubject::Task(3))));
 }
 
 #[test]
@@ -600,7 +604,9 @@ fn log_view_project_renders_merged_newest_first() {
     let newest = s
         .find("add task \"implement restitution\"")
         .expect("newest task create");
-    let oldest = s.find("add task \"set up sim\"").expect("oldest task create");
+    let oldest = s
+        .find("add task \"set up sim\"")
+        .expect("oldest task create");
     assert!(newest < oldest, "newest-first order violated");
     // The project's own CREATE entry (its commit message) is present.
     assert!(s.contains("create project \"paper-stack\""));
@@ -636,6 +642,69 @@ fn help_view_lists_phase6_keys() {
     assert!(s.contains(":status"));
     assert!(s.contains("open the current task"));
     assert!(s.contains("quit lun"));
+}
+
+#[test]
+fn arrows_home_end_page_and_gg_g_navigate() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.view = View::Status;
+    term::handle_key(&mut app, &key(KeyCode::Down));
+    assert_eq!(app.current_task().unwrap().task_key, "T-002");
+    term::handle_key(&mut app, &key(KeyCode::End));
+    assert_eq!(app.current_task().unwrap().task_key, "T-004");
+    term::handle_key(&mut app, &key(KeyCode::Home));
+    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+    term::handle_key(&mut app, &key(KeyCode::PageDown));
+    assert_eq!(app.current_task().unwrap().task_key, "T-002");
+    term::handle_key(&mut app, &key(KeyCode::Char('G')));
+    assert_eq!(app.current_task().unwrap().task_key, "T-004");
+    term::handle_key(&mut app, &key(KeyCode::Char('g')));
+    term::handle_key(&mut app, &key(KeyCode::Char('g')));
+    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn question_mark_help_backspace_and_task_open_focus_behave() {
+    let (root, _lun) = fixture();
+    let mut app = app_for(&root);
+    app.view = View::Status;
+    term::handle_key(&mut app, &key(KeyCode::Char('?')));
+    assert_eq!(app.view, View::Help);
+    term::handle_key(&mut app, &key(KeyCode::Backspace));
+    assert_eq!(app.view, View::Status);
+
+    app.view = View::Task;
+    assert_eq!(app.task_focus, TaskFocus::Summary);
+    term::handle_key(&mut app, &key(KeyCode::Right));
+    assert_eq!(app.task_focus, TaskFocus::Notes);
+    term::handle_key(&mut app, &key(KeyCode::Right));
+    assert_eq!(app.task_focus, TaskFocus::Attachments);
+    term::handle_key(&mut app, &key(KeyCode::Backspace));
+    assert_eq!(app.task_focus, TaskFocus::Summary);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
+    let (root, _lun) = fixture();
+    let mut app = app_with_store(&root);
+    app.view = View::Task;
+    term::handle_key(&mut app, &key(KeyCode::Right));
+    term::handle_key(&mut app, &key(KeyCode::Right));
+    std::env::set_var("LUN_OPEN_BIN", "true");
+    term::handle_key(&mut app, &key(KeyCode::Char('o')));
+    let (msg, is_err) = app.message.clone().unwrap();
+    assert!(!is_err);
+    assert!(msg.contains("Opened:"));
+
+    term::handle_key(&mut app, &key(KeyCode::Char('c')));
+    assert_eq!(app.current_task().unwrap().status, "done");
+    term::handle_key(&mut app, &key(KeyCode::Char('c')));
+    assert_eq!(app.current_task().unwrap().status, "todo");
+    std::env::remove_var("LUN_OPEN_BIN");
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 // Rendering must never panic on tiny screens (saturating clamps everywhere).

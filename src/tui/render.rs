@@ -43,7 +43,13 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         } else {
             Style::default().fg(t::DONE)
         };
-        put(buf, area.left(), sep_y.saturating_sub(1), msg.as_str(), style);
+        put(
+            buf,
+            area.left(),
+            sep_y.saturating_sub(1),
+            msg.as_str(),
+            style,
+        );
     }
     put(
         buf,
@@ -52,11 +58,29 @@ pub fn paint(buf: &mut Buffer, area: Rect, app: &App) {
         &"-".repeat(area.width as usize),
         Style::default().fg(t::MAGENTA),
     );
-    put(buf, area.left(), prompt_y, t::PROMPT, Style::default().fg(t::PURPLE));
+    put(
+        buf,
+        area.left(),
+        prompt_y,
+        t::PROMPT,
+        Style::default().fg(t::PURPLE),
+    );
     if app.palette_open {
-        put(buf, area.left() + 2, prompt_y, "/", Style::default().fg(t::CYAN));
+        put(
+            buf,
+            area.left() + 2,
+            prompt_y,
+            "/",
+            Style::default().fg(t::CYAN),
+        );
         let query = format!("{}_", app.palette_query);
-        put(buf, area.left() + 3, prompt_y, &query, Style::default().fg(t::CYAN));
+        put(
+            buf,
+            area.left() + 3,
+            prompt_y,
+            &query,
+            Style::default().fg(t::CYAN),
+        );
     } else {
         // Hint text depends on mode (Phase 6): insert mode advertises the
         // note-editing keys; the statusline shows its own prompt + query.
@@ -115,7 +139,13 @@ pub fn put_two(buf: &mut Buffer, x: u16, y: u16, a: &str, sa: Style, b: &str, sb
 /// ALL CAPS heading + magenta underline row.
 fn heading(buf: &mut Buffer, x: u16, y: u16, text: &str) -> u16 {
     put(buf, x, y, &text.to_uppercase(), t::heading_style());
-    put(buf, x, y + 1, &"-".repeat(text.chars().count()), Style::default().fg(t::MAGENTA));
+    put(
+        buf,
+        x,
+        y + 1,
+        &"-".repeat(text.chars().count()),
+        Style::default().fg(t::MAGENTA),
+    );
     y + 2
 }
 
@@ -131,7 +161,13 @@ pub const BANNER: &[&str] = &[
 fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
     let mut y = area.top();
     for line in BANNER {
-        put(buf, area.left(), y, line, Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD));
+        put(
+            buf,
+            area.left(),
+            y,
+            line,
+            Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD),
+        );
         y += 1;
         if y >= area.bottom() {
             return;
@@ -165,17 +201,15 @@ fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
                 .unwrap_or_default(),
             Style::default().fg(t::PURPLE),
         ),
-        ("Summary:", &app.data.summary(), Style::default().fg(t::TEXT)),
+        (
+            "Summary:",
+            &app.data.summary(),
+            Style::default().fg(t::TEXT),
+        ),
     ];
     for (label, value, style) in ctx {
         put(buf, area.left(), y, label, Style::default().fg(t::DIM));
-        put(
-            buf,
-            area.left() + 10,
-            y,
-            value,
-            style,
-        );
+        put(buf, area.left() + 10, y, value, style);
         y += 1;
         if y >= area.bottom() {
             return;
@@ -238,7 +272,13 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= area.bottom() {
         return;
     }
-    put(buf, area.left(), y, "PROJECTS", Style::default().fg(t::PURPLE));
+    put(
+        buf,
+        area.left(),
+        y,
+        "PROJECTS",
+        Style::default().fg(t::PURPLE),
+    );
     y += 1;
     if y >= area.bottom() {
         return;
@@ -307,7 +347,13 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= area.bottom() {
         return;
     }
-    put(buf, area.left(), y, "ALL TASKS", Style::default().fg(t::PURPLE));
+    put(
+        buf,
+        area.left(),
+        y,
+        "ALL TASKS",
+        Style::default().fg(t::PURPLE),
+    );
     y += 1;
     for task in &app.data.tasks {
         if y >= area.bottom() {
@@ -323,7 +369,13 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
         );
         let title_w = 34usize.min(task.title.chars().count());
         let title: String = task.title.chars().take(title_w).collect();
-        put(buf, area.left() + 24, y, &format!("{:<34}", title), Style::default().fg(t::TEXT));
+        put(
+            buf,
+            area.left() + 24,
+            y,
+            &format!("{:<34}", title),
+            Style::default().fg(t::TEXT),
+        );
         put(
             buf,
             area.left() + 58,
@@ -335,7 +387,13 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
     }
     y += 1;
     if y < area.bottom() {
-        put(buf, area.left(), y, &app.data.summary(), Style::default().fg(t::TEXT));
+        put(
+            buf,
+            area.left(),
+            y,
+            &app.data.summary(),
+            Style::default().fg(t::TEXT),
+        );
     }
 }
 
@@ -373,8 +431,7 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             x,
             y + 1,
-            &"-"
-                .repeat(names[i].chars().count().min(col_w as usize))
+            &"-".repeat(names[i].chars().count().min(col_w as usize))
                 .to_string(),
             Style::default().fg(t::MAGENTA),
         );
@@ -383,13 +440,7 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
             if ty >= area.bottom() {
                 break;
             }
-            put(
-                buf,
-                x,
-                ty,
-                &task.task_key,
-                Style::default().fg(t::LAVENDER),
-            );
+            put(buf, x, ty, &task.task_key, Style::default().fg(t::LAVENDER));
             let t: String = task.title.chars().take(col_w as usize - 8).collect();
             put(buf, x + 8, ty, &t, Style::default().fg(t::TEXT));
             ty += 1;
@@ -458,14 +509,36 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 10] = [
+    let rows: [(&str, &str); 17] = [
         ("/", "open the command palette"),
+        ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
-        ("j / k", "navigate lists (projects, tasks)"),
-        ("enter", "select (project view: set current project)"),
+        ("j / k / ↑ / ↓", "navigate lists and focused task details"),
+        (
+            "h / l / ← / →",
+            "move task-detail focus between summary/notes/attachments/links",
+        ),
+        ("gg / G", "jump to the first / last item"),
+        ("PgUp / PgDn", "jump by larger steps"),
+        ("Home / End", "jump to first / last item"),
+        (
+            "enter",
+            "select/open (project view sets current project; task opens focused item)",
+        ),
         ("t", "open the current task's detail view"),
-        ("i / e", "edit the current task's notes (task view; Esc back, Ctrl-S save)"),
-        ("esc", "close the palette / statusline, back to normal mode"),
+        (
+            "o",
+            "open the focused task note link / attachment / explicit link",
+        ),
+        ("c", "toggle the current task complete/reopen"),
+        (
+            "i / e",
+            "edit the current task's notes (task view; Esc back, Ctrl-S save)",
+        ),
+        (
+            "esc / backspace",
+            "close the palette/statusline, or go back",
+        ),
         ("q", "quit lun"),
         ("/task /log", "/task <T-00N|title>, /log <project|task>"),
         ("…", "/new-task and /config arrive in a later phase"),
@@ -501,7 +574,10 @@ fn paint_placeholder(buf: &mut Buffer, area: Rect, app: &App) {
             &format!(
                 "current project: {} [{}]",
                 app.data.current().map(|p| p.name.as_str()).unwrap_or("?"),
-                app.data.current().map(|p| p.project_key.as_str()).unwrap_or("?")
+                app.data
+                    .current()
+                    .map(|p| p.project_key.as_str())
+                    .unwrap_or("?")
             ),
             Style::default().fg(t::TEXT),
         );
@@ -551,7 +627,13 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
             continue;
         }
         if row == 1 {
-            put(buf, area.left(), y, "--------", Style::default().fg(t::MAGENTA));
+            put(
+                buf,
+                area.left(),
+                y,
+                "--------",
+                Style::default().fg(t::MAGENTA),
+            );
             y += 1;
             continue;
         }
@@ -567,24 +649,10 @@ fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
             area.left(),
             y,
             cmd.name,
-            style.fg(if i == selected {
-                t::BG
-            } else {
-                t::CYAN
-            }),
+            style.fg(if i == selected { t::BG } else { t::CYAN }),
         );
-        let desc_style = Style::default().fg(if i == selected {
-            t::BG
-        } else {
-            t::DIM
-        });
-        put(
-            buf,
-            area.left() + 16,
-            y,
-            cmd.description,
-            desc_style,
-        );
+        let desc_style = Style::default().fg(if i == selected { t::BG } else { t::DIM });
+        put(buf, area.left() + 16, y, cmd.description, desc_style);
         y += 1;
     }
 }
@@ -605,8 +673,13 @@ fn task_field(buf: &mut Buffer, x: u16, y: u16, label: &str, value: &str, value_
     );
 }
 
-fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str) -> u16 {
-    put(buf, x, y, text, Style::default().fg(t::CYAN).add_modifier(Modifier::BOLD));
+fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str, focused: bool) -> u16 {
+    let style = if focused {
+        t::selected_style().fg(t::BG)
+    } else {
+        Style::default().fg(t::CYAN).add_modifier(Modifier::BOLD)
+    };
+    put(buf, x, y, text, style);
     y + 1
 }
 
@@ -616,7 +689,13 @@ fn task_section(buf: &mut Buffer, x: u16, y: u16, text: &str) -> u16 {
 /// (`cli::task_view_entry_lines`), rendered here with per-line styles.
 fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     let Some(task) = app.current_task() else {
-        put(buf, area.left(), area.top(), "no task selected", Style::default().fg(t::DIM));
+        put(
+            buf,
+            area.left(),
+            area.top(),
+            "no task selected",
+            Style::default().fg(t::DIM),
+        );
         return;
     };
     let x = area.left();
@@ -624,7 +703,13 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     let bottom = area.bottom();
 
     let header = format!("Task {}", task.task_key);
-    put(buf, x, y, &header, Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD));
+    put(
+        buf,
+        x,
+        y,
+        &header,
+        Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD),
+    );
     y += 1;
     put(
         buf,
@@ -644,12 +729,26 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         .and_then(|pid| app.data.projects.iter().find(|p| p.id == pid))
         .map(|p| p.name.as_str())
         .unwrap_or("Unassigned");
-    task_field(buf, x, y, "Project:   ", project_name, Style::default().fg(t::TEXT));
+    task_field(
+        buf,
+        x,
+        y,
+        "Project:   ",
+        project_name,
+        Style::default().fg(t::TEXT),
+    );
     y += 1;
     if y >= bottom {
         return;
     }
-    task_field(buf, x, y, "Title:     ", &task.title, Style::default().fg(t::TEXT));
+    task_field(
+        buf,
+        x,
+        y,
+        "Title:     ",
+        &task.title,
+        Style::default().fg(t::TEXT),
+    );
     y += 1;
     if y >= bottom {
         return;
@@ -666,7 +765,14 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= bottom {
         return;
     }
-    task_field(buf, x, y, "Priority:  ", &task.priority, Style::default().fg(t::TEXT));
+    task_field(
+        buf,
+        x,
+        y,
+        "Priority:  ",
+        &task.priority,
+        Style::default().fg(t::TEXT),
+    );
     y += 1;
     if y >= bottom {
         return;
@@ -683,7 +789,14 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     if y >= bottom {
         return;
     }
-    task_field(buf, x, y, "Branch:    ", task.branch.as_deref().unwrap_or_default(), Style::default().fg(t::CYAN));
+    task_field(
+        buf,
+        x,
+        y,
+        "Branch:    ",
+        task.branch.as_deref().unwrap_or_default(),
+        Style::default().fg(t::CYAN),
+    );
     y += 1;
     if y >= bottom {
         return;
@@ -701,17 +814,35 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "Checklist:");
+    y = task_section(
+        buf,
+        x,
+        y,
+        "Checklist:",
+        app.task_focus == super::app::TaskFocus::Summary,
+    );
     if y >= bottom {
         return;
     }
-    put(buf, x, y, "- [ ] (add checklist items with /new-task — planned later)", Style::default().fg(t::DIM));
+    put(
+        buf,
+        x,
+        y,
+        "- [ ] (add checklist items with /new-task — planned later)",
+        Style::default().fg(t::DIM),
+    );
     y += 2;
     if y >= bottom {
         return;
     }
 
-    y = task_section(buf, x, y, "Notes:");
+    y = task_section(
+        buf,
+        x,
+        y,
+        "Notes:",
+        app.task_focus == super::app::TaskFocus::Notes,
+    );
     if y >= bottom {
         return;
     }
@@ -730,16 +861,47 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     } else if !task.notes.is_empty() {
         // Normal mode: the persisted notes (Phase 7: `e`/`i` to edit,
         // Esc/Ctrl-S to save, drop a file to insert a link).
+        let note_links = app.current_note_links();
+        let selected_uri = note_links.get(app.task_item_selected);
         for line in task.notes.lines() {
             if y >= bottom {
                 return;
             }
-            put(buf, x, y, "- ", Style::default().fg(t::DIM));
-            put(buf, x + 2, y, line, Style::default().fg(t::TEXT));
+            let selected = app.task_focus == super::app::TaskFocus::Notes
+                && selected_uri.is_some()
+                && selected_uri.map(|uri| line.contains(uri)).unwrap_or(false);
+            put(
+                buf,
+                x,
+                y,
+                if selected { "> " } else { "- " },
+                if selected {
+                    t::selected_style().fg(t::BG)
+                } else {
+                    Style::default().fg(t::DIM)
+                },
+            );
+            put(
+                buf,
+                x + 2,
+                y,
+                line,
+                if selected {
+                    t::selected_style().fg(t::BG)
+                } else {
+                    Style::default().fg(t::TEXT)
+                },
+            );
             y += 1;
         }
     } else {
-        put(buf, x, y, "- (add notes with 'e' in the task view)", Style::default().fg(t::DIM));
+        put(
+            buf,
+            x,
+            y,
+            "- (add notes with 'e' in the task view)",
+            Style::default().fg(t::DIM),
+        );
         y += 1;
     }
     y += 1;
@@ -747,7 +909,13 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "Attachments:");
+    y = task_section(
+        buf,
+        x,
+        y,
+        "Attachments:",
+        app.task_focus == super::app::TaskFocus::Attachments,
+    );
     if y >= bottom {
         return;
     }
@@ -761,11 +929,28 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
             Style::default().fg(t::DIM),
         );
     } else {
-        for a in attachments {
+        for (idx, a) in attachments.into_iter().enumerate() {
             if y >= bottom {
                 return;
             }
-            put(buf, x, y, &format!("- {} ({})", a.filename, a.stored_path), Style::default().fg(t::TEXT));
+            let selected = app.task_focus == super::app::TaskFocus::Attachments
+                && idx == app.task_item_selected;
+            put(
+                buf,
+                x,
+                y,
+                &format!(
+                    "{} {} ({})",
+                    if selected { ">" } else { "-" },
+                    a.filename,
+                    a.stored_path
+                ),
+                if selected {
+                    t::selected_style().fg(t::BG)
+                } else {
+                    Style::default().fg(t::TEXT)
+                },
+            );
             y += 1;
         }
     }
@@ -774,7 +959,13 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "Links:");
+    y = task_section(
+        buf,
+        x,
+        y,
+        "Links:",
+        app.task_focus == super::app::TaskFocus::Links,
+    );
     if y >= bottom {
         return;
     }
@@ -782,14 +973,36 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
     if links.is_empty() {
         put(buf, x, y, "- (none)", Style::default().fg(t::DIM));
     } else {
-        for l in links {
+        for (idx, l) in links.into_iter().enumerate() {
             if y >= bottom {
                 return;
             }
             // Markdown-style link, rendered label cyan / uri dim.
-            put(buf, x, y, &format!("- [{}] ", l.label), Style::default().fg(t::CYAN));
+            let selected =
+                app.task_focus == super::app::TaskFocus::Links && idx == app.task_item_selected;
+            put(
+                buf,
+                x,
+                y,
+                &format!("{} [{}] ", if selected { ">" } else { "-" }, l.label),
+                if selected {
+                    t::selected_style().fg(t::BG)
+                } else {
+                    Style::default().fg(t::CYAN)
+                },
+            );
             let lx = x + 2 + (l.label.chars().count() as u16) + 1;
-            put(buf, lx, y, &l.uri, Style::default().fg(t::DIM));
+            put(
+                buf,
+                lx,
+                y,
+                &l.uri,
+                if selected {
+                    t::selected_style().fg(t::BG)
+                } else {
+                    Style::default().fg(t::DIM)
+                },
+            );
             y += 1;
         }
     }
@@ -798,7 +1011,7 @@ fn paint_task(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
 
-    y = task_section(buf, x, y, "History:");
+    y = task_section(buf, x, y, "History:", false);
     if y >= bottom {
         return;
     }
@@ -829,7 +1042,13 @@ fn paint_log(buf: &mut Buffer, area: Rect, app: &App) {
 
     let (header, entries, is_project) = match &app.log_subject {
         None => {
-            put(buf, x, y, "no log subject — use /log <project|task>", Style::default().fg(t::DIM));
+            put(
+                buf,
+                x,
+                y,
+                "no log subject — use /log <project|task>",
+                Style::default().fg(t::DIM),
+            );
             return;
         }
         Some(super::data::LogSubject::Task(i)) => {
@@ -862,7 +1081,13 @@ fn paint_log(buf: &mut Buffer, area: Rect, app: &App) {
         }
     };
 
-    put(buf, x, y, &header, Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD));
+    put(
+        buf,
+        x,
+        y,
+        &header,
+        Style::default().fg(t::PURPLE).add_modifier(Modifier::BOLD),
+    );
     y += 1;
     if y >= bottom {
         return;
