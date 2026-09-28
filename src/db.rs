@@ -3,11 +3,16 @@
 //! Canonical storage is the DB (`.lun/lun.db`); markdown is a view, never a
 //! source of truth. Every state-changing operation writes a `logs` entry
 //! with a commit-style message (the "log-on-write" guarantee).
+//!
+//! Phase 9 adds the `prs` table (GitHub-style PRs over lun tasks) with
+//! `create_pr` / `list_prs` / `pr_by_key` / `pr_by_task` / `merge_pr`,
+//! all log-on-write (`CREATE`/`MERGE` on the PR itself plus a task entry
+//! that maps the PR lifecycle onto the task's log).
 
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 2;
+pub const CURRENT_VERSION: i64 = 3;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -99,6 +104,35 @@ pub struct TaskSpec {
     /// JSON array of label strings, e.g. `["cli", "db"]`. Defaults to `[]`.
     pub labels: Option<String>,
     /// Commit-style message for the log entry. Defaults to `add task "<title>" to <project>`.
+    pub message: Option<String>,
+    pub user: Option<String>,
+}
+
+/// Row of the `prs` table (read model; Phase 9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pr {
+    pub id: i64,
+    pub pr_key: String,
+    pub task_id: i64,
+    pub source_branch: String,
+    pub target_branch: String,
+    /// `open` | `merged`.
+    pub status: String,
+    pub created_at: String,
+    pub merged_at: Option<String>,
+}
+
+/// Input for [`Lun::create_pr`].
+#[derive(Debug, Clone, Default)]
+pub struct PrSpec {
+    /// The task the PR is for (row id).
+    pub task_id: i64,
+    /// Branch being merged in. Defaults to the task's `branch` field.
+    pub source_branch: Option<String>,
+    /// Merge target. Defaults to `main`.
+    pub target_branch: Option<String>,
+    /// Commit-style message for the log entry. Defaults to
+    /// `open PR-00N from <source> into <target> for <task>`.
     pub message: Option<String>,
     pub user: Option<String>,
 }
@@ -284,6 +318,27 @@ impl Lun {
                 "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT '';
                  INSERT INTO migrations (version, applied_at)
                      VALUES (2, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+            )?;
+        }
+
+        if version < 3 {
+            // Phase 9: the `prs` table — lun's GitHub-style PRs. A PR is
+            // always about one task (task_id FK); source/target branches
+            // are recorded for the `git diff`/`git merge` glue.
+            conn.execute_batch(
+                "CREATE TABLE prs (
+                    id            INTEGER PRIMARY KEY,
+                    pr_key        TEXT NOT NULL UNIQUE,
+                    task_id       INTEGER NOT NULL REFERENCES tasks(id),
+                    source_branch TEXT NOT NULL,
+                    target_branch TEXT NOT NULL,
+                    status        TEXT NOT NULL DEFAULT 'open'
+                                CHECK (status IN ('open', 'merged')),
+                    created_at    TEXT NOT NULL,
+                    merged_at     TEXT
+                 );
+                 INSERT INTO migrations (version, applied_at)
+                     VALUES (3, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
             )?;
         }
 
@@ -885,6 +940,265 @@ impl Lun {
             label: r.get(3)?,
             uri: r.get(4)?,
             created_at: r.get(5)?,
+        })
+    }
+
+    // ------------------------------------------------------------------
+    // PRs (Phase 9)
+    // ------------------------------------------------------------------
+
+    fn pr_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Pr> {
+        Ok(Pr {
+            id: r.get(0)?,
+            pr_key: r.get(1)?,
+            task_id: r.get(2)?,
+            source_branch: r.get(3)?,
+            target_branch: r.get(4)?,
+            status: r.get(5)?,
+            created_at: r.get(6)?,
+            merged_at: r.get(7)?,
+        })
+    }
+
+    /// All PRs ordered by key (PR-001 first).
+    pub fn list_prs(&self) -> Result<Vec<Pr>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+             FROM prs ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], Self::pr_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Open PRs only (`status = 'open'`), ordered by key.
+    pub fn list_open_prs(&self) -> Result<Vec<Pr>> {
+        Ok(self
+            .list_prs()?
+            .into_iter()
+            .filter(|p| p.status == "open")
+            .collect())
+    }
+
+    /// Look up a PR by its `PR-00N` key.
+    pub fn pr_by_key(&self, key: &str) -> Result<Pr> {
+        self.conn
+            .query_row(
+                "SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+                 FROM prs WHERE pr_key = ?1",
+                [key],
+                Self::pr_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("no PR with key '{key}': {e}")))
+    }
+
+    /// PRs for one task, oldest first.
+    pub fn prs_for_task(&self, task_id: i64) -> Result<Vec<Pr>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+             FROM prs WHERE task_id = ?1 ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([task_id], Self::pr_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// The latest open PR for a task, if any (used by `lun task`'s
+    /// "PRs" section and as the default target of `lun pr merge`).
+    pub fn open_pr_for_task(&self, task_id: i64) -> Result<Option<Pr>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+             FROM prs WHERE task_id = ?1 AND status = 'open' ORDER BY id DESC",
+        )?;
+        let mut rows = stmt.query_map([task_id], Self::pr_from_row)?;
+        match rows.next() {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Open a PR for a task. `source_branch` defaults to the task's
+    /// `branch` field (the task's branch IS the PR's branch — lun's
+    /// kanban tracks the branch per task); `target_branch` defaults to
+    /// `main`. Writes an `UPDATE` log entry on the task carrying the PR's
+    /// key in `details` (`pr`/`source`/`target`) — lun's `logs` table is
+    /// CHECK-constrained to project/task entities, so the PR lifecycle
+    /// lives in the task's log (the "map logs entries to the PR lifecycle"
+    /// step of the plan).
+    pub fn create_pr(&self, spec: PrSpec) -> Result<Pr> {
+        let user = spec.user.as_deref().unwrap_or(DEFAULT_USER);
+        let task: Task = self
+            .conn
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                [spec.task_id],
+                Self::task_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("task {}: {e}", spec.task_id)))?;
+
+        // One open PR per task: re-opening is an error, not a duplicate.
+        if self.open_pr_for_task(task.id)?.is_some() {
+            return Err(DbError::new(
+                "usage",
+                format!(
+                    "{} already has an open PR — merge it first (`lun pr merge`)",
+                    task.task_key
+                ),
+            ));
+        }
+        let source = match spec.source_branch {
+            Some(b) if !b.trim().is_empty() => b,
+            _ => task
+                .branch
+                .clone()
+                .filter(|b| !b.trim().is_empty())
+                .ok_or_else(|| {
+                    DbError::new(
+                        "usage",
+                        format!(
+                            "{} has no branch — pass --from <branch> or set the task's branch first",
+                            task.task_key
+                        ),
+                    )
+                })?,
+        };
+        let target = spec
+            .target_branch
+            .unwrap_or_else(|| "main".to_string());
+        if source == target {
+            return Err(DbError::new(
+                "usage",
+                format!("source and target branch are both '{source}'"),
+            ));
+        }
+
+        let key = format!("PR-{:03}", self.conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM prs",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? + 1);
+        let now = Self::now();
+
+        self.conn.execute(
+            "INSERT INTO prs (pr_key, task_id, source_branch, target_branch, status, created_at)
+             VALUES (?1, ?2, ?3, ?4, 'open', ?5)",
+            params![key, task.id, source, target, now],
+        )?;
+        let id = self.conn.last_insert_rowid();
+
+        let message = spec.message.unwrap_or_else(|| {
+            format!("open {key} from {source} into {target} for {}", task.task_key)
+        });
+        // PR's own log entity is a task-type entry on the PR row? No —
+        // logs.entity_type is CHECK-constrained to project|task, so the
+        // PR lifecycle is recorded on the TASK (that IS the "map logs
+        // entries to the PR lifecycle" the plan asks for).
+        self.log(
+            "task",
+            task.id,
+            "UPDATE",
+            &message,
+            &format!("{{\"pr\": \"{key}\", \"source\": \"{source}\", \"target\": \"{target}\"}}"),
+            Some(user),
+        )?;
+
+        Ok(Pr {
+            id,
+            pr_key: key,
+            task_id: task.id,
+            source_branch: source,
+            target_branch: target,
+            status: "open".to_string(),
+            created_at: now,
+            merged_at: None,
+        })
+    }
+
+    /// Merge an open PR: flip its status to `merged`, stamp `merged_at`,
+    /// and move the task to `done` (a merged PR means the task is done —
+    /// the git-style lifecycle). Logs `MERGE` on the task with
+    /// `details` carrying the PR key + branches.
+    ///
+    /// `message` defaults to `merge <pr> (<source> -> <target>)`.
+    pub fn merge_pr(
+        &self,
+        pr_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Pr> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let now = Self::now();
+        let pr: Pr = self
+            .conn
+            .query_row(
+                "SELECT id, pr_key, task_id, source_branch, target_branch, status, created_at, merged_at
+                 FROM prs WHERE id = ?1",
+                [pr_id],
+                Self::pr_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("no PR with id {pr_id}: {e}")))?;
+        if pr.status != "open" {
+            return Err(DbError::new(
+                "usage",
+                format!("{} is already {status}", pr.pr_key, status = pr.status),
+            ));
+        }
+        self.conn.execute(
+            "UPDATE prs SET status = 'merged', merged_at = ?1 WHERE id = ?2",
+            params![now, pr_id],
+        )?;
+
+        let task: Task = self
+            .conn
+            .query_row(
+                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                        labels, notes, created_at, updated_at
+                 FROM tasks WHERE id = ?1",
+                [pr.task_id],
+                Self::task_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("task {}: {e}", pr.task_id)))?;
+
+        // Merged PR -> task done (the logical-merge step; `git merge`
+        // itself is optional glue the CLI may run on top of this).
+        let changes = if task.status == "done" {
+            format!("PR {}: merged", pr.pr_key)
+        } else {
+            format!("Status: {} -> done, PR {}: merged", task.status, pr.pr_key)
+        };
+        self.conn.execute(
+            "UPDATE tasks SET status = 'done', updated_at = ?1 WHERE id = ?2",
+            params![now, task.id],
+        )?;
+
+        let message = message
+            .map(|m| m.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "merge {} ({} -> {})",
+                    pr.pr_key, pr.source_branch, pr.target_branch
+                )
+            });
+        self.log(
+            "task",
+            task.id,
+            "MERGE",
+            &message,
+            &format!(
+                "{{\"changes\": \"{changes}\", \"pr\": \"{}\", \"source\": \"{}\", \"target\": \"{}\"}}",
+                pr.pr_key, pr.source_branch, pr.target_branch
+            ),
+            Some(user),
+        )?;
+
+        Ok(Pr {
+            status: "merged".to_string(),
+            merged_at: Some(now),
+            ..pr
         })
     }
 }
