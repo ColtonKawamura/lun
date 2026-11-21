@@ -405,7 +405,7 @@ fn create_task_flow_with_explicit_answers() {
 
     // Next key: one past the existing 0 tasks -> T-001.
     let mut input = prompt_reader(&["todo", "med", "me", "", ""]);
-    let out = create_task(&app, "my task title", Some("paper-stack"), &mut input).unwrap();
+    let out = create_task(&app, "my task title", Some("paper-stack"), None, &mut input).unwrap();
     let lines = out.split('\n').collect::<Vec<_>>();
     assert_eq!(lines[0], "Created task T-001 in project paper-stack");
     assert_eq!(
@@ -440,7 +440,7 @@ fn create_task_uses_defaults_for_empty_input() {
     // No user projects: default project is Unassigned (P-000).
     let app = App { lun };
     let mut input = prompt_reader(&["", "", "", "", ""]);
-    let out = create_task(&app, "bare task", None, &mut input).unwrap();
+    let out = create_task(&app, "bare task", None, None, &mut input).unwrap();
     let lines = out.split('\n').collect::<Vec<_>>();
     assert_eq!(lines[0], "Created task T-001 in project Unassigned");
     assert_eq!(lines[1], "Committed: add task \"bare task\" to Unassigned");
@@ -463,7 +463,7 @@ fn create_task_with_explicit_project_query() {
     .unwrap();
     let app = App { lun };
     let mut input = prompt_reader(&["doing", "high", "me", "custom commit message"]);
-    let out = create_task(&app, "solo task", Some("solo"), &mut input).unwrap();
+    let out = create_task(&app, "solo task", Some("solo"), None, &mut input).unwrap();
     assert_eq!(
         out.lines().next().unwrap(),
         "Created task T-001 in project solo"
@@ -482,7 +482,7 @@ fn create_task_defaults_project_to_unassigned_when_no_projects() {
     let lun = Lun::init(&root).unwrap();
     let app = App { lun };
     let mut input = prompt_reader(&["todo", "med", "", ""]);
-    let out = create_task(&app, "unhome task", None, &mut input).unwrap();
+    let out = create_task(&app, "unhome task", None, None, &mut input).unwrap();
     assert_eq!(
         out.lines().next().unwrap(),
         "Created task T-001 in project Unassigned"
@@ -503,12 +503,12 @@ fn create_task_rejects_invalid_status_and_priority() {
     let lun = Lun::init(&root).unwrap();
     let app = App { lun };
     let mut input = prompt_reader(&["bogus", "", "", "", ""]);
-    let e = create_task(&app, "bad status", None, &mut input).unwrap_err();
+    let e = create_task(&app, "bad status", None, None, &mut input).unwrap_err();
     assert_eq!(e.kind(), "invalid");
     assert!(e.to_string().contains("invalid status 'bogus'"));
 
     let mut input = prompt_reader(&["todo", "urgent", "", "", ""]);
-    let e = create_task(&app, "bad priority", None, &mut input).unwrap_err();
+    let e = create_task(&app, "bad priority", None, None, &mut input).unwrap_err();
     assert_eq!(e.kind(), "invalid");
     assert!(e.to_string().contains("invalid priority 'urgent'"));
     let _ = std::fs::remove_dir_all(&root);
@@ -520,7 +520,7 @@ fn create_task_rejects_empty_title() {
     let lun = Lun::init(&root).unwrap();
     let app = App { lun };
     let mut input = prompt_reader(&["todo"]);
-    let e = create_task(&app, "   ", None, &mut input).unwrap_err();
+    let e = create_task(&app, "   ", None, None, &mut input).unwrap_err();
     assert_eq!(e.kind(), "usage");
     let _ = std::fs::remove_dir_all(&root);
 }
