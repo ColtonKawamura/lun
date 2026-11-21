@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use crate::Task;
 use axum::body::Bytes;
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State, Request};
+use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -35,16 +35,16 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks", post(create_task))
         .route("/api/tasks/search", get(search_tasks))
-        .route("/api/tasks/:key", get(task_by_key))
-        .route("/api/tasks/:key", post(update_task))
-        .route("/api/tasks/:key/logs", get(task_logs))
-        .route("/api/tasks/:key/attachments", get(task_attachments))
-        .route("/api/tasks/:key/attachments", post(upload_attachment))
-        .route("/api/tasks/:key/links", get(task_links))
-        .route("/api/tasks/:key/prs", get(task_prs))
+        .route("/api/tasks/{key}", get(task_by_key))
+        .route("/api/tasks/{key}", post(update_task))
+        .route("/api/tasks/{key}/logs", get(task_logs))
+        .route("/api/tasks/{key}/attachments", get(task_attachments))
+        .route("/api/tasks/{key}/attachments", post(upload_attachment))
+        .route("/api/tasks/{key}/links", get(task_links))
+        .route("/api/tasks/{key}/prs", get(task_prs))
         .route("/api/scopes", get(list_scopes))
         .route("/api/markdown/preview", post(markdown_preview))
-        .route("/api/attach/:id", get(serve_attachment))
+        .route("/api/attach/{id}", get(serve_attachment))
         .route("/manifest.json", get(serve_manifest))
         .route("/favicon.ico", get(serve_favicon))
         .fallback(static_handler)
@@ -299,8 +299,27 @@ pub fn render_markdown(text: &str) -> String {
     let parser = pulldown_cmark::Parser::new_ext(&text, pulldown_cmark::Options::all());
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
-    let html = render_math(&html);
-    ammonia::clean(&html)
+    use std::collections::HashSet;
+    let mut builder = ammonia::Builder::new();
+    let mut schemes = HashSet::new();
+    for s in ["http", "https", "ftp", "mailto", "obsidian", "file"] {
+        schemes.insert(s);
+    }
+    builder.url_schemes(schemes);
+    // Allow `class` on all elements so KaTeX classes survive sanitization
+    {
+        let mut tag_attrs = builder.clone_tag_attributes();
+        tag_attrs.entry("span").or_insert_with(HashSet::new).insert("class");
+        for tags in tag_attrs.values_mut() {
+            tags.insert("class");
+        }
+        builder.tag_attributes(tag_attrs);
+    }
+    let mut html = builder.clean(&html).to_string();
+    // Rename pulldown-cmark's `math` classes to KaTeX-compatible names
+    html = html.replace("class=\"math math-inline\"", "class=\"katex\"");
+    html = html.replace("class=\"math math-display\"", "class=\"katex-display\"");
+    html
 }
 
 fn resolve_wikilinks(text: &str) -> String {
@@ -326,41 +345,6 @@ fn resolve_wikilinks(text: &str) -> String {
     result
 }
 
-fn render_math(html: &str) -> String {
-    let mut result = html.to_string();
-    while let Some(start) = result.find("$$") {
-        if let Some(end_marker) = &result[start+2..].find("$$") {
-            let end = start + 2 + end_marker;
-            let math = &result[start+2..end];
-            result.replace_range(start..end+2, &format!(r#"<span class="katex-display">{}</span>"#, math));
-        } else { break; }
-    }
-    result = replace_inline_math(&result);
-    result
-}
-
-fn replace_inline_math(s: &str) -> String {
-    let mut result = String::new();
-    let chars: Vec<char> = s.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-    while i < len {
-        if chars[i] == '$' && i + 1 < len && chars[i+1] != '$' {
-            let mut j = i + 1;
-            while j < len && chars[j] != '$' { j += 1; }
-            if j < len {
-                let math: String = chars[i+1..j].iter().collect();
-                result.push_str(&format!(r#"<span class="katex">{}</span>"#, math));
-                i = j + 1;
-                continue;
-            }
-        }
-        result.push(chars[i]);
-        i += 1;
-    }
-    result
-}
-
 // ---------------------------------------------------------------------------
 // Static files
 // ---------------------------------------------------------------------------
@@ -378,11 +362,10 @@ async fn serve_favicon() -> Response {
     (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "image/svg+xml")], Bytes::from(svg.as_bytes())).into_response()
 }
 
-async fn static_handler(path: Path<String>) -> Response {
-    let file_path = if path.0 == "/" || path.0.is_empty() {
-        "index.html"
-    } else {
-        path.0.strip_prefix('/').unwrap_or(&path.0)
+async fn static_handler(req: Request) -> Response {
+    let file_path = match req.uri().path().trim_start_matches('/') {
+        "" | "/" => "index.html",
+        p => p,
     };
     let entry = match WEB_DIR.get_file(file_path) {
         Some(f) => f,
@@ -394,5 +377,36 @@ async fn static_handler(path: Path<String>) -> Response {
     let content = entry.contents();
     let mime = from_path(file_path).first_or_octet_stream();
     let mime_s = mime.to_string();
-    (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, mime_s.as_str())], Bytes::from(content.to_vec())).into_response()
+    let cors = HeaderValue::from_static("*");
+    let mut resp = (StatusCode::OK, [(axum::http::header::CONTENT_TYPE, mime_s.as_str())], Bytes::from(content.to_vec())).into_response();
+    resp.headers_mut().insert(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, cors);
+    resp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_render_markdown_preserves_katex_class() {
+        let html = render_markdown("some $x^2$ math");
+        eprintln!("katex output: {}", html);
+        assert!(html.contains("katex"), "katex class should be preserved in output: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_wikilinks() {
+        let html = render_markdown("[[my note]]");
+        eprintln!("wikilink output: {}", html);
+        assert!(html.contains("obsidian://open?vault=personal"),
+            "wikilink should resolve to obsidian:// URL: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_block_math() {
+        let html = render_markdown("$$x^2 + y^2$$");
+        eprintln!("block math: {}", html);
+        assert!(html.contains("katex-display") || html.contains("katex"),
+            "block math should have katex class: {}", html);
+    }
 }
