@@ -1856,14 +1856,8 @@ impl App {
             ));
             return;
         }
-        let Some(lun) = self.lun.as_ref() else {
-            self.message = Some((
-                "no store attached — drop/paste linking is unavailable".to_string(),
-                true,
-            ));
-            return;
-        };
 
+        // Task path: build link data first (needs &Lun), then save (needs &mut self)
         if let Some(task) = self.current_task() {
             let task_id = task.id;
             let task_key = task.task_key.clone();
@@ -1872,19 +1866,37 @@ impl App {
             } else {
                 task.notes.trim_end().to_string()
             };
-            let links = match Self::add_file_links(lun, LinkTarget::Task(task_id), &paths) {
-                Ok(v) => v,
-                Err(e) => {
-                    self.message = Some((e, true));
-                    return;
+
+            // Phase 1: create links in DB (consumes &Lun borrow)
+            let links: Vec<(String, String)> = {
+                let lun = match self.lun.as_ref() {
+                    Some(l) => l,
+                    None => {
+                        self.message = Some((
+                            "no store attached — drop/paste linking is unavailable".to_string(),
+                            true,
+                        ));
+                        return;
+                    }
+                };
+                match Self::add_file_links(lun, LinkTarget::Task(task_id), &paths) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        self.message = Some((e, true));
+                        return;
+                    }
                 }
             };
+
+            // Phase 2: build notes string (no borrow on self.lun)
             for (filename, uri) in links {
                 if !notes.is_empty() {
                     notes.push('\n');
                 }
                 notes.push_str(&format!("- [{filename}]({uri})"));
             }
+
+            // Phase 3: save notes (needs &mut self — lun borrow is gone)
             self.notes_draft = notes;
             self.notes_dirty = true;
             self.save_notes_draft(None);
@@ -1895,9 +1907,24 @@ impl App {
             return;
         }
 
+        // Project path
         let Some(project) = self.data.current().cloned() else {
-            self.message = Some(("no current project to link files onto".to_string(), true));
+            self.message = Some((
+                "no store attached — drop/paste linking is unavailable".to_string(),
+                true,
+            ));
             return;
+        };
+
+        let lun = match self.lun.as_ref() {
+            Some(l) => l,
+            None => {
+                self.message = Some((
+                    "no store attached — drop/paste linking is unavailable".to_string(),
+                    true,
+                ));
+                return;
+            }
         };
         if let Err(e) = Self::add_file_links(lun, LinkTarget::Project(project.id), &paths) {
             self.message = Some((e, true));

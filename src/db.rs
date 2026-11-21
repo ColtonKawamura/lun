@@ -1181,7 +1181,7 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [task_id],
                 Self::task_from_row,
@@ -1877,7 +1877,7 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [spec.task_id],
                 Self::task_from_row,
@@ -1998,7 +1998,7 @@ impl Lun {
             .conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [pr.task_id],
                 Self::task_from_row,
