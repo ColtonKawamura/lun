@@ -294,9 +294,81 @@ async fn markdown_preview(Json(body): Json<MarkdownPreviewRequest>) -> Response 
 // Markdown rendering
 // ---------------------------------------------------------------------------
 
+/// Token for a math region in the placeholder-substituted text.
+/// Alphanumeric only, so it survives pulldown_cmark as an intact text node.
+fn math_token(idx: usize) -> String {
+    format!("LUNMATH{:04x}Q", idx)
+}
+
+/// HTML-escape for use inside a double-quoted attribute.
+/// Backslashes are left untouched (KaTeX needs them verbatim).
+fn attr_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Extract `$$display$$` and `$inline$` math regions out of the text.
+/// Returns (text_with_tokens, [(tex, is_display)]).
+fn extract_math(text: &str) -> (String, Vec<(String, bool)>) {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len();
+    let mut out = String::with_capacity(text.len());
+    let mut math: Vec<(String, bool)> = Vec::new();
+    let mut i = 0;
+    while i < n {
+        if chars[i] == '$' {
+            let display = i + 1 < n && chars[i + 1] == '$';
+            let open_len = if display { 2 } else { 1 };
+            let body_start = i + open_len;
+            if body_start < n && chars[body_start] != ' ' {
+                // Find the closing delimiter.
+                let mut close: Option<usize> = None;
+                let mut j = body_start;
+                while j < n {
+                    if chars[j] == '$'
+                        && (!display || (j + 1 < n && chars[j + 1] == '$'))
+                        && (display || j + 1 >= n || chars[j + 1] != '$')
+                    {
+                        close = Some(j);
+                        break;
+                    }
+                    j += 1;
+                }
+                if let Some(c) = close {
+                    let body: String = chars[body_start..c].iter().collect();
+                    if !body.trim().is_empty() {
+                        let idx = math.len();
+                        math.push((body, display));
+                        out.push_str(&math_token(idx));
+                        i = c + open_len;
+                        continue;
+                    }
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    (out, math)
+}
+
 pub fn render_markdown(text: &str) -> String {
     let text = resolve_wikilinks(text);
-    let parser = pulldown_cmark::Parser::new_ext(&text, pulldown_cmark::Options::all());
+    // Extract math before markdown parsing: pulldown_cmark mangles backslashes
+    // inside its math spans (emits doubled backslashes), which breaks KaTeX.
+    // The raw TeX travels in a data-tex attribute; the frontend calls
+    // katex.render() on each .lun-math element.
+    let (no_math, math) = extract_math(&text);
+    let parser = pulldown_cmark::Parser::new_ext(&no_math, pulldown_cmark::Options::all());
     let mut html = String::new();
     pulldown_cmark::html::push_html(&mut html, parser);
     use std::collections::HashSet;
@@ -316,9 +388,20 @@ pub fn render_markdown(text: &str) -> String {
         builder.tag_attributes(tag_attrs);
     }
     let mut html = builder.clean(&html).to_string();
-    // Rename pulldown-cmark's `math` classes to KaTeX-compatible names
-    html = html.replace("class=\"math math-inline\"", "class=\"katex\"");
-    html = html.replace("class=\"math math-display\"", "class=\"katex-display\"");
+    // Replace math tokens with KaTeX spans carrying the raw TeX (single
+    // backslashes, HTML-escaped for the attribute). The frontend renders them
+    // via katex.render(el.dataset.tex, el, {displayMode}).
+    for (idx, (tex, display)) in math.iter().enumerate() {
+        let token = math_token(idx);
+        let cls = if *display { "lun-math lun-math-display" } else { "lun-math" };
+        let span = format!(
+            "<span class=\"{}\" data-tex=\"{}\" data-display=\"{}\"></span>",
+            cls,
+            attr_escape(tex),
+            if *display { "1" } else { "0" }
+        );
+        html = html.replace(&token, &span);
+    }
     html
 }
 
@@ -388,16 +471,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_render_markdown_preserves_katex_class() {
+    fn test_render_markdown_inline_math_token() {
         let html = render_markdown("some $x^2$ math");
-        eprintln!("katex output: {}", html);
-        assert!(html.contains("katex"), "katex class should be preserved in output: {}", html);
+        assert!(html.contains("lun-math"), "inline math span expected: {}", html);
+        assert!(html.contains("data-tex=\"x^2\""), "raw TeX in data-tex: {}", html);
+        assert!(!html.contains("LUNMATH"), "no leftover tokens: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_backslashes_not_doubled() {
+        let html = render_markdown("inline $a\\propto b$ and display $$10^{-4}\\langle f\\rangle$$");
+        assert!(html.contains(r#"data-tex="a\propto b""#), "single backslash kept: {}", html);
+        assert!(html.contains(r##"data-tex="10^{-4}\langle f\rangle"##), "display math backslashes kept: {}", html);
+        assert!(!html.contains("\\\\"), "no doubled backslashes: {}", html);
+        assert!(html.contains("data-display=\"1\""), "display flag set: {}", html);
     }
 
     #[test]
     fn test_render_markdown_wikilinks() {
         let html = render_markdown("[[my note]]");
-        eprintln!("wikilink output: {}", html);
         assert!(html.contains("obsidian://open?vault=personal"),
             "wikilink should resolve to obsidian:// URL: {}", html);
     }
@@ -405,8 +497,15 @@ mod tests {
     #[test]
     fn test_render_markdown_block_math() {
         let html = render_markdown("$$x^2 + y^2$$");
-        eprintln!("block math: {}", html);
-        assert!(html.contains("katex-display") || html.contains("katex"),
-            "block math should have katex class: {}", html);
+        assert!(html.contains("lun-math-display"), "display math class: {}", html);
+        assert!(html.contains("data-tex=\"x^2 + y^2\""), "display TeX verbatim: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_no_math_passthrough() {
+        let html = render_markdown("no math here, $5 and $10 prices");
+        // "$5 and $10" looks like math to the extractor; KaTeX will just
+        // fail softly on it client-side. Either way, no leftover tokens.
+        assert!(!html.contains("LUNMATH"), "no leftover tokens: {}", html);
     }
 }

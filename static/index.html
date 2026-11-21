@@ -874,6 +874,11 @@ function renderBoard() {
   setActiveCard();
 }
 
+function projectName(id) {
+  const p = projects.find(p => p.id === id);
+  return p ? p.name : 'Unassigned';
+}
+
 function renderList() {
   const body = document.getElementById('listBody');
   body.innerHTML = tasks.map(t => `
@@ -882,7 +887,7 @@ function renderList() {
       <td>${escapeHtml(t.title)}</td>
       <td><span class="status-dot" style="background:var(--${t.status})"></span>${t.status}</td>
       <td>${t.priority}</td>
-      <td>${escapeHtml(t.project_name || 'Unassigned')}</td>
+      <td>${escapeHtml(projectName(t.project_id))}</td>
       <td>${t.scope ? escapeHtml(t.scope) : ''}</td>
       <td>${t.assignee || ''}</td>
     </tr>
@@ -1016,6 +1021,8 @@ async function openModal(key) {
   if (!task) return;
   
   editingTask = key;
+  activeCard = {key};
+  setActiveCard();
   document.getElementById('modalTitle').textContent = `${key} — ${task.title}`;
   document.getElementById('editTitle').value = task.title;
   document.getElementById('editStatus').value = task.status;
@@ -1132,6 +1139,22 @@ function updateNotesPreview() {
     body: JSON.stringify({text: notes})
   }).then(r => r.json()).then(data => {
     preview.innerHTML = data.html;
+    // Render server-extracted math (raw TeX in data-tex, single backslashes)
+    // with KaTeX's direct API.
+    preview.querySelectorAll('.lun-math').forEach(el => {
+      if (window.katex) {
+        try {
+          katex.render(el.dataset.tex, el, {
+            displayMode: el.dataset.display === '1',
+            throwOnError: false
+          });
+        } catch (err) {
+          el.textContent = el.dataset.tex || '';
+        }
+      } else {
+        el.textContent = el.dataset.tex || '';
+      }
+    });
     if (window.renderMathInElement) {
       renderMathInElement(preview, {
         delimiters: [
@@ -1243,7 +1266,7 @@ function handleKeyboard(e) {
   if (e.key === 'g') {
     gBuffer = 'g';
     clearTimeout(gBufferTimer);
-    gBufferTimer = setTimeout(() => { gBuffer = ''; }, 500);
+    gBufferTimer = setTimeout(() => { gBuffer = ''; }, 800);
     return;
   }
   if (gBuffer === 'g') {
@@ -1291,7 +1314,7 @@ function handleKeyboard(e) {
   } else if (e.key === 'l') {
     moveCardRight();
   } else if (e.key === 'D') {
-    shiftStatus(-1);
+    shiftStatus(1);
   } else if (e.key === 'U' || e.key === '<') {
     shiftStatus(-1);
   } else if (e.key === '>') {
