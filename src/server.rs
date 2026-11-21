@@ -39,6 +39,9 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/search", get(search_tasks))
         .route("/api/tasks/{key}", get(task_by_key))
         .route("/api/tasks/{key}", post(update_task))
+        .route("/api/tasks/{key}/reorder", post(reorder_task))
+        .route("/api/tasks/{key}/archive", post(archive_task))
+        .route("/api/tasks/{key}/unarchive", post(unarchive_task))
         .route("/api/tasks/{key}/logs", get(task_logs))
         .route("/api/tasks/{key}/attachments", get(task_attachments))
         .route("/api/tasks/{key}/attachments", post(upload_attachment))
@@ -94,9 +97,10 @@ async fn list_tasks(state: State<Arc<ServerState>>, Query(params): Query<TaskQue
         scope: params.scope,
         include_archived: params.archived.unwrap_or(false),
         sort: match params.sort.as_deref() {
-            Some("key") => TaskSort::Key, Some("title") => TaskSort::Title,
-            Some("status") => TaskSort::Status, Some("priority") => TaskSort::Priority,
-            Some("updated") => TaskSort::Updated, _ => TaskSort::Key,
+        Some("key") => TaskSort::Key, Some("title") => TaskSort::Title,
+        Some("status") => TaskSort::Status, Some("priority") => TaskSort::Priority,
+        Some("updated") => TaskSort::Updated,
+        Some("board") | _ => TaskSort::Board,
         },
     };
     match lun.list_tasks_with(&spec) {
@@ -189,6 +193,52 @@ async fn update_task(state: State<Arc<ServerState>>, Path(key): Path<String>, Js
         message: body.message, user: Some("web".to_string()),
     };
     match lun.update_task(task.id, spec) {
+        Ok(t) => Json(t).into_response(),
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize)]
+struct ReorderBody {
+    dir: i64,
+}
+
+/// Move a card one row down (dir >= 0) or up (dir < 0) within its column.
+async fn reorder_task(
+    state: State<Arc<ServerState>>,
+    Path(key): Path<String>,
+    Json(body): Json<ReorderBody>,
+) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t,
+        Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.reorder_task(task.id, if body.dir >= 0 { 1 } else { -1 }) {
+        Ok(t) => Json(t).into_response(),
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+async fn archive_task(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t,
+        Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.archive_task(task.id, None, Some("web")) {
+        Ok(t) => Json(t).into_response(),
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+async fn unarchive_task(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t,
+        Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.unarchive_task(task.id, Some("web")) {
         Ok(t) => Json(t).into_response(),
         Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
     }

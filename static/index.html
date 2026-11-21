@@ -747,24 +747,24 @@ textarea.notes-input {
   <div class="help-panel">
     <h2>Keyboard Shortcuts</h2>
     <table>
-      <tr><td>j / ↓</td><td>Move down</td></tr>
-      <tr><td>k / ↑</td><td>Move up</td></tr>
-      <tr><td>h</td><td>Previous column</td></tr>
-      <tr><td>l</td><td>Next column</td></tr>
-      <tr><td>D</td><td>Move card left (← status)</td></tr>
-      <tr><td>U</td><td>Move card right (→ status)</td></tr>
+      <tr><td>j / ↓</td><td>Move down (across board)</td></tr>
+      <tr><td>k / ↑</td><td>Move up (across board)</td></tr>
+      <tr><td>h</td><td>Focus previous column</td></tr>
+      <tr><td>l</td><td>Focus next column</td></tr>
+      <tr><td>d / D / &gt;</td><td>Move card forward (toward done)</td></tr>
+      <tr><td>u / U / &lt;</td><td>Move card backward (toward todo)</td></tr>
       <tr><td>Enter</td><td>Open card detail</td></tr>
       <tr><td>a</td><td>New card in column</td></tr>
       <tr><td>x</td><td>Mark done</td></tr>
       <tr><td>f</td><td>Toggle filters</td></tr>
-      <tr><td>Tab / g p</td><td>Cycle projects</td></tr>
+      <tr><td>g p</td><td>Cycle projects</td></tr>
       <tr><td>g b</td><td>Board view</td></tr>
       <tr><td>g l</td><td>List view</td></tr>
       <tr><td>gg</td><td>First card</td></tr>
       <tr><td>G</td><td>Last card</td></tr>
       <tr><td>/</td><td>Command palette</td></tr>
       <tr><td>?</td><td>Help (this)</td></tr>
-      <tr><td>Esc</td><td>Close / Clear</td></tr>
+      <tr><td>Esc</td><td>Close overlay · clear filters · exit input</td></tr>
     </table>
   </div>
 </div>
@@ -773,7 +773,7 @@ textarea.notes-input {
 <div class="hint-bar">
   <span><kbd>j/k</kbd> move</span>
   <span><kbd>h/l</kbd> columns</span>
-  <span><kbd>D/U</kbd> status</span>
+  <span><kbd>d/u</kbd> status</span>
   <span><kbd>Enter</kbd> detail</span>
   <span><kbd>a</kbd> new</span>
   <span><kbd>x</kbd> done</span>
@@ -793,6 +793,8 @@ let currentView = 'board';
 let editingTask = null;
 let gBuffer = '';
 let gBufferTimer = null;
+let leader = false;
+let leaderTimer = null;
 
 // Initialize
 (async function init() {
@@ -1256,29 +1258,59 @@ function handleNewCardForm(e) {
 
 // Keyboard navigation
 function handleKeyboard(e) {
-  // Don't handle when typing in inputs
-  if (isInputFocused()) return;
-  
-  // Close overlays
+  // Escape always works, even while typing in an input, so the keyboard
+  // can always get back to board navigation.
   if (e.key === 'Escape') {
-    if (document.getElementById('helpOverlay').classList.contains('active')) {
-      document.getElementById('helpOverlay').classList.remove('active');
+    // Quick-add form has its own Esc handling (removes the form).
+    if (document.activeElement && document.activeElement.closest('.new-card-form')) return;
+    const help = document.getElementById('helpOverlay');
+    const palette = document.getElementById('paletteOverlay');
+    const modal = document.getElementById('modalOverlay');
+    const filterBar = document.getElementById('filterBar');
+    if (help.classList.contains('active')) {
+      help.classList.remove('active');
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       return;
     }
-    if (document.getElementById('paletteOverlay').classList.contains('active')) {
+    if (palette.classList.contains('active')) {
       closePalette();
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       return;
     }
-    if (document.getElementById('modalOverlay').classList.contains('active')) {
+    if (modal.classList.contains('active')) {
+      const focused = document.activeElement;
+      // First Esc exits an input inside the modal; second Esc closes it.
+      if (focused && isInputFocused() && modal.contains(focused)) {
+        focused.blur();
+        return;
+      }
       closeModal();
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       return;
     }
-    if (document.getElementById('filterBar').classList.contains('active')) {
-      clearAllFilters();
+    if (filterBar.classList.contains('active')) {
+      // Close filter UI without clearing current filter values
+      filterBar.classList.remove('active');
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
       return;
+    }
+    if (isInputFocused()) {
+      document.activeElement.blur();
     }
     return;
   }
+
+  // Leader key (space) activates card move commands (h/l)
+  if (e.key === ' ') {
+    e.preventDefault();
+    leader = true;
+    if (leaderTimer) clearTimeout(leaderTimer);
+    leaderTimer = setTimeout(() => { leader = false; }, 800);
+    return;
+  }
+
+  // Don't handle other keys when typing in inputs
+  if (isInputFocused()) return;
 
   // Help
   if (e.key === '?') {
@@ -1347,15 +1379,29 @@ function handleKeyboard(e) {
   } else if (e.key === 'k' || e.key === 'ArrowUp') {
     focusCard(cards, idx, -1);
   } else if (e.key === 'h') {
+    if (leader) {
+        if (activeCard?.key) {
+            shiftStatus(-1);
+        }
+        leader = false;
+        if (leaderTimer) { clearTimeout(leaderTimer); leaderTimer = null; }
+        return;
+    }
     moveCardLeft();
   } else if (e.key === 'l') {
+    if (leader) {
+        if (activeCard?.key) {
+            shiftStatus(1);
+        }
+        leader = false;
+        if (leaderTimer) { clearTimeout(leaderTimer); leaderTimer = null; }
+        return;
+    }
     moveCardRight();
-  } else if (e.key === 'D') {
+  } else if (e.key === 'D' || e.key === 'd' || e.key === '>') {
     shiftStatus(1);
-  } else if (e.key === 'U' || e.key === '<') {
+  } else if (e.key === 'U' || e.key === 'u' || e.key === '<') {
     shiftStatus(-1);
-  } else if (e.key === '>') {
-    shiftStatus(1);
   } else if (e.key === 'Enter') {
     if (activeCard?.key) openModal(activeCard.key);
   }
@@ -1382,34 +1428,42 @@ function focusCard(cards, idx, delta) {
   setActiveCard();
 }
 
+// h/l: move focus to the previous/next column (closest row) — focus
+// navigation only. Use u/d to move the card itself between columns.
 function moveCardLeft() {
   if (!activeCard?.key) return;
   const task = tasks.find(t => t.task_key === activeCard.key);
   if (!task) return;
-  const col = document.getElementById(task.status);
-  const card = col.querySelector(`[data-key="${task.task_key}"]`);
-  const cards = Array.from(col.children);
-  const idx = cards.indexOf(card);
-  if (idx > 0) {
-    activeCard = {key: cards[idx - 1].dataset.key};
-    cards[idx - 1].focus();
-    setActiveCard();
-  }
+  const curIdx = STATUS_ORDER.indexOf(task.status);
+  if (curIdx <= 0) return;
+  focusInAdjacentColumn(curIdx - 1, task);
 }
 
 function moveCardRight() {
   if (!activeCard?.key) return;
   const task = tasks.find(t => t.task_key === activeCard.key);
   if (!task) return;
+  const curIdx = STATUS_ORDER.indexOf(task.status);
+  if (curIdx >= STATUS_ORDER.length - 1) return;
+  focusInAdjacentColumn(curIdx + 1, task);
+}
+
+function focusInAdjacentColumn(targetIdx, task) {
   const col = document.getElementById(task.status);
-  const card = col.querySelector(`[data-key="${task.task_key}"]`);
-  const cards = Array.from(col.children);
-  const idx = cards.indexOf(card);
-  if (idx < cards.length - 1) {
-    activeCard = {key: cards[idx + 1].dataset.key};
-    cards[idx + 1].focus();
-    setActiveCard();
-  }
+  const colCards = Array.from(col.querySelectorAll('.card'));
+  const row = colCards.findIndex(c => c.dataset.key === task.task_key);
+  const targetCol = document.getElementById(STATUS_ORDER[targetIdx]);
+  const cards = Array.from(targetCol.querySelectorAll('.card'));
+  if (row < 0 || !cards.length) return;
+  // Pick the card in the target column closest to the same row.
+  let best = 0, bestDist = Infinity;
+  cards.forEach((c, i) => {
+    const d = Math.abs(i - row);
+    if (d < bestDist || (d === bestDist && i < best)) { best = i; bestDist = d; }
+  });
+  activeCard = {key: cards[best].dataset.key};
+  cards[best].focus();
+  setActiveCard();
 }
 
 function shiftStatus(dir) {

@@ -13,7 +13,7 @@ use rusqlite::{params, types::Value, Connection};
 use serde::Serialize;
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 7;
+pub const CURRENT_VERSION: i64 = 8;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -203,6 +203,8 @@ pub enum TaskSort {
     Status,
     Priority,
     Updated,
+    /// Board order: by status column, then explicit within-column position.
+    Board,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -360,6 +362,7 @@ impl Lun {
                 labels      TEXT NOT NULL DEFAULT '[]',
                 scope       TEXT,
                 notes       TEXT NOT NULL DEFAULT '',
+                position    INTEGER,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL,
                 archived_at TEXT
@@ -414,7 +417,7 @@ impl Lun {
                      'seed P-000 \"Unassigned\" project',
                      '{\"seed\": true}');
              INSERT INTO migrations (version, applied_at)
-                 VALUES (7, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                 VALUES (8, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
         )?;
         Ok(())
     }
@@ -741,6 +744,32 @@ impl Lun {
                     [],
                 )?;
             }
+
+            if version < 8 {
+                // Phase 11: explicit within-column ordering. `position` lets
+                // the board keep a stable per-column order independent of
+                // task_key, so cards can be reordered (<Space>j/k).
+                let pos_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'position'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if pos_exists == 0 {
+                    conn.execute("ALTER TABLE tasks ADD COLUMN position INTEGER", [])?;
+                    // Seed: preserve the current display order (task_key rank).
+                    conn.execute(
+                        "UPDATE tasks SET position = (
+                             SELECT COUNT(*) + 1 FROM tasks t2 WHERE t2.task_key < tasks.task_key
+                         )",
+                        [],
+                    )?;
+                }
+                conn.execute(
+                    "INSERT INTO migrations (version, applied_at)
+                     VALUES (8, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))",
+                    [],
+                )?;
+            }
         }
 
         let version: i64 = conn.query_row(
@@ -950,10 +979,18 @@ impl Lun {
             None => Some(self.unassigned_project_id()?),
         };
 
+        // New cards land at the bottom of their column.
+        let position: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(COALESCE(position, id)), 0) + 1
+             FROM tasks WHERE status = ?1 AND archived_at IS NULL",
+            [status.clone()],
+            |r| r.get(0),
+        )?;
+
         self.conn.execute(
             "INSERT INTO tasks
-                (task_key, project_id, title, status, priority, assignee, branch, labels, scope, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (task_key, project_id, title, status, priority, assignee, branch, labels, scope, position, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 key,
                 project_id,
@@ -964,6 +1001,7 @@ impl Lun {
                 spec.branch,
                 labels,
                 spec.scope,
+                position,
                 now,
                 now
             ],
@@ -1058,6 +1096,7 @@ impl Lun {
             TaskSort::Status => "status ASC, task_key ASC",
             TaskSort::Priority => "priority ASC, task_key ASC",
             TaskSort::Updated => "updated_at DESC, task_key ASC",
+            TaskSort::Board => "CASE status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 WHEN 'follow-up' THEN 2 WHEN 'blocked' THEN 3 WHEN 'done' THEN 4 END, COALESCE(position, id) ASC, task_key ASC",
         });
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
@@ -1430,6 +1469,77 @@ impl Lun {
             &message,
             "{\"archived\": true}",
             Some(user),
+        )?;
+        self.task_by_id(task_id)
+    }
+
+    /// Restore a previously archived (deleted) task.
+    pub fn unarchive_task(&self, task_id: i64, user: Option<&str>) -> Result<Task> {
+        let task = self.task_by_id(task_id)?;
+        if task.archived_at.is_none() {
+            return Ok(task);
+        }
+        let now = Self::now();
+        self.conn.execute(
+            "UPDATE tasks SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
+            params![now, task_id],
+        )?;
+        self.log(
+            "task",
+            task_id,
+            "UNARCHIVE",
+            &format!("unarchive {}", task.task_key),
+            "{}",
+            Some(user.unwrap_or(DEFAULT_USER)),
+        )?;
+        self.task_by_id(task_id)
+    }
+
+    /// Move a task one row down (dir = 1) or up (dir = -1) within its
+    /// column by swapping `position` with its neighbor. No-op at the edge.
+    pub fn reorder_task(&self, task_id: i64, dir: i64) -> Result<Task> {
+        let task = self.task_by_id(task_id)?;
+        let cmp = if dir > 0 { ">" } else { "<" };
+        let order = if dir > 0 { "ASC" } else { "DESC" };
+        let neighbor_id: Option<i64> = match self.conn.query_row(
+            &format!(
+                "SELECT id FROM tasks
+                 WHERE status = ?1 AND archived_at IS NULL AND id != ?2
+                   AND COALESCE(position, id) {cmp}
+                       COALESCE((SELECT position FROM tasks WHERE id = ?2), ?3)
+                 ORDER BY COALESCE(position, id) {order} LIMIT 1"
+            ),
+            params![task.status, task_id, task_id],
+            |r| r.get(0),
+        ) {
+            Ok(id) => Some(id),
+            Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            Err(e) => return Err(e.into()),
+        };
+        let Some(neighbor_id) = neighbor_id else {
+            return Ok(task); // already at the edge of the column
+        };
+        let pos_a: Option<i64> =
+            self.conn.query_row("SELECT position FROM tasks WHERE id = ?1", [task_id], |r| r.get(0))?;
+        let pos_b: Option<i64> =
+            self.conn.query_row("SELECT position FROM tasks WHERE id = ?1", [neighbor_id], |r| r.get(0))?;
+        let now = Self::now();
+        self.conn.execute(
+            "UPDATE tasks SET position = ?1, updated_at = ?2 WHERE id = ?3",
+            params![pos_b, now, task_id],
+        )?;
+        self.conn.execute(
+            "UPDATE tasks SET position = ?1, updated_at = ?2 WHERE id = ?3",
+            params![pos_a, now, neighbor_id],
+        )?;
+        let dir_name = if dir > 0 { "down" } else { "up" };
+        self.log(
+            "task",
+            task_id,
+            "REORDER",
+            &format!("move {} {dir_name} in {}", task.task_key, task.status),
+            "{}",
+            Some(DEFAULT_USER),
         )?;
         self.task_by_id(task_id)
     }
