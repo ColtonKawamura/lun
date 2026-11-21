@@ -433,12 +433,12 @@ Usage:
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board
   lun /<name|key>         Shortcut for `lun status <name|key>`
   lun add proj \"<name>\" [--status active|inactive]  Create a project
-  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)
+  lun add task \"<title>\" [proj \"<project>\"] [--scope <value>]  Create a task (interactive prompts)
   lun move \"<task>\" \"<project>\"   Move a task to a project
   lun task <T-00N|title>    View a task (fields, labels, history)
   lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status
   lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)
-  lun task edit <task> [--field value]   Edit task fields
+  lun task edit <task> [--field value]   Edit task fields (--title/--status/--priority/--scope/--assignee/--branch/--labels/--notes)
   lun proj <project> --status <active|inactive>   Update project status
   lun task complete|reopen|archive <task>   Update task lifecycle
   lun log <project|task>    Commit-style history for a project or task
@@ -1988,6 +1988,11 @@ pub fn task_edit(
                 spec.notes = Some(value(i, "--notes", args)?);
                 i += 2;
             }
+            "--scope" => {
+                let value = value(i, "--scope", args)?;
+                spec.scope = Some(if value.is_empty() { None } else { Some(value) });
+                i += 2;
+            }
             "--message" => {
                 explicit_message = Some(value(i, "--message", args)?);
                 i += 2;
@@ -2286,6 +2291,7 @@ pub fn create_task(
     app: &App,
     title: &str,
     project_query: Option<&str>,
+    scope: Option<String>,
     stdin: &mut dyn BufRead,
 ) -> Result<String> {
     if title.trim().is_empty() {
@@ -2344,7 +2350,7 @@ pub fn create_task(
         priority: Some(priority),
         assignee: Some(assignee),
         branch: None,
-        scope: None,
+        scope,
         labels: None,
         message: Some(message.clone()),
         user: None,
@@ -2711,11 +2717,14 @@ fn run_import(args: &[String]) -> Result<String> {
 
 /// Scan the Obsidian vault for task checkboxes and report what would be imported.
 /// In dry-run mode (default), only count and list tasks — never write anything.
+///
+/// For iCloud/TCC-protected vaults (under Mobile Documents), the import reads
+/// through the `obsidian` CLI which talks to the running Obsidian app via CDP.
+/// For local vaults, it falls back to direct file scanning.
 fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
     let vault = match vault_path {
         Some(p) => p.to_string(),
         None => {
-            // Default vault location
             let home = std::env::var("HOME").map_err(|_| DbError::new("env", "HOME not set"))?;
             format!(
                 "{}/Library/Mobile Documents/com~apple~CloudDocs/personal",
@@ -2724,8 +2733,196 @@ fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
         }
     };
 
-    // Check if the vault directory is accessible
-    let vault_path = Path::new(&vault);
+    // Detect iCloud/TCC-protected vaults
+    let is_icloud = vault.contains("Mobile Documents");
+
+    if is_icloud {
+        import_obsidian_via_cli(&vault, dry_run)
+    } else {
+        import_obsidian_via_fs(&vault, dry_run)
+    }
+}
+
+/// Import via the `obsidian` CLI — used for iCloud/TCC-protected vaults.
+/// The CLI talks to the running Obsidian app via CDP and bypasses file-level
+/// TCC restrictions.
+fn import_obsidian_via_cli(vault_name: &str, dry_run: bool) -> Result<String> {
+    // Verify the `obsidian` CLI is available
+    let cli_check = Command::new("obsidian")
+        .arg("--version")
+        .output();
+    let cli_available = match cli_check {
+        Ok(o) => o.status.success(),
+        Err(_) => false,
+    };
+    if !cli_available {
+        return Err(DbError::new(
+            "env",
+            "The 'obsidian' CLI is not available (run `brew install obsidian-cli` or install manually).\n\
+             It is required for iCloud vaults since direct file access is blocked by TCC.",
+        ));
+    }
+
+    // Discover vault name if path given — extract "personal" from the iCloud path
+    let vault_arg = if vault_name.ends_with("/personal") || vault_name == "personal" {
+        "personal"
+    } else {
+        // Try to extract the vault name from the path
+        let parts: Vec<&str> = vault_name.rsplit('/').collect();
+        *parts.first().unwrap_or(&"personal")
+    };
+
+    // Fetch todo tasks
+    let todo_output = run_obsidian_tasks(vault_arg, "todo")?;
+    let done_output = run_obsidian_tasks(vault_arg, "done");
+
+    // Parse both outputs
+    let (todo_notes, todo_count) = parse_obsidian_tasks_output(&todo_output);
+    let (_done_notes, done_count) = if let Ok(output) = done_output {
+        parse_obsidian_tasks_output(&output)
+    } else {
+        (Vec::new(), 0)
+    };
+
+    let total = todo_count + done_count;
+
+    if dry_run {
+        let mut out = String::new();
+        out.push_str("Obsidian import (dry-run)\n");
+        out.push_str(&format!("Vault: {} (via obsidian CLI)\n\n", vault_name));
+        out.push_str(&format!("Total checkboxes: {}\n", total));
+        out.push_str(&format!("Open tasks: {}\n", todo_count));
+        out.push_str(&format!("Done tasks: {}\n\n", done_count));
+
+        // Group by note and show sample tasks per note
+        if !todo_notes.is_empty() {
+            out.push_str("Open tasks by note:\n");
+            let mut shown = 0;
+            let max_shown = 10;
+            for (note, tasks) in &todo_notes {
+                if shown >= max_shown {
+                    break;
+                }
+                let note_display = note
+                    .strip_suffix(".md")
+                    .unwrap_or(note.as_str());
+                out.push_str(&format!("\n  {}  ({} task{})\n", note_display, tasks.len(), if tasks.len() > 1 { "s" } else { "" }));
+                for task in tasks {
+                    if shown >= max_shown {
+                        break;
+                    }
+                    let preview = if task.len() > 90 {
+                        format!("{}...", &task[..87])
+                    } else {
+                        task.clone()
+                    };
+                    out.push_str(&format!("    [ ] {}\n", preview));
+                    shown += 1;
+                }
+            }
+            if todo_notes.len() > max_shown / 2 {
+                out.push_str(&format!("\n  ... and {} more notes\n", todo_notes.len() - max_shown / 2));
+            }
+            out.push('\n');
+        }
+
+        out.push_str("This is a dry-run — no files were modified.\n");
+        out.push_str("Run with --execute to perform the actual import.\n");
+        out.push_str(
+            "(Note: --execute is currently blocked by default for safety.\n",
+        );
+        out.push_str(" Use the TUI or web UI to import tasks manually.)");
+        Ok(out)
+    } else {
+        Err(DbError::new(
+            "declined",
+            "Real Obsidian import (--execute) is disabled for safety.\n\
+             The dry-run mode (--dry-run, default) scans without modifying anything.\n\
+             To import tasks, use the TUI or web UI to create them manually.",
+        ))
+    }
+}
+
+/// Run `obsidian tasks vault="<name>" <todo|done> verbose` and return stdout.
+fn run_obsidian_tasks(vault: &str, state: &str) -> Result<String> {
+    let output = Command::new("obsidian")
+        .args(["tasks", &format!("vault=\"{}\"", vault), state, "verbose"])
+        .output()
+        .map_err(|e| DbError::new("io", format!("failed to run obsidian CLI: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DbError::new(
+            "cli",
+            format!(
+                "obsidian CLI failed (exit {}): {}",
+                output.status.code().map(|c| c.to_string()).unwrap_or_else(|| "signal".into()),
+                stderr.trim()
+            ),
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Parse `obsidian tasks` verbose output.
+/// Format: note filename line, then task lines like `LINE_NUM\t- [x] text`, separated by blank lines.
+/// Returns (Vec<(note_name, Vec<task_text>)>, total_task_count).
+fn parse_obsidian_tasks_output(output: &str) -> (Vec<(String, Vec<String>)>, i64) {
+    let mut result: Vec<(String, Vec<String>)> = Vec::new();
+    let mut total: i64 = 0;
+    let mut current_note = String::new();
+    let mut current_tasks: Vec<String> = Vec::new();
+
+    for line in output.lines() {
+        if line.is_empty() {
+            // End of current note block
+            if !current_note.is_empty() && !current_tasks.is_empty() {
+                result.push((current_note.clone(), std::mem::take(&mut current_tasks)));
+            }
+            current_note.clear();
+            continue;
+        }
+
+        // Check if this is a note filename line (ends with .md, no leading digit+tab)
+        if line.ends_with(".md") && !line.contains('\t') {
+            if !current_note.is_empty() && !current_tasks.is_empty() {
+                result.push((current_note.clone(), std::mem::take(&mut current_tasks)));
+            }
+            current_note = line.trim().to_string();
+            continue;
+        }
+
+        // Check if this is a task line: starts with DIGIT(s) TAB - [ ] or - [x]
+        if let Some(tab_pos) = line.find('\t') {
+            let prefix = &line[..tab_pos];
+            if prefix.chars().all(|c| c.is_ascii_digit()) {
+                let task_part = &line[tab_pos + 1..];
+                let task_text = if let Some(t) = task_part.strip_prefix("- [ ] ") {
+                    total += 1;
+                    t.trim().to_string()
+                } else if let Some(t) = task_part.strip_prefix("- [x] ") {
+                    total += 1;
+                    t.trim().to_string()
+                } else {
+                    continue;
+                };
+                current_tasks.push(task_text);
+            }
+        }
+    }
+
+    // Flush last note
+    if !current_note.is_empty() && !current_tasks.is_empty() {
+        result.push((current_note, current_tasks));
+    }
+
+    (result, total)
+}
+
+/// Import via direct file scanning — used for local (non-iCloud) vaults.
+fn import_obsidian_via_fs(vault: &str, dry_run: bool) -> Result<String> {
+    let vault_path = Path::new(vault);
     if !vault_path.is_dir() {
         return Err(DbError::new(
             "io",
@@ -2736,7 +2933,6 @@ fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
         ));
     }
 
-    // Try to count markdown files with task checkboxes
     let mut total_tasks: i64 = 0;
     let mut open_tasks: i64 = 0;
     let mut done_tasks: i64 = 0;
@@ -2747,7 +2943,6 @@ fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
             let path = entry.path();
             if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
                 if let Ok(content) = std::fs::read_to_string(&path) {
-                    // Count checkboxes
                     for line in content.lines() {
                         let trimmed = line.trim_start();
                         if trimmed.starts_with("- [ ]") || trimmed.starts_with("- [x]") {
@@ -2758,7 +2953,6 @@ fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
                                 done_tasks += 1;
                             }
                             if sample_notes.len() < 5 && open_tasks <= 5 {
-                                // Extract task text
                                 let task_text = trimmed
                                     .strip_prefix("- [ ]")
                                     .or_else(|| trimmed.strip_prefix("- [x]"))
@@ -2999,6 +3193,7 @@ pub fn run_result_in_reader(
                     .get(2)
                     .ok_or_else(|| DbError::new("usage", "expected: lun add task \"<title>\" [proj \"<project>\"]"))?;
                 let mut project_query: Option<&str> = None;
+                let mut scope: Option<String> = None;
                 let mut i = 3;
                 while i < args.len() {
                     match args[i].as_str() {
@@ -3009,17 +3204,25 @@ pub fn run_result_in_reader(
                             );
                             i += 2;
                         }
+                        "--scope" => {
+                            scope = Some(
+                                args.get(i + 1)
+                                    .ok_or_else(|| DbError::new("usage", "--scope needs a value"))?
+                                    .clone(),
+                            );
+                            i += 2;
+                        }
                         other => {
                             return Err(DbError::new(
                                 "usage",
                                 format!(
-                                    "unexpected argument '{other}' (expected: lun add task \"<title>\" [proj \"<project>\"])"
+                                    "unexpected argument '{other}' (expected: lun add task \"<title>\" [proj \"<project>\"] [--scope <value>])"
                                 ),
                             ))
                         }
                     }
                 }
-                create_task(app, title, project_query, stdin)
+                create_task(app, title, project_query, scope, stdin)
             }
             _ => Err(DbError::new(
                 "usage",
@@ -3038,7 +3241,7 @@ pub fn run_result_in_reader(
                 } else {
                     None
                 };
-                create_task(app, title, project_query, stdin)
+                create_task(app, title, project_query, None, stdin)
             }
             _ => {
                 let query = args
@@ -3255,5 +3458,98 @@ pub fn run(app: &App, args: &[String]) -> ExitCode {
             eprintln!("lun: {e}");
             ExitCode::from(code)
         }
+    }
+}
+
+#[cfg(test)]
+mod obsidian_parser_tests {
+    use super::parse_obsidian_tasks_output;
+
+    #[test]
+    fn test_parse_obsidian_tasks_output_basic() {
+        let output = "Project Tasks/Untitled.md
+8\t- [ ] Fix the login page
+12\t- [x] Update README
+
+Project Tasks/Deployment.md
+3\t- [ ] Set up staging environment
+";
+        let (notes, total) = parse_obsidian_tasks_output(output);
+        assert_eq!(total, 3);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].0, "Project Tasks/Untitled.md");
+        assert_eq!(notes[0].1.len(), 2);
+        assert_eq!(notes[0].1[0], "Fix the login page");
+        assert_eq!(notes[0].1[1], "Update README");
+        assert_eq!(notes[1].0, "Project Tasks/Deployment.md");
+        assert_eq!(notes[1].1.len(), 1);
+        assert_eq!(notes[1].1[0], "Set up staging environment");
+    }
+
+    #[test]
+    fn test_parse_obsidian_tasks_output_empty() {
+        let (notes, total) = parse_obsidian_tasks_output("");
+        assert_eq!(total, 0);
+        assert!(notes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_obsidian_tasks_output_no_tasks_in_note() {
+        let output = "Some Note.md
+
+Another Note.md
+5\t- [ ] Only task here
+";
+        let (notes, total) = parse_obsidian_tasks_output(output);
+        assert_eq!(total, 1);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].0, "Another Note.md");
+    }
+
+    #[test]
+    fn test_parse_obsidian_tasks_output_special_chars() {
+        let output = "Test.md
+1\t- [ ] Task with \"quotes\" and 'apostrophes'
+3\t- [ ] Task with unicode: café
+5\t- [x] Done task with (parens) [brackets] {braces}
+";
+        let (notes, total) = parse_obsidian_tasks_output(output);
+        assert_eq!(total, 3);
+        assert_eq!(notes[0].1[0], "Task with \"quotes\" and 'apostrophes'");
+        assert_eq!(notes[0].1[1], "Task with unicode: café");
+        assert_eq!(notes[0].1[2], "Done task with (parens) [brackets] {braces}");
+    }
+
+    #[test]
+    fn test_parse_obsidian_tasks_output_multiline_simulated() {
+        // Simulates the real obsidian CLI output format with multiple notes
+        let output = "lun - obsidian import CLI path + scope flag.md
+1\t- [ ] Implement obsidian import
+3\t- [ ] Add --scope flag
+
+apple-notes.md
+1\t- [x] Migrate apple-notes skill
+
+Project Tasks/Untitled.md
+8\t- [ ] Fix the login page
+12\t- [ ] Update deployment config
+15\t- [x] Write tests
+";
+        let (notes, total) = parse_obsidian_tasks_output(output);
+        assert_eq!(total, 6);
+        assert_eq!(notes.len(), 3);
+
+        // First note
+        assert_eq!(notes[0].0, "lun - obsidian import CLI path + scope flag.md");
+        assert_eq!(notes[0].1.len(), 2);
+
+        // Second note
+        assert_eq!(notes[1].0, "apple-notes.md");
+        assert_eq!(notes[1].1.len(), 1);
+        assert_eq!(notes[1].1[0], "Migrate apple-notes skill");
+
+        // Third note
+        assert_eq!(notes[2].0, "Project Tasks/Untitled.md");
+        assert_eq!(notes[2].1.len(), 3);
     }
 }
