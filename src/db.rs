@@ -328,6 +328,13 @@ impl Lun {
             .map_err(Into::into)
     }
 
+    /// Execute a PRAGMA statement (e.g. busy_timeout, journal_mode).
+    pub fn set_pragma(&self, pragma: &str) -> Result<()> {
+        self.conn
+            .execute_batch(pragma)
+            .map_err(|e| DbError::new("pragma", format!("{pragma}: {e}")).into())
+    }
+
     fn bootstrap_current_schema(conn: &Connection) -> Result<()> {
         conn.execute_batch(
             "CREATE TABLE projects (
@@ -739,7 +746,7 @@ impl Lun {
         Ok(())
     }
 
-    fn now() -> String {
+    pub fn now() -> String {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| format_epoch(d.as_secs()))
@@ -2068,6 +2075,48 @@ impl Lun {
             .query_map([&pattern], Self::task_from_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // -----------------------------------------------------------------------
+    // Convenience wrappers used by the web API
+    // -----------------------------------------------------------------------
+
+    /// Logs for a single task.
+    pub fn task_logs(&self, task_id: i64) -> Result<Vec<LogEntry>> {
+        self.logs_for("task", task_id)
+    }
+
+    /// Attachments for a single task.
+    pub fn task_attachments(&self, task_id: i64) -> Result<Vec<Attachment>> {
+        self.attachments_for_task(task_id)
+    }
+
+    /// Attachment by its row id.
+    pub fn attachment_by_id(&self, id: i64) -> Result<Attachment> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, project_id, filename, stored_path, created_at FROM attachments WHERE id = ?1",
+        )?;
+        let row = stmt.query_row([id], |r| {
+            Ok(Attachment {
+                id: r.get(0)?,
+                task_id: r.get(1)?,
+                project_id: r.get(2)?,
+                filename: r.get(3)?,
+                stored_path: r.get(4)?,
+                created_at: r.get(5)?,
+            })
+        })?;
+        Ok(row)
+    }
+
+    /// Links for a single task.
+    pub fn task_links(&self, task_id: i64) -> Result<Vec<Link>> {
+        self.links_for_task(task_id)
+    }
+
+    /// PRs for a single task.
+    pub fn task_prs(&self, task_id: i64) -> Result<Vec<Pr>> {
+        self.prs_for_task(task_id)
     }
 }
 

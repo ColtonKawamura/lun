@@ -6,12 +6,14 @@
 //! Phase 5: bare `lun` launches the full-screen TUI when stdout is a TTY
 //! (piped output keeps the plain banner).
 //! Phase 9: `lun pr new/show/ls/merge` (GitHub-style PRs + git glue).
+//! Phase 10: `lun serve` — HTTP server + PWA on Tailscale.
 
 use std::env;
 use std::process::ExitCode;
 
 pub mod cli;
 pub mod db;
+pub mod server;
 pub mod tui;
 
 pub use db::{
@@ -50,6 +52,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("serve") => run_serve(&args[1..]),
         Some(_) => match open_app() {
             Ok(app) => cli::run(&app, &args),
             Err(e) => {
@@ -122,4 +125,47 @@ fn init_db() -> Result<(), String> {
 
 fn print_help() {
     println!("{}", cli::help_text(env!("CARGO_PKG_VERSION")));
+}
+
+/// `lun serve` — Start the HTTP server + PWA.
+fn run_serve(args: &[String]) -> ExitCode {
+    let bind = args.first().map(String::as_str).unwrap_or("100.71.78.78:9120");
+    let cwd = match env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("lun: resolving CWD: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let data_dir = cwd.join(".lun");
+
+    // Open DB in WAL mode
+    let lun = match Lun::init(&cwd) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("lun: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = lun.set_pragma("PRAGMA busy_timeout = 5000") {
+        eprintln!("lun serve: warning: {e}");
+    }
+
+    // Set up tracing
+    tracing_subscriber::fmt::init();
+
+    let rt = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("lun serve: creating tokio runtime: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(e) = rt.block_on(server::serve(lun, data_dir, bind)) {
+        eprintln!("lun serve: {e}");
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
