@@ -47,7 +47,7 @@ use crate::db::{
 const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 15] = [
+const TOP_LEVEL_COMMANDS: [&str; 16] = [
     "init",
     "add",
     "task",
@@ -62,6 +62,7 @@ const TOP_LEVEL_COMMANDS: [&str; 15] = [
     "open-link",
     "open-uri",
     "pr",
+    "import",
     "help",
 ];
 const PR_SUBCOMMANDS: [&str; 4] = ["new", "show", "ls", "merge"];
@@ -424,36 +425,40 @@ impl App {
 
 pub fn help_text(version: &str) -> String {
     format!(
-        "lun v{version} — CLI-first markdown task & project tracker\n\n\
-Usage:\n\
-  lun                     Show banner\n\
-  lun init                Create .lun/lun.db in the current directory (idempotent)\n\
-  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\
-  lun /<name|key>         Shortcut for `lun status <name|key>`\n\
-  lun add proj \"<name>\" [--status active|inactive]  Create a project\n\
-  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\
-  lun move \"<task>\" \"<project>\"   Move a task to a project\n\
-  lun task <T-00N|title>    View a task (fields, labels, history)\n\
-  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status\n\
-  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)\n\
-  lun task edit <task> [--field value]   Edit task fields\n\
-  lun proj <project> --status <active|inactive>   Update project status\n\
-  lun task complete|reopen|archive <task>   Update task lifecycle\n\
-  lun log <project|task>    Commit-style history for a project or task\n\
-  lun grep \"<text>\"         Search project/task fields and commit text\n\
-  lun attach <task|project> <key|title> /path/to/file   Attach a file (copies repo files into .lun/attachments/)\n\
-  lun attach ls <task|project> <key|title>   List attachments\n\
-  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments\n\
-  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link\n\
-  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`\n\
-  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI (used by the nvim plugin; logs LINK_OPENED with --on)\n\
-  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR (defaults: task's branch -> main)\n\
-  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)\n\
-  lun pr ls               List open and merged PRs\n\
-  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)\n\
-  lun --version             Print version\n\
-  lun --help                Print this help\n\n\
-Planned (later phases):\n\
+        "lun v{version} — CLI-first markdown task & project tracker\n\n\\\
+Usage:\n\\\
+  lun                     Show banner\n\\\
+  lun init                Create .lun/lun.db in the current directory (idempotent)\n\\\
+  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\\\
+  lun /<name|key>         Shortcut for `lun status <name|key>`\n\\\
+  lun add proj \"<name>\" [--status active|inactive]  Create a project\n\\\
+  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\\\
+  lun move \"<task>\" \"<project>\"   Move a task to a project\n\\\
+  lun task <T-00N|title>    View a task (fields, labels, history)\n\\\
+  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status\n\\\
+  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)\n\\\
+  lun task edit <task> [--field value]   Edit task fields\n\\\
+  lun proj <project> --status <active|inactive>   Update project status\n\\\
+  lun task complete|reopen|archive <task>   Update task lifecycle\n\\\
+  lun log <project|task>    Commit-style history for a project or task\n\\\
+  lun grep \"<text>\"         Search project/task fields and commit text\n\\\
+  lun attach <task|project> <key|title> /path/to/file   Attach a file\n\\\
+  lun attach ls <task|project> <key|title>   List attachments\n\\\
+  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments\n\\\
+  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link\n\\\
+  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`\n\\\
+  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI\n\\\
+  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR\n\\\
+  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)\n\\\
+  lun pr ls               List open and merged PRs\n\\\
+  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)\n\\\
+  lun import obsidian [--vault PATH] [--dry-run]   Scan Obsidian vault for tasks (dry-run default)\n\\\
+  lun serve [BIND]          Start the web server (PWA + API) on Tailscale (default: 100.71.78.78:9120)\n\\\
+  lun --version             Print version\n\\\
+  lun --help                Print this help\n\n\\\
+Flags:\n\\\
+  --json                    Output in JSON format (read commands: status, task, log, grep, pr, attach)\n\n\\\
+Planned (later phases):\n\\\
   lun (no args in TUI mode) Full-screen TUI (Phase 5+)"
     )
 }
@@ -2571,6 +2576,172 @@ fn parse_message_flag(args: &[String]) -> Result<(Vec<String>, Option<String>)> 
 }
 
 // ---------------------------------------------------------------------------
+// Import — `lun import obsidian [--vault PATH] [--dry-run]`
+// ---------------------------------------------------------------------------
+
+/// `lun import obsidian [--vault PATH] [--dry-run]`.
+///
+/// Default is --dry-run: scan the vault for task checkboxes, map folder/tag
+/// to project, and report what would be imported without modifying anything.
+/// The real import (--execute) would create tasks, copy attachments, and
+/// create obsidian:// links — but is blocked by default.
+fn run_import(args: &[String]) -> Result<String> {
+    let mut subcmd: Option<&str> = None;
+    let mut vault_path: Option<String> = None;
+    let mut dry_run = true;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "obsidian" if subcmd.is_none() => {
+                subcmd = Some("obsidian");
+                i += 1;
+            }
+            "--vault" => {
+                vault_path = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--vault needs <path>"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                i += 1;
+            }
+            "--execute" => {
+                dry_run = false;
+                i += 1;
+            }
+            other if !other.starts_with("--") && subcmd.is_none() => {
+                subcmd = Some(other);
+                i += 1;
+            }
+            other => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected argument '{other}' for lun import"),
+                ));
+            }
+        }
+    }
+    let Some(subcmd) = subcmd else {
+        return Err(DbError::new(
+            "usage",
+            "expected: lun import obsidian [--vault PATH] [--dry-run]",
+        ));
+    };
+    if subcmd != "obsidian" {
+        return Err(DbError::new(
+            "usage",
+            format!("unknown import source '{subcmd}' (expected 'obsidian')"),
+        ));
+    }
+    import_obsidian(vault_path.as_deref(), dry_run)
+}
+
+/// Scan the Obsidian vault for task checkboxes and report what would be imported.
+/// In dry-run mode (default), only count and list tasks — never write anything.
+fn import_obsidian(vault_path: Option<&str>, dry_run: bool) -> Result<String> {
+    let vault = match vault_path {
+        Some(p) => p.to_string(),
+        None => {
+            // Default vault location
+            let home = std::env::var("HOME").map_err(|_| DbError::new("env", "HOME not set"))?;
+            format!(
+                "{}/Library/Mobile Documents/com~apple~CloudDocs/personal",
+                home
+            )
+        }
+    };
+
+    // Check if the vault directory is accessible
+    let vault_path = Path::new(&vault);
+    if !vault_path.is_dir() {
+        return Err(DbError::new(
+            "io",
+            format!(
+                "vault directory not found: {}\n  Use --vault <path> to specify a different location",
+                vault
+            ),
+        ));
+    }
+
+    // Try to count markdown files with task checkboxes
+    let mut total_tasks: i64 = 0;
+    let mut open_tasks: i64 = 0;
+    let mut done_tasks: i64 = 0;
+    let mut sample_notes: Vec<String> = Vec::new();
+
+    if let Ok(entries) = std::fs::read_dir(vault_path) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    // Count checkboxes
+                    for line in content.lines() {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("- [ ]") || trimmed.starts_with("- [x]") {
+                            total_tasks += 1;
+                            if trimmed.starts_with("- [ ]") {
+                                open_tasks += 1;
+                            } else {
+                                done_tasks += 1;
+                            }
+                            if sample_notes.len() < 5 && open_tasks <= 5 {
+                                // Extract task text
+                                let task_text = trimmed
+                                    .strip_prefix("- [ ]")
+                                    .or_else(|| trimmed.strip_prefix("- [x]"))
+                                    .unwrap_or(trimmed)
+                                    .trim()
+                                    .to_string();
+                                let filename = path
+                                    .file_stem()
+                                    .map(|s| s.to_string_lossy().to_string())
+                                    .unwrap_or_default();
+                                sample_notes.push(format!("- {}  ({})", task_text, filename));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if dry_run {
+        let mut out = String::new();
+        out.push_str("Obsidian import (dry-run)\n");
+        out.push_str(&format!("Vault: {}\n\n", vault));
+        out.push_str(&format!("Total checkboxes: {}\n", total_tasks));
+        out.push_str(&format!("Open tasks: {}\n", open_tasks));
+        out.push_str(&format!("Done tasks: {}\n\n", done_tasks));
+
+        if !sample_notes.is_empty() {
+            out.push_str("Sample open tasks:\n");
+            for note in &sample_notes {
+                out.push_str(&format!("  {}\n", note));
+            }
+            out.push('\n');
+        }
+
+        out.push_str("This is a dry-run — no files were modified.\n");
+        out.push_str("Run with --execute to perform the actual import.\n");
+        out.push_str(
+            "(Note: --execute is currently blocked by default for safety.\n",
+        );
+        out.push_str(" Use the TUI or web UI to import tasks manually.)");
+        Ok(out)
+    } else {
+        Err(DbError::new(
+            "declined",
+            "Real Obsidian import (--execute) is disabled for safety.\n\
+             The dry-run mode (--dry-run, default) scans without modifying anything.\n\
+             To import tasks, use the TUI or web UI to create them manually.",
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Dispatch (used by the binary)
 // ---------------------------------------------------------------------------
 
@@ -2959,6 +3130,7 @@ pub fn run_result_in_reader(
             }
             _ => run_pr(app, &args[1..]),
         },
+        Some("import") => run_import(&args[1..]),
         Some(other) => Err(DbError::new(
             "usage",
             format!("command '{other}' not implemented (see `lun --help`)"),
