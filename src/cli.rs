@@ -897,6 +897,73 @@ fn status_name(status: &str) -> &'static str {
     }
 }
 
+/// Output all projects as JSON (for `lun status --json`).
+pub fn status_all_json(app: &App) -> Result<String> {
+    let projects = app.lun.list_projects()?;
+    let mut result = Vec::new();
+    for proj in &projects {
+        let tasks = app.lun.tasks_for_project(proj.id)?;
+        let done_count = tasks.iter().filter(|t| t.status == "done").count();
+        let todo_count = tasks.iter().filter(|t| t.status == "todo").count();
+        let doing_count = tasks.iter().filter(|t| t.status == "doing").count();
+        result.push(serde_json::json!({
+            "key": proj.project_key,
+            "name": proj.name,
+            "status": proj.status,
+            "tasks": tasks.len(),
+            "done": done_count,
+            "todo": todo_count,
+            "doing": doing_count,
+            "updated_at": proj.updated_at,
+        }));
+    }
+    Ok(serde_json::to_string_pretty(&result)
+        .map_err(|e| DbError::new("json", format!("serializing JSON: {e}")))?
+    )
+}
+
+/// Output a project or task as JSON (for `lun status <query> --json`).
+pub fn status_target_json(app: &App, query: &str) -> Result<String> {
+    if is_project_key(query) || app.lun.project_by_key(query).is_ok() {
+        let project = resolve_project(&app.lun, query)?;
+        let tasks = app.lun.tasks_for_project(project.id)?;
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "type": "project",
+            "key": project.project_key,
+            "name": project.name,
+            "status": project.status,
+            "tasks": tasks.iter().map(|t| serde_json::json!({
+                "key": t.task_key,
+                "title": t.title,
+                "status": t.status,
+                "priority": t.priority,
+                "assignee": t.assignee,
+                "scope": t.scope,
+            })).collect::<Vec<_>>(),
+        }))
+        .map_err(|e| DbError::new("json", format!("serializing JSON: {e}")))?
+        )
+    } else {
+        let task = resolve_task(&app.lun, query)?;
+        Ok(serde_json::to_string_pretty(&serde_json::json!({
+            "type": "task",
+            "key": task.task_key,
+            "title": task.title,
+            "status": task.status,
+            "priority": task.priority,
+            "assignee": task.assignee,
+            "scope": task.scope,
+            "project": task.project_id,
+            "labels": task.labels,
+            "notes": task.notes,
+            "created_at": task.created_at,
+            "updated_at": task.updated_at,
+        }))
+        .map_err(|e| DbError::new("json", format!("serializing JSON: {e}")))?
+        )
+    }
+}
+
 /// `lun status` — global project table and summary.
 pub fn status_all(app: &App) -> Result<String> {
     let projects = app.lun.list_projects()?;
@@ -2834,19 +2901,32 @@ pub fn run_result_in_reader(
     root_override: Option<&Path>,
 ) -> Result<String> {
     let args = normalize_invocation_args(args.to_vec());
-    match args.first().map(String::as_str) {
-        Some("complete") => Ok(complete_output(Some(app), &args[1..])),
+    let json_output = args.iter().any(|a| a == "--json");
+    // Filter --json from args before dispatch (it's a global flag)
+    let filtered_args: Vec<String> = args.iter().filter(|a| *a != "--json").cloned().collect();
+    match filtered_args.first().map(String::as_str) {
+        Some("complete") => Ok(complete_output(Some(app), &filtered_args[1..])),
         Some("init") => init_db_command(app),
         Some("help") | Some("--help") => Ok(help_text(env!("CARGO_PKG_VERSION"))),
         Some("--version") => Ok(format!("lun v{}", env!("CARGO_PKG_VERSION"))),
-        Some("status") => match args.get(1) {
-            None => status_all(app),
+        Some("status") => match filtered_args.get(1) {
+            None => {
+                if json_output {
+                    status_all_json(app)
+                } else {
+                    status_all(app)
+                }
+            }
             Some(q) => {
-                let board = args.iter().skip(2).any(|a| a == "--board");
+                let board = filtered_args.iter().skip(2).any(|a| a == "--board");
                 if board {
                     status_project_board(app, q)
                 } else {
-                    status_target(app, q)
+                    if json_output {
+                        status_target_json(app, q)
+                    } else {
+                        status_target(app, q)
+                    }
                 }
             }
         },
