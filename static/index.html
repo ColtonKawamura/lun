@@ -584,6 +584,11 @@ textarea.notes-input {
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 </style>
+<!-- CodeMirror for Vim‑style editing -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.5/codemirror.min.css" integrity="sha512-7v7+McUfhFh5HM4XKHu65KXn2eTYHcmUxUI5e+48LjIVtKQlBwEeuGmJX4mGZLLsY2dcyULWyO3J3gO9KOllEQ==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.5/codemirror.min.js" integrity="sha512-r6+Fic+JiRqPPDPWZkGU0fsZEkEDiwYxEkRlVK9FqQB8kW7N7LLEeEDdliWEBX21KJW0c3dPIjCx4P0OIhGvDw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.5/mode/markdown/markdown.min.js" integrity="sha512-U+cBtVhN8jsMlHw6VSuHpsWNcTDovDDNkkKI0NCl6iVw2lYnZ+3P/HV32uwwgBV1Bfl3RdtGbM6VVmFQHzQZ5A==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.5/keymap/vim.js" integrity="sha512-JEk+S3fuRhzfeTZBmaU4JARov6rZLJc8+bdUJZqWohcOm0pAQBkE5vUZcoOeE28HgzBBk0KdxXC6jI/ivc7iDw==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
 
@@ -795,6 +800,7 @@ let gBuffer = '';
 let gBufferTimer = null;
 let leader = false;
 let leaderTimer = null;
+let notesEditor = null;
 
 // Initialize
 (async function init() {
@@ -1070,6 +1076,20 @@ async function openModal(key) {
   document.getElementById('editAssignee').value = task.assignee || '';
   document.getElementById('editNotes').value = task.notes || '';
   document.getElementById('notesPreview').style.display = task.notes ? 'block' : 'none';
+  // Initialize CodeMirror for the notes textarea (Vim mode)
+  if (!notesEditor) {
+    notesEditor = CodeMirror.fromTextArea(document.getElementById('editNotes'), {
+      mode: 'markdown',
+      lineNumbers: true,
+      lineWrapping: true,
+      keyMap: 'vim',
+      showCursorWhenSelecting: true,
+    });
+  }
+  notesEditor.setValue(task.notes || '');
+  notesEditor.refresh();
++  // expose globally for debugging / external calls
++  window.notesEditor = notesEditor;
   
   // Set project
   document.getElementById('editProject').value = task.project_id || '';
@@ -1298,6 +1318,15 @@ function handleKeyboard(e) {
       document.activeElement.blur();
     }
     return;
+  }
+
+  // Cmd+Enter / Ctrl+Enter saves and exits modal (when modal is active)
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    e.preventDefault();
+    if (document.getElementById('modalOverlay').classList.contains('active')) {
+      saveModal();
+      return;
+    }
   }
 
   // Leader key (space) activates card move commands (h/l) – only in normal mode
