@@ -359,9 +359,9 @@ impl Lun {
                 branch      TEXT,
                 labels      TEXT NOT NULL DEFAULT '[]',
                 scope       TEXT,
+                notes       TEXT NOT NULL DEFAULT '',
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL,
-                notes       TEXT NOT NULL DEFAULT '',
                 archived_at TEXT
              );
              CREATE TABLE logs (
@@ -622,9 +622,10 @@ impl Lun {
                    assignee    TEXT,
                    branch      TEXT,
                    labels      TEXT NOT NULL DEFAULT '[]',
+                   scope       TEXT,
+                   notes       TEXT NOT NULL DEFAULT '',
                    created_at  TEXT NOT NULL,
                    updated_at  TEXT NOT NULL,
-                   notes       TEXT NOT NULL DEFAULT '',
                    archived_at TEXT
                 );
                 CREATE TABLE attachments (
@@ -668,7 +669,7 @@ impl Lun {
                        created_at,
                        updated_at
                   FROM projects_v5;
-                INSERT INTO tasks (id, task_key, project_id, title, status, priority, assignee, branch, labels, created_at, updated_at, notes, archived_at)
+                INSERT INTO tasks (id, task_key, project_id, title, status, priority, assignee, branch, labels, scope, notes, created_at, updated_at, archived_at)
                 SELECT id,
                        task_key,
                        project_id,
@@ -682,9 +683,10 @@ impl Lun {
                        assignee,
                        branch,
                        labels,
+                       NULL,
+                       notes,
                        created_at,
                        updated_at,
-                       notes,
                        archived_at
                   FROM tasks_v5;",
                 );
@@ -724,10 +726,19 @@ impl Lun {
             if version < 7 {
                 // Phase 10: tasks gain a `scope` column — an optional
                 // workstream/area tag (e.g. "research", "personal", "home").
-                conn.execute_batch(
-                    "ALTER TABLE tasks ADD COLUMN scope TEXT;
-                     INSERT INTO migrations (version, applied_at)
-                         VALUES (7, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                // Only add if not already present (v6 migration may have added it).
+                let scope_exists: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'scope'",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if scope_exists == 0 {
+                    conn.execute("ALTER TABLE tasks ADD COLUMN scope TEXT", [])?;
+                }
+                conn.execute(
+                    "INSERT INTO migrations (version, applied_at)
+                     VALUES (7, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))",
+                    [],
                 )?;
             }
         }
@@ -1088,28 +1099,28 @@ impl Lun {
 
     /// Look up a task by its `T-00N` key.
     pub fn task_by_key(&self, key: &str) -> Result<Task> {
-        self.conn
-            .query_row(
-                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, scope, notes, created_at, updated_at, archived_at
-                 FROM tasks WHERE task_key = ?1",
-                [key],
-                Self::task_from_row,
-            )
-            .map_err(|e| DbError::new("not-found", format!("no task with key '{key}': {e}")))
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                    labels, scope, notes, created_at, updated_at, archived_at
+             FROM tasks WHERE task_key = ?1",
+        )?;
+        let task = stmt
+            .query_row([key], Self::task_from_row)
+            .map_err(|e| DbError::new("not-found", format!("no task with key '{key}': {e}")))?;
+        Ok(task)
     }
 
     /// Look up a task by its internal row id.
     pub fn task_by_id(&self, id: i64) -> Result<Task> {
-        self.conn
-            .query_row(
-                "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, scope, notes, created_at, updated_at, archived_at
-                 FROM tasks WHERE id = ?1",
-                [id],
-                Self::task_from_row,
-            )
-            .map_err(|e| DbError::new("not-found", format!("no task with id {id}: {e}")))
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
+                    labels, scope, notes, created_at, updated_at, archived_at
+             FROM tasks WHERE id = ?1",
+        )?;
+        let task = stmt
+            .query_row([id], Self::task_from_row)
+            .map_err(|e| DbError::new("not-found", format!("no task with id {id}: {e}")))?;
+        Ok(task)
     }
 
     /// All tasks whose title exactly equals `title`. Zero, one, or many —
@@ -1486,20 +1497,20 @@ impl Lun {
 
     fn task_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         Ok(Task {
-            id: r.get(0)?,
-            task_key: r.get(1)?,
-            project_id: r.get(2)?,
-            title: r.get(3)?,
-            status: r.get(4)?,
-            priority: r.get(5)?,
-            assignee: r.get(6)?,
-            branch: r.get(7)?,
-            labels: r.get(8)?,
-            scope: r.get(9)?,
-            notes: r.get(10)?,
-            created_at: r.get(11)?,
-            updated_at: r.get(12)?,
-            archived_at: r.get(13)?,
+            id: r.get::<_, i64>(0)?,
+            task_key: r.get::<_, String>(1)?,
+            project_id: r.get::<_, Option<i64>>(2)?,
+            title: r.get::<_, String>(3)?,
+            status: r.get::<_, String>(4)?,
+            priority: r.get::<_, String>(5)?,
+            assignee: r.get::<_, Option<String>>(6)?,
+            branch: r.get::<_, Option<String>>(7)?,
+            labels: r.get::<_, String>(8)?,
+            scope: r.get::<_, Option<String>>(9)?,
+            notes: r.get::<_, String>(10)?,
+            created_at: r.get::<_, String>(11)?,
+            updated_at: r.get::<_, String>(12)?,
+            archived_at: r.get::<_, Option<String>>(13)?,
         })
     }
 

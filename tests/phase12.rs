@@ -54,7 +54,8 @@ fn fixture() -> (PathBuf, CliApp, App) {
         branch: None,
         labels: None,
         message: None,
-        user: None,
+        scope: None,
+            user: None,
     })
     .unwrap();
     let cli = CliApp::open(&root).unwrap();

@@ -50,7 +50,8 @@ fn fixture() -> (PathBuf, App) {
         branch: None,
         labels: None,
         message: None,
-        user: None,
+        scope: None,
+            user: None,
     })
     .unwrap();
     (root, App { lun })

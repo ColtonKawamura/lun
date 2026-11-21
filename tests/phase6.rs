@@ -77,6 +77,7 @@ fn fixture() -> (std::path::PathBuf, Lun) {
             branch: None,
             labels: None,
             message: None,
+            scope: None,
             user: None,
         })
         .unwrap();
