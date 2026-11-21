@@ -1768,16 +1768,17 @@ const CardDragDrop = (() => {
   function animateGhostToRect(targetRect, onDone) {
     if (!state.ghost) { reset(); return; }
     const ghost = state.ghost;
-    // Use Web Animations API for the settle
-    const dx = targetRect.left - (parseFloat(ghost.style.transform.match(/translate3d\(([-\d.]+)px/)?.[1]) || 0);
-    const dy = targetRect.top - (parseFloat(ghost.style.transform.match(/translate3d\(,[\s]*([-\d.]+)px/)?.[1] || ghost.style.transform.match(/translate3d\([^,]+,\s*([-\d.]+)px/)?.[1]) || 0);
-
-    // Simpler approach: use FLIP with requestAnimationFrame
-    const startTransform = ghost.style.transform;
     const endTransform = `translate3d(${targetRect.left}px, ${targetRect.top}px, 0) scale(1)`;
 
     ghost.style.transition = `transform ${SETTLE_DURATION}ms ease-out, opacity ${SETTLE_DURATION}ms ease-out`;
     ghost.style.transform = endTransform;
+
+    // Schedule clickSuppressed reset after this turn so the click event (fired by mouseup)
+    // still sees it as true and gets suppressed.
+    requestAnimationFrame(() => {
+      state.clickSuppressed = false;
+      state.mode = 'idle';
+    });
 
     setTimeout(() => {
       ghost.remove();
