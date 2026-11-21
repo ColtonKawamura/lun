@@ -1,0 +1,19 @@
+# Ghostty config snippet for lun
+# Add to your ~/.config/ghostty/config
+
+# Purple palette matching the lun theme
+[colors]
+background = "#1a1a2e"
+foreground = "#e2e8f0"
+palette = "0:#64748b,1:#ef4444,2:#22c55e,3:#f59e0b,4:#3b82f6,5:#6c3baa,6:#8b5cf6,7:#94a3b8,8:#475569,9:#dc2626,10:#16a34a,11:#d97706,12:#2563eb,13:#5b21b6,14:#7c3aed,15:#64748b"
+
+# Drop-down (quick-terminal) global hotkey
+# macOS: Command+Option+T
+macos.window-style = "tab-title"
+
+# Enable kitty keyboard protocol for reliable modified vim keystrokes
+kitty-modifier-keys = true
+
+# Font for code + markdown rendering
+font-size = 14
+font-family = "JetBrainsMono Nerd Font"
