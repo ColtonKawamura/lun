@@ -425,40 +425,43 @@ impl App {
 
 pub fn help_text(version: &str) -> String {
     format!(
-        "lun v{version} — CLI-first markdown task & project tracker\n\n\\\
-Usage:\n\\\
-  lun                     Show banner\n\\\
-  lun init                Create .lun/lun.db in the current directory (idempotent)\n\\\
-  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board\n\\\
-  lun /<name|key>         Shortcut for `lun status <name|key>`\n\\\
-  lun add proj \"<name>\" [--status active|inactive]  Create a project\n\\\
-  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)\n\\\
-  lun move \"<task>\" \"<project>\"   Move a task to a project\n\\\
-  lun task <T-00N|title>    View a task (fields, labels, history)\n\\\
-  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status\n\\\
-  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)\n\\\
-  lun task edit <task> [--field value]   Edit task fields\n\\\
-  lun proj <project> --status <active|inactive>   Update project status\n\\\
-  lun task complete|reopen|archive <task>   Update task lifecycle\n\\\
-  lun log <project|task>    Commit-style history for a project or task\n\\\
-  lun grep \"<text>\"         Search project/task fields and commit text\n\\\
-  lun attach <task|project> <key|title> /path/to/file   Attach a file\n\\\
-  lun attach ls <task|project> <key|title>   List attachments\n\\\
-  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments\n\\\
-  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link\n\\\
-  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`\n\\\
-  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI\n\\\
-  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR\n\\\
-  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)\n\\\
-  lun pr ls               List open and merged PRs\n\\\
-  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)\n\\\
-  lun import obsidian [--vault PATH] [--dry-run]   Scan Obsidian vault for tasks (dry-run default)\n\\\
-  lun serve [BIND]          Start the web server (PWA + API) on Tailscale (default: 100.71.78.78:9120)\n\\\
-  lun --version             Print version\n\\\
-  lun --help                Print this help\n\n\\\
-Flags:\n\\\
-  --json                    Output in JSON format (read commands: status, task, log, grep, pr, attach)\n\n\\\
-Planned (later phases):\n\\\
+        "lun v{version} — CLI-first markdown task & project tracker
+
+Usage:
+  lun                     Show banner
+  lun init                Create .lun/lun.db in the current directory (idempotent)
+  lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board
+  lun /<name|key>         Shortcut for `lun status <name|key>`
+  lun add proj \"<name>\" [--status active|inactive]  Create a project
+  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)
+  lun move \"<task>\" \"<project>\"   Move a task to a project
+  lun task <T-00N|title>    View a task (fields, labels, history)
+  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status
+  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)
+  lun task edit <task> [--field value]   Edit task fields
+  lun proj <project> --status <active|inactive>   Update project status
+  lun task complete|reopen|archive <task>   Update task lifecycle
+  lun log <project|task>    Commit-style history for a project or task
+  lun grep \"<text>\"         Search project/task fields and commit text
+  lun attach <task|project> <key|title> /path/to/file   Attach a file
+  lun attach ls <task|project> <key|title>   List attachments
+  lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments
+  lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link
+  lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`
+  lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI
+  lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR
+  lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)
+  lun pr ls               List open and merged PRs
+  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)
+  lun import obsidian [--vault PATH] [--dry-run]   Scan Obsidian vault for tasks (dry-run default)
+  lun serve [BIND]          Start the web server (PWA + API) on Tailscale (default: 100.71.78.78:9120)
+  lun --version             Print version
+  lun --help                Print this help
+
+Flags:
+  --json                    Output in JSON format (read commands: status, task, log, grep, pr, attach)
+
+Planned (later phases):
   lun (no args in TUI mode) Full-screen TUI (Phase 5+)"
     )
 }
