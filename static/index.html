@@ -1300,8 +1300,8 @@ function handleKeyboard(e) {
     return;
   }
 
-  // Leader key (space) activates card move commands (h/l)
-  if (e.key === ' ') {
+  // Leader key (space) activates card move commands (h/l) – only in normal mode
+  if (e.key === ' ' && !isInputFocused()) {
     e.preventDefault();
     leader = true;
     if (leaderTimer) clearTimeout(leaderTimer);
