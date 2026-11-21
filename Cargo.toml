@@ -9,13 +9,29 @@ license = "MIT"
 #   - rusqlite (SQLite)        -> Phase 2 (bundled: compiles SQLite, no system lib)
 #   - clap (CLI arg parsing)   -> Phase 3
 #   - ratatui + crossterm      -> Phase 5 (TUI)
+#   - axum + tokio             -> Web server (lun serve)
+#   - serde + serde_json       -> JSON API + --json output
 [dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
 ratatui = "0.26"
 crossterm = "0.28"
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tower = "0.5"
+mime_guess = "2"
+pulldown-cmark = "0.12"
+ammonia = "4"
+include_dir = "0.7"
+walkdir = "2"
+urlencoding = "2"
 
 [dev-dependencies]
 rusqlite = { version = "0.32", features = ["bundled"] }
+axum = "0.8"
+http-body-util = "0.1"
+tower = "0.5"
 
 [profile.release]
 strip = true

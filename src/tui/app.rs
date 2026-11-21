@@ -531,6 +531,7 @@ impl App {
                     } else {
                         Some(format!("[{}]", labels.join(", ")))
                     },
+                    scope: None,
                     message: None,
                     user: None,
                 };

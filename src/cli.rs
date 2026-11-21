@@ -2269,6 +2269,7 @@ pub fn create_task(
         priority: Some(priority),
         assignee: Some(assignee),
         branch: None,
+        scope: None,
         labels: None,
         message: Some(message.clone()),
         user: None,

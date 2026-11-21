@@ -10,9 +10,10 @@
 //! that maps the PR lifecycle onto the task's log).
 
 use rusqlite::{params, types::Value, Connection};
+use serde::Serialize;
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 6;
+pub const CURRENT_VERSION: i64 = 7;
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -68,7 +69,7 @@ pub enum AttachmentTarget {
 }
 
 /// Row of the `attachments` table (read model).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Attachment {
     pub id: i64,
     pub task_id: Option<i64>,
@@ -79,7 +80,7 @@ pub struct Attachment {
 }
 
 /// Row of the `links` table (read model).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Link {
     pub id: i64,
     pub task_id: Option<i64>,
@@ -112,6 +113,8 @@ pub struct TaskSpec {
     pub priority: Option<String>,
     pub assignee: Option<String>,
     pub branch: Option<String>,
+    /// Optional scope/workstream (e.g. "research", "personal"). Nullable.
+    pub scope: Option<String>,
     /// JSON array of label strings, e.g. `["cli", "db"]`. Defaults to `[]`.
     pub labels: Option<String>,
     /// Commit-style message for the log entry. Defaults to `add task "<title>" to <project>`.
@@ -120,7 +123,7 @@ pub struct TaskSpec {
 }
 
 /// Row of the `prs` table (read model; Phase 9).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pr {
     pub id: i64,
     pub pr_key: String,
@@ -148,7 +151,7 @@ pub struct PrSpec {
     pub user: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LogEntry {
     pub id: i64,
     pub entity_type: String,
@@ -161,7 +164,7 @@ pub struct LogEntry {
     pub details: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Project {
     pub id: i64,
     pub project_key: String,
@@ -171,7 +174,7 @@ pub struct Project {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Task {
     pub id: i64,
     pub task_key: String,
@@ -181,6 +184,8 @@ pub struct Task {
     pub priority: String,
     pub assignee: Option<String>,
     pub branch: Option<String>,
+    /// Optional scope/workstream (e.g. "research", "personal"). Nullable.
+    pub scope: Option<String>,
     /// JSON array of strings.
     pub labels: String,
     /// Free-form markdown notes (Phase 7: editable in the TUI).
@@ -206,6 +211,7 @@ pub struct TaskListSpec {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub assignee: Option<String>,
+    pub scope: Option<String>,
     pub include_archived: bool,
     pub sort: TaskSort,
 }
@@ -218,6 +224,7 @@ pub struct TaskUpdateSpec {
     pub priority: Option<String>,
     pub assignee: Option<Option<String>>,
     pub branch: Option<Option<String>>,
+    pub scope: Option<Option<String>>,
     pub labels: Option<String>,
     pub notes: Option<String>,
     pub message: Option<String>,
@@ -344,6 +351,7 @@ impl Lun {
                 assignee    TEXT,
                 branch      TEXT,
                 labels      TEXT NOT NULL DEFAULT '[]',
+                scope       TEXT,
                 created_at  TEXT NOT NULL,
                 updated_at  TEXT NOT NULL,
                 notes       TEXT NOT NULL DEFAULT '',
@@ -399,7 +407,7 @@ impl Lun {
                      'seed P-000 \"Unassigned\" project',
                      '{\"seed\": true}');
              INSERT INTO migrations (version, applied_at)
-                 VALUES (6, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                 VALUES (7, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
         )?;
         Ok(())
     }
@@ -705,6 +713,16 @@ impl Lun {
                 );
                 conn.execute_batch(&sql)?;
             }
+
+            if version < 7 {
+                // Phase 10: tasks gain a `scope` column — an optional
+                // workstream/area tag (e.g. "research", "personal", "home").
+                conn.execute_batch(
+                    "ALTER TABLE tasks ADD COLUMN scope TEXT;
+                     INSERT INTO migrations (version, applied_at)
+                         VALUES (7, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                )?;
+            }
         }
 
         let version: i64 = conn.query_row(
@@ -916,8 +934,8 @@ impl Lun {
 
         self.conn.execute(
             "INSERT INTO tasks
-                (task_key, project_id, title, status, priority, assignee, branch, labels, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                (task_key, project_id, title, status, priority, assignee, branch, labels, scope, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 key,
                 project_id,
@@ -927,6 +945,7 @@ impl Lun {
                 spec.assignee,
                 spec.branch,
                 labels,
+                spec.scope,
                 now,
                 now
             ],
@@ -966,6 +985,7 @@ impl Lun {
             assignee: spec.assignee,
             branch: spec.branch,
             labels,
+            scope: spec.scope,
             notes: String::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -981,7 +1001,7 @@ impl Lun {
     pub fn list_tasks_with(&self, spec: &TaskListSpec) -> Result<Vec<Task>> {
         let mut sql = String::from(
             "SELECT id, task_key, project_id, title, status, priority,
-                    assignee, branch, labels, notes, created_at, updated_at, archived_at
+                    assignee, branch, labels, scope, notes, created_at, updated_at, archived_at
              FROM tasks",
         );
         let mut clauses = Vec::new();
@@ -1004,6 +1024,10 @@ impl Lun {
         if let Some(assignee) = &spec.assignee {
             clauses.push("assignee = ?".to_string());
             values.push(Value::Text(assignee.clone()));
+        }
+        if let Some(scope) = &spec.scope {
+            clauses.push("scope = ?".to_string());
+            values.push(Value::Text(scope.clone()));
         }
         if !clauses.is_empty() {
             sql.push_str(" WHERE ");
@@ -1060,7 +1084,7 @@ impl Lun {
         self.conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE task_key = ?1",
                 [key],
                 Self::task_from_row,
@@ -1073,7 +1097,7 @@ impl Lun {
         self.conn
             .query_row(
                 "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE id = ?1",
                 [id],
                 Self::task_from_row,
@@ -1086,7 +1110,7 @@ impl Lun {
     pub fn tasks_by_title(&self, title: &str) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE title = ?1 ORDER BY id",
         )?;
         let rows = stmt
@@ -1099,7 +1123,7 @@ impl Lun {
     pub fn tasks_for_project(&self, project_id: i64) -> Result<Vec<Task>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, task_key, project_id, title, status, priority, assignee, branch,
-                        labels, notes, created_at, updated_at, archived_at
+                        labels, scope, notes, created_at, updated_at, archived_at
                  FROM tasks WHERE project_id = ?1 ORDER BY id",
         )?;
         let rows = stmt
@@ -1245,6 +1269,16 @@ impl Lun {
                 task.labels = labels;
             }
         }
+        if let Some(scope) = spec.scope {
+            if scope != task.scope {
+                changes.push(format!(
+                    "scope: {} -> {}",
+                    task.scope.as_deref().unwrap_or(""),
+                    scope.as_deref().unwrap_or("")
+                ));
+                task.scope = scope;
+            }
+        }
         if let Some(notes) = spec.notes {
             if notes != task.notes {
                 let describe = |t: &str| {
@@ -1272,8 +1306,8 @@ impl Lun {
         self.conn.execute(
             "UPDATE tasks
                 SET project_id = ?1, title = ?2, status = ?3, priority = ?4,
-                    assignee = ?5, branch = ?6, labels = ?7, notes = ?8, updated_at = ?9
-              WHERE id = ?10",
+                    assignee = ?5, branch = ?6, labels = ?7, scope = ?8, notes = ?9, updated_at = ?10
+              WHERE id = ?11",
             params![
                 task.project_id,
                 task.title,
@@ -1282,6 +1316,7 @@ impl Lun {
                 task.assignee,
                 task.branch,
                 task.labels,
+                task.scope,
                 task.notes,
                 now,
                 task_id
@@ -1453,10 +1488,11 @@ impl Lun {
             assignee: r.get(6)?,
             branch: r.get(7)?,
             labels: r.get(8)?,
-            notes: r.get(9)?,
-            created_at: r.get(10)?,
-            updated_at: r.get(11)?,
-            archived_at: r.get(12)?,
+            scope: r.get(9)?,
+            notes: r.get(10)?,
+            created_at: r.get(11)?,
+            updated_at: r.get(12)?,
+            archived_at: r.get(13)?,
         })
     }
 
@@ -1986,6 +2022,52 @@ impl Lun {
             merged_at: Some(now),
             ..pr
         })
+    }
+
+    // ------------------------------------------------------------------
+    // Web API helpers
+    // ------------------------------------------------------------------
+
+    /// List all projects (including inactive).
+    pub fn list_all_projects(&self) -> Result<Vec<Project>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, project_key, name, status, created_at, updated_at
+             FROM projects ORDER BY project_key",
+        )?;
+        let rows = stmt
+            .query_map([], Self::project_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// List all unique scopes used across non-archived tasks.
+    pub fn list_all_scopes(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT scope FROM tasks
+             WHERE scope IS NOT NULL AND scope != '' AND archived_at IS NULL
+             ORDER BY scope",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok(r.get::<_, String>(0)?))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Search tasks by free-text across title, notes, and labels.
+    pub fn search_tasks(&self, query: &str) -> Result<Vec<Task>> {
+        let pattern = format!("%{}%", query);
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_key, project_id, title, status, priority,
+                    assignee, branch, labels, scope, notes, created_at, updated_at, archived_at
+             FROM tasks
+             WHERE archived_at IS NULL
+               AND (title LIKE ?1 OR notes LIKE ?1 OR labels LIKE ?1)
+             ORDER BY task_key ASC",
+        )?;
+        let rows = stmt
+            .query_map([&pattern], Self::task_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
     }
 }
 
