@@ -17,6 +17,8 @@ use tokio::sync::Mutex;
 
 use crate::db::{Lun, TaskSpec, TaskUpdateSpec, TaskListSpec, TaskSort, Attachment};
 
+use pulldown_cmark::{Event, Options as MdOptions, Tag};
+
 static WEB_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 
 pub struct ServerState {
@@ -361,6 +363,161 @@ fn extract_math(text: &str) -> (String, Vec<(String, bool)>) {
     (out, math)
 }
 
+/// Escape text for inclusion in HTML element content.
+fn text_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Scheme check for user-provided link/image URLs.
+fn url_scheme_ok(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    if let Some(colon) = lower.find(':') {
+        if colon < 8 {
+            return matches!(&lower[..colon],
+                "http" | "https" | "mailto" | "obsidian" | "file"
+            );
+        }
+    }
+    // Relative / fragment URLs are fine.
+    !lower.starts_with("//")
+}
+
+/// Render pulldown_cmark events to HTML.
+///
+/// `pulldown_cmark::html::push_html` drops `TaskListMarker` events, which
+/// silently breaks `- [x]` / `- [ ]` checklist rendering. This renderer
+/// emits real (disabled) checkboxes for task-list items. Output is
+/// defense-in-depth sanitized by ammonia in render_markdown.
+fn render_events(events: Vec<Event>) -> String {
+    let mut out = String::new();
+    let mut bad_link = false;
+    for ev in events {
+        match ev {
+            Event::Start(tag) => match tag {
+                Tag::Paragraph => out.push_str("<p>"),
+                Tag::Heading { level, .. } => {
+                    let n = match level {
+                        pulldown_cmark::HeadingLevel::H1 => 1,
+                        pulldown_cmark::HeadingLevel::H2 => 2,
+                        pulldown_cmark::HeadingLevel::H3 => 3,
+                        pulldown_cmark::HeadingLevel::H4 => 4,
+                        pulldown_cmark::HeadingLevel::H5 => 5,
+                        pulldown_cmark::HeadingLevel::H6 => 6,
+                    };
+                    out.push_str(&format!("<h{}>", n));
+                }
+                Tag::BlockQuote(_) => out.push_str("<blockquote>"),
+                Tag::CodeBlock(kind) => match kind {
+                    pulldown_cmark::CodeBlockKind::Fenced(info) => {
+                        out.push_str("<pre><code");
+                        let info = info.trim();
+                        if !info.is_empty() {
+                            out.push_str(&format!(" class=\"language-{}\"", attr_escape(info)));
+                        }
+                        out.push('>');
+                    }
+                    pulldown_cmark::CodeBlockKind::Indented => out.push_str("<pre><code>"),
+                },
+                Tag::Link { dest_url, .. } => {
+                    if url_scheme_ok(&dest_url) {
+                        out.push_str(&format!(
+                            "<a href=\"{}\" rel=\"noopener noreferrer\">",
+                            attr_escape(&dest_url)
+                        ));
+                        bad_link = false;
+                    } else {
+                        bad_link = true;
+                    }
+                }
+                Tag::Image { dest_url, title, .. } => {
+                    if url_scheme_ok(&dest_url) {
+                        out.push_str(&format!(
+                            "<img src=\"{}\" alt=\"{}\">",
+                            attr_escape(&dest_url),
+                            attr_escape(&title)
+                        ));
+                    }
+                }
+                Tag::Table(_) => out.push_str("<table>"),
+                Tag::TableHead => out.push_str("<thead>"),
+                Tag::TableRow => out.push_str("<tr>"),
+                Tag::TableCell => out.push_str("<td>"),
+                Tag::Emphasis => out.push_str("<em>"),
+                Tag::Strong => out.push_str("<strong>"),
+                Tag::Strikethrough => out.push_str("<del>"),
+                Tag::List(None) => out.push_str("<ul>"),
+                Tag::List(Some(start)) => out.push_str(&format!("<ol start=\"{}\">", start)),
+                Tag::Item => out.push_str("<li>"),
+                // Raw HTML blocks, footnotes, definition lists: not rendered.
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                pulldown_cmark::TagEnd::Paragraph => out.push_str("</p>"),
+                pulldown_cmark::TagEnd::Heading(level) => {
+                    let n = match level {
+                        pulldown_cmark::HeadingLevel::H1 => 1,
+                        pulldown_cmark::HeadingLevel::H2 => 2,
+                        pulldown_cmark::HeadingLevel::H3 => 3,
+                        pulldown_cmark::HeadingLevel::H4 => 4,
+                        pulldown_cmark::HeadingLevel::H5 => 5,
+                        pulldown_cmark::HeadingLevel::H6 => 6,
+                    };
+                    out.push_str(&format!("</h{}>", n));
+                }
+                pulldown_cmark::TagEnd::BlockQuote(_) => out.push_str("</blockquote>"),
+                pulldown_cmark::TagEnd::CodeBlock => out.push_str("</code></pre>"),
+                pulldown_cmark::TagEnd::Link => {
+                    if !bad_link {
+                        out.push_str("</a>");
+                    }
+                    bad_link = false;
+                }
+                pulldown_cmark::TagEnd::Table => out.push_str("</table>"),
+                pulldown_cmark::TagEnd::TableHead => out.push_str("</thead>"),
+                pulldown_cmark::TagEnd::TableRow => out.push_str("</tr>"),
+                pulldown_cmark::TagEnd::TableCell => out.push_str("</td>"),
+                pulldown_cmark::TagEnd::Emphasis => out.push_str("</em>"),
+                pulldown_cmark::TagEnd::Strong => out.push_str("</strong>"),
+                pulldown_cmark::TagEnd::Strikethrough => out.push_str("</del>"),
+                pulldown_cmark::TagEnd::List(false) => out.push_str("</ul>"),
+                pulldown_cmark::TagEnd::List(true) => out.push_str("</ol>"),
+                pulldown_cmark::TagEnd::Item => out.push_str("</li>"),
+                _ => {}
+            },
+            Event::Text(s) => out.push_str(&text_escape(&s)),
+            Event::Code(s) => out.push_str(&format!("<code>{}</code>", text_escape(&s))),
+            Event::TaskListMarker(checked) => {
+                // The <li> was just emitted; tag it and add the checkbox.
+                if let Some(pos) = out.rfind("<li>") {
+                    out.replace_range(pos..pos + 4, "<li class=\"task-item\">");
+                }
+                out.push_str(&format!(
+                    "<input type=\"checkbox\" disabled{}> ",
+                    if checked { " checked" } else { "" }
+                ));
+            }
+            Event::SoftBreak => out.push('\n'),
+            Event::HardBreak => out.push_str("<br>"),
+            Event::Rule => out.push_str("<hr>"),
+            // Raw HTML passes through unmodified by pulldown: drop it.
+            Event::Html(_) | Event::InlineHtml(_) => {}
+            Event::FootnoteReference(_) => {}
+            // Math is pre-extracted in render_markdown, but drop defensively.
+            Event::InlineMath(_) | Event::DisplayMath(_) => {}
+        }
+    }
+    out
+}
+
 pub fn render_markdown(text: &str) -> String {
     let text = resolve_wikilinks(text);
     // Extract math before markdown parsing: pulldown_cmark mangles backslashes
@@ -368,9 +525,8 @@ pub fn render_markdown(text: &str) -> String {
     // The raw TeX travels in a data-tex attribute; the frontend calls
     // katex.render() on each .lun-math element.
     let (no_math, math) = extract_math(&text);
-    let parser = pulldown_cmark::Parser::new_ext(&no_math, pulldown_cmark::Options::all());
-    let mut html = String::new();
-    pulldown_cmark::html::push_html(&mut html, parser);
+    let parser = pulldown_cmark::Parser::new_ext(&no_math, MdOptions::all());
+    let html = render_events(parser.collect());
     use std::collections::HashSet;
     let mut builder = ammonia::Builder::new();
     let mut schemes = HashSet::new();
@@ -378,13 +534,16 @@ pub fn render_markdown(text: &str) -> String {
         schemes.insert(s);
     }
     builder.url_schemes(schemes);
-    // Allow `class` on all elements so KaTeX classes survive sanitization
+    // Checkboxes for markdown task lists (- [ ] / - [x])
+    builder.add_tags(["input"]);
     {
         let mut tag_attrs = builder.clone_tag_attributes();
         tag_attrs.entry("span").or_insert_with(HashSet::new).insert("class");
         for tags in tag_attrs.values_mut() {
             tags.insert("class");
         }
+        tag_attrs.entry("li").or_insert_with(HashSet::new).insert("class");
+        tag_attrs.entry("input").or_insert_with(HashSet::new).extend(["type", "checked", "disabled"]);
         builder.tag_attributes(tag_attrs);
     }
     let mut html = builder.clean(&html).to_string();
@@ -485,6 +644,22 @@ mod tests {
         assert!(html.contains(r##"data-tex="10^{-4}\langle f\rangle"##), "display math backslashes kept: {}", html);
         assert!(!html.contains("\\\\"), "no doubled backslashes: {}", html);
         assert!(html.contains("data-display=\"1\""), "display flag set: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_tasklist_checkboxes() {
+        let html = render_markdown("- [x] done item\n- [ ] open item");
+        assert!(html.contains("task-item"), "task-item class present: {}", html);
+        assert!(html.contains(r#"<input type="checkbox" disabled="" checked="""#), "checked box: {}", html);
+        assert_eq!(html.matches("checkbox").count(), 2, "two checkboxes: {}", html);
+    }
+
+    #[test]
+    fn test_render_markdown_headings_and_links() {
+        let html = render_markdown("# Title\n\n[ok](https://example.com) [bad](javascript:alert(1))");
+        assert!(html.contains("<h1>Title</h1>"), "h1: {}", html);
+        assert!(html.contains("href=\"https://example.com\""), "safe link: {}", html);
+        assert!(!html.contains("javascript:"), "bad scheme stripped: {}", html);
     }
 
     #[test]
