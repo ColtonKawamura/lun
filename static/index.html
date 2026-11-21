@@ -185,14 +185,48 @@ body {
   background: var(--bg-card);
   border-radius: var(--radius);
   padding: 10px;
-  cursor: pointer;
+  cursor: grab;
   transition: transform 0.1s, box-shadow 0.1s;
   border: 2px solid transparent;
   position: relative;
+  touch-action: pan-x;
+  -webkit-user-select: none;
+  user-select: none;
 }
 .card:hover { box-shadow: var(--shadow); }
 .card:focus { outline: none; border-color: var(--accent); }
 .card.active { border-color: var(--accent); }
+
+/* Dragging state (original card dimmed) */
+.card.dragging {
+  opacity: 0.35;
+  border: 2px dashed var(--accent);
+  transform: scale(0.97);
+  pointer-events: none;
+}
+
+/* Ghost card (floating clone under cursor/finger) */
+.card-ghost {
+  position: fixed;
+  z-index: 900;
+  pointer-events: none;
+  transform: translate3d(0,0,0) scale(1.03);
+  filter: drop-shadow(0 8px 24px rgba(0,0,0,0.45));
+  border-radius: var(--radius);
+  background: var(--bg-card);
+  opacity: 0.95;
+  will-change: transform;
+}
+
+/* Column dragover highlight */
+.column.dragover {
+  background: rgba(108, 59, 170, 0.12);
+  transform: scale(1.01);
+  transition: background 0.12s, transform 0.12s;
+}
+.column.dragover .card-list {
+  min-height: 60px;
+}
 .card-title {
   font-weight: 500;
   font-size: 14px;
@@ -1475,40 +1509,9 @@ function closePalette() {
   document.getElementById('paletteOverlay').classList.remove('active');
 }
 
-// Touch swipe for mobile
+// Touch swipe for mobile — replaced by cardDragDrop (which handles swipe as a subset)
 function setupTouchSwipe() {
-  let startX = 0;
-  let startY = 0;
-  let touchCard = null;
-  
-  document.addEventListener('touchstart', e => {
-    const card = e.target.closest('.card');
-    if (card) {
-      startX = e.touches[0].clientX;
-      startY = e.touches[0].clientY;
-      touchCard = card;
-    }
-  }, {passive: true});
-  
-  document.addEventListener('touchend', e => {
-    if (!touchCard) return;
-    const dx = e.changedTouches[0].clientX - startX;
-    const dy = e.changedTouches[0].clientY - startY;
-    if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 60) {
-      const dir = dx > 0 ? 1 : -1;
-      const task = tasks.find(t => t.task_key === touchCard.dataset.key);
-      if (task) {
-        const currentIdx = STATUS_ORDER.indexOf(task.status);
-        const newIdx = Math.max(0, Math.min(STATUS_ORDER.length - 1, currentIdx + dir));
-        if (newIdx !== currentIdx) {
-          updateTaskOnServer(touchCard.dataset.key, {status: STATUS_ORDER[newIdx]}).then(() => {
-            loadTasks().then(render);
-          });
-        }
-      }
-    }
-    touchCard = null;
-  }, {passive: true});
+  // no-op: cardDragDrop handles all card touch interactions now
 }
 
 // Pull to refresh
@@ -1532,6 +1535,310 @@ function setupPullToRefresh() {
     }
   }, {passive: true});
 }
+
+// ─── Card Drag & Drop (mouse + touch) ─────────────────────────────
+// Manages: ghost creation, cursor-follow, drop detection, FLIP settle,
+// and modal-suppression after drag.
+const CardDragDrop = (() => {
+  const GHOST_OFFSET_Y = 30; // pixels below cursor/finger (so finger doesn't obscure)
+  const MOUSE_DRAG_THRESHOLD = 5;  // px to start mouse drag
+  const TOUCH_HOLD_MS = 350;       // ms to enter touch drag
+  const TOUCH_MOVE_CANCEL = 10;    // px touch move cancels hold timer
+  const SETTLE_DURATION = 180;     // ms for FLIP settle animation
+
+  let state = {
+    mode: 'idle', // idle | arming | dragging
+    sourceCard: null,    // original .card element
+    sourceKey: null,     // task_key
+    ghost: null,         // .card-ghost element
+    originRect: null,    // DOMRect of source card at drag start
+    startPos: {x:0, y:0},
+    dragStarted: false,  // true once threshold passed
+    clickSuppressed: false,
+    holdTimer: null,
+    touchMoved: false,
+    pointerInColumn: null, // .column currently under pointer
+  };
+
+  function reset() {
+    if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
+    if (state.ghost) { state.ghost.remove(); state.ghost = null; }
+    if (state.sourceCard) { state.sourceCard.classList.remove('dragging'); }
+    document.querySelectorAll('.column.dragover').forEach(c => c.classList.remove('dragover'));
+    state = {
+      mode: 'idle',
+      sourceCard: null, sourceKey: null, ghost: null, originRect: null,
+      startPos: {x:0, y:0}, dragStarted: false, clickSuppressed: false,
+      holdTimer: null, touchMoved: false, pointerInColumn: null,
+    };
+  }
+
+  function findColumnUnderPoint(px, py) {
+    // Temporarily hide the ghost so elementFromPoint sees through it
+    if (state.ghost) state.ghost.style.display = 'none';
+    const el = document.elementFromPoint(px, py);
+    if (state.ghost) state.ghost.style.display = '';
+    return el ? el.closest('.column') : null;
+  }
+
+  function updateGhostPosition(px, py) {
+    if (!state.ghost) return;
+    const x = px - state.originRect.width / 2;
+    const y = py - GHOST_OFFSET_Y - state.originRect.height / 2;
+    state.ghost.style.transform = `translate3d(${x}px, ${y}px, 0) scale(1.03)`;
+  }
+
+  function updateColumnHighlight(px, py) {
+    const col = findColumnUnderPoint(px, py);
+    if (col === state.pointerInColumn) return;
+    if (state.pointerInColumn) state.pointerInColumn.classList.remove('dragover');
+    if (col) col.classList.add('dragover');
+    state.pointerInColumn = col;
+  }
+
+  // ── Mouse ──────────────────────────────────────────────────────────
+  function onMouseDown(e) {
+    const card = e.target.closest('.card');
+    if (!card) return;
+    // Ignore right-click and middle-click
+    if (e.button !== 0) return;
+    // Don't start drag if clicking on inputs/links inside card
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'A') return;
+
+    state.mode = 'arming';
+    state.sourceCard = card;
+    state.sourceKey = card.dataset.key;
+    state.startPos = {x: e.clientX, y: e.clientY};
+    state.dragStarted = false;
+    state.clickSuppressed = false;
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }
+
+  function onMouseMove(e) {
+    if (state.mode !== 'arming' && state.mode !== 'dragging') return;
+
+    if (!state.dragStarted) {
+      const dx = e.clientX - state.startPos.x;
+      const dy = e.clientY - state.startPos.y;
+      if (Math.sqrt(dx*dx + dy*dy) <= MOUSE_DRAG_THRESHOLD) return;
+      // Threshold passed — start drag
+      state.dragStarted = true;
+      state.clickSuppressed = true;
+      state.mode = 'dragging';
+      state.originRect = state.sourceCard.getBoundingClientRect();
+      state.sourceCard.classList.add('dragging');
+      createGhost();
+      e.preventDefault(); // prevent text selection
+    }
+
+    if (state.mode === 'dragging') {
+      updateGhostPosition(e.clientX, e.clientY);
+      updateColumnHighlight(e.clientX, e.clientY);
+    }
+  }
+
+  function onMouseUp(e) {
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+
+    if (state.mode === 'dragging') {
+      finishDrag(e.clientX, e.clientY);
+    } else if (state.mode === 'arming') {
+      // Never passed threshold — just release
+      reset();
+    }
+  }
+
+  // ── Touch ──────────────────────────────────────────────────────────
+  function onTouchStart(e) {
+    const card = e.target.closest('.card');
+    if (!card) return;
+
+    state.mode = 'arming';
+    state.sourceCard = card;
+    state.sourceKey = card.dataset.key;
+    state.startPos = {x: e.touches[0].clientX, y: e.touches[0].clientY};
+    state.dragStarted = false;
+    state.touchMoved = false;
+
+    // Start hold timer
+    state.holdTimer = setTimeout(() => {
+      if (state.mode === 'arming' && !state.touchMoved) {
+        // Hold fired — enter drag mode
+        state.mode = 'dragging';
+        state.dragStarted = true;
+        state.originRect = state.sourceCard.getBoundingClientRect();
+        state.sourceCard.classList.add('dragging');
+        createGhost();
+        navigator.vibrate?.(10); // haptic pulse
+        updateGhostPosition(
+          e.touches[0].clientX, e.touches[0].clientY
+        );
+      }
+    }, TOUCH_HOLD_MS);
+  }
+
+  function onTouchMove(e) {
+    if (state.mode === 'arming' && !state.touchMoved) {
+      // Check if finger moved enough to cancel the hold timer
+      const dx = e.touches[0].clientX - state.startPos.x;
+      const dy = e.touches[0].clientY - state.startPos.y;
+      if (Math.sqrt(dx*dx + dy*dy) > TOUCH_MOVE_CANCEL) {
+        state.touchMoved = true;
+        if (state.holdTimer) { clearTimeout(state.holdTimer); state.holdTimer = null; }
+        state.mode = 'idle';
+        // Let native pan-x continue (touch-action: pan-x on .card)
+      }
+      return;
+    }
+
+    if (state.mode === 'dragging') {
+      e.preventDefault(); // prevent scrolling while dragging
+      updateGhostPosition(e.touches[0].clientX, e.touches[0].clientY);
+      updateColumnHighlight(e.touches[0].clientX, e.touches[0].clientY);
+    }
+  }
+
+  function onTouchEnd(e) {
+    if (state.mode === 'arming') {
+      // Release without dragging — cancel timer, let tap proceed
+      reset();
+      return;
+    }
+
+    if (state.mode === 'dragging') {
+      const t = e.changedTouches[0];
+      finishDrag(t.clientX, t.clientY);
+    }
+  }
+
+  // ── Shared ─────────────────────────────────────────────────────────
+  function createGhost() {
+    const clone = state.sourceCard.cloneNode(true);
+    clone.className = 'card-ghost';
+    clone.style.width = state.originRect.width + 'px';
+    clone.style.left = '0';
+    clone.style.top = '0';
+    clone.style.height = state.originRect.height + 'px';
+    // Position at origin initially (invisible, will be moved immediately)
+    updateGhostPosition(state.startPos.x, state.startPos.y);
+    document.body.appendChild(clone);
+    state.ghost = clone;
+  }
+
+  function finishDrop(targetStatus) {
+    // Animate ghost to new position
+    const col = document.querySelector(`.column[data-status="${targetStatus}"]`);
+    const colList = col?.querySelector('.card-list');
+    if (!colList) { snapBack(); return; }
+
+    // Compute target rect: approximate slot in target column
+    const targetRect = computeTargetRect(colList);
+    animateGhostToRect(targetRect, () => {
+      // API call
+      updateTaskOnServer(state.sourceKey, {status: targetStatus}).then(() => {
+        reset();
+        loadTasks().then(render);
+      });
+    });
+  }
+
+  function snapBack() {
+    animateGhostToRect(state.originRect, () => {
+      reset();
+    });
+  }
+
+  function computeTargetRect(colList) {
+    // Put ghost at roughly the top of the card-list area
+    const listRect = colList.getBoundingClientRect();
+    const parent = colList.parentElement;
+    const parentRect = parent.getBoundingClientRect();
+    return {
+      left: listRect.left + 4,
+      top: listRect.top + 4,
+      width: state.originRect.width,
+      height: state.originRect.height,
+    };
+  }
+
+  function animateGhostToRect(targetRect, onDone) {
+    if (!state.ghost) { reset(); return; }
+    const ghost = state.ghost;
+    // Use Web Animations API for the settle
+    const dx = targetRect.left - (parseFloat(ghost.style.transform.match(/translate3d\(([-\d.]+)px/)?.[1]) || 0);
+    const dy = targetRect.top - (parseFloat(ghost.style.transform.match(/translate3d\(,[\s]*([-\d.]+)px/)?.[1] || ghost.style.transform.match(/translate3d\([^,]+,\s*([-\d.]+)px/)?.[1]) || 0);
+
+    // Simpler approach: use FLIP with requestAnimationFrame
+    const startTransform = ghost.style.transform;
+    const endTransform = `translate3d(${targetRect.left}px, ${targetRect.top}px, 0) scale(1)`;
+
+    ghost.style.transition = `transform ${SETTLE_DURATION}ms ease-out, opacity ${SETTLE_DURATION}ms ease-out`;
+    ghost.style.transform = endTransform;
+
+    setTimeout(() => {
+      ghost.remove();
+      ghost.style.transition = '';
+      onDone();
+    }, SETTLE_DURATION + 20);
+  }
+
+  function finishDrag(px, py) {
+    const col = findColumnUnderPoint(px, py);
+    if (col) {
+      const targetStatus = col.dataset.status;
+      if (targetStatus) {
+        finishDrop(targetStatus);
+        return;
+      }
+    }
+    // No valid column — snap back
+    snapBack();
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────
+  function init() {
+    // Mouse delegation on board
+    document.getElementById('boardView').addEventListener('mousedown', onMouseDown, {passive: false});
+
+    // Touch delegation
+    document.getElementById('boardView').addEventListener('touchstart', onTouchStart, {passive: false});
+    document.addEventListener('touchmove', onTouchMove, {passive: false});
+    document.addEventListener('touchend', onTouchEnd, {passive: false});
+
+    // Suppress click on card after a drag
+    document.getElementById('boardView').addEventListener('click', (e) => {
+      if (state.clickSuppressed) {
+        e.preventDefault();
+        e.stopPropagation();
+        state.clickSuppressed = false;
+        state.mode = 'idle';
+      }
+    }, true); // capture phase
+
+    // Reset on escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && state.mode === 'dragging') {
+        snapBack();
+      }
+    });
+
+    // Reset on scroll (board or window) — dragging loses context
+    const board = document.getElementById('boardView');
+    board.addEventListener('scroll', () => { if (state.mode === 'dragging') snapBack(); });
+  }
+
+  return { init };
+})();
+
+// Initialize drag & drop after DOM ready
+document.addEventListener('DOMContentLoaded', () => {
+  // Defer until the main init() has set up the board
+  setTimeout(() => CardDragDrop.init(), 50);
+});
 
 // Utilities
 function escapeHtml(s) {
