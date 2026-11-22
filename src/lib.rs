@@ -11,6 +11,6 @@ pub mod server;
 pub mod tui;
 
 pub use db::{
-    Attachment, AttachmentTarget, Link, LinkTarget, LogEntry, Lun, Pr, PrSpec, Project,
+    Attachment, AttachmentTarget, Link, LinkTarget, LogEntry, Lun, NoteDiff, Pr, PrSpec, Project,
     ProjectSpec, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec,
 };
