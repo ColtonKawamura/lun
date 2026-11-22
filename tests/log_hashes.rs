@@ -169,6 +169,7 @@ fn last_message(lun: &Lun, task_id: i64) -> String {
 fn default_messages_say_what_changed() {
     let (lun, root) = board("messages");
     let task = new_task(&lun);
+    let key = &task.task_key;
 
     lun.update_task(
         task.id,
@@ -178,7 +179,7 @@ fn default_messages_say_what_changed() {
         },
     )
     .unwrap();
-    assert_eq!(last_message(&lun, task.id), "edit T-001; update note");
+    assert_eq!(last_message(&lun, task.id), format!("edit {key}; update note"));
 
     lun.update_task(
         task.id,
@@ -188,7 +189,7 @@ fn default_messages_say_what_changed() {
         },
     )
     .unwrap();
-    assert_eq!(last_message(&lun, task.id), "edit T-001; update status to Review");
+    assert_eq!(last_message(&lun, task.id), format!("edit {key}; update status to Review"));
 
     lun.update_task(
         task.id,
@@ -202,30 +203,30 @@ fn default_messages_say_what_changed() {
     .unwrap();
     assert_eq!(
         last_message(&lun, task.id),
-        "edit T-001; update status to Waiting-On; update priority to high; update note"
+        format!("edit {key}; update status to Waiting-On; update priority to high; update note")
     );
 
     // set_notes (TUI / --notes path) words it the same way.
     lun.set_notes(task.id, "third", None, None).unwrap();
-    assert_eq!(last_message(&lun, task.id), "edit T-001; update note");
+    assert_eq!(last_message(&lun, task.id), format!("edit {key}; update note"));
 
     // An explicit message always wins.
     lun.set_notes(task.id, "fourth", Some("did: rewrote it"), None).unwrap();
     assert_eq!(last_message(&lun, task.id), "did: rewrote it");
 
     // The CLI prompt default is built from the same logic, before the edit.
-    let current = lun.task_by_key("T-001").unwrap();
+    let current = lun.task_by_key(key).unwrap();
     let spec = TaskUpdateSpec {
         status: Some("closed".into()),
         ..Default::default()
     };
     assert_eq!(
         Lun::default_edit_message(&current, &spec),
-        "edit T-001; update status to Closed"
+        format!("edit {key}; update status to Closed")
     );
     assert_eq!(
         Lun::default_edit_message(&current, &TaskUpdateSpec::default()),
-        "edit T-001"
+        format!("edit {key}")
     );
     let _ = std::fs::remove_dir_all(&root);
 }

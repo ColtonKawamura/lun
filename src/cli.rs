@@ -529,12 +529,12 @@ pub fn normalize_invocation_args(args: Vec<String>) -> Vec<String> {
 
 fn is_project_key(s: &str) -> bool {
     let rest = s.strip_prefix("P-").unwrap_or("");
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
 }
 
 fn is_task_key(s: &str) -> bool {
     let rest = s.strip_prefix("T-").unwrap_or("");
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
 }
 
 /// Resolve a project query (for `lun status <...>`): exact key first, then
@@ -2772,7 +2772,7 @@ pub fn create_task(
 
 fn is_pr_key(s: &str) -> bool {
     let rest = s.strip_prefix("PR-").unwrap_or("");
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
 }
 
 /// `lun pr new T-008 --from feature/branch --to main`.

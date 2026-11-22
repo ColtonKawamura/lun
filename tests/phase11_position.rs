@@ -140,7 +140,7 @@ fn reorder_at_column_edge_is_noop() {
 fn reorder_respects_column_boundary() {
     let root = temp_root("pos-boundary");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "planning");
+    let _a = make(&lun, "alpha", "planning");
     let b = make(&lun, "beta", "review");
 
     // beta is the only card in `review`: moving down must not pull a card

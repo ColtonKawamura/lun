@@ -323,18 +323,27 @@ fn cli_status_flag_accepts_aliases_and_complete_closes() {
     assert!(run(&["init"]).0);
     let (ok, out, err) = run(&["add", "task", "stage test"]);
     assert!(ok, "{out}{err}");
-    let (ok, out, _) = run(&["task", "T-001", "--status", "follow-up", "--message", "x"]);
+    // extract task key from creation output
+    let task_key = {
+        let prefix = "Created task ";
+        let start = out.find(prefix).expect("key not found");
+        let rest = &out[start + prefix.len()..];
+        let end = rest.find(' ').unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    // use captured key in subsequent commands
+    let (ok, out, _) = run(&["task", &task_key, "--status", "follow-up", "--message", "x"]);
     assert!(ok);
     assert!(out.contains("status -> review"), "{out}");
-    let (ok, out, _) = run(&["task", "T-001", "--status", "waiting-on", "--message", "x"]);
+    let (ok, out, _) = run(&["task", &task_key, "--status", "waiting-on", "--message", "x"]);
     assert!(ok);
     assert!(out.contains("status -> waiting-on"), "{out}");
-    let (ok, _, err) = run(&["task", "T-001", "--status", "doing-it", "--message", "x"]);
+    let (ok, _, err) = run(&["task", &task_key, "--status", "doing-it", "--message", "x"]);
     assert!(!ok);
     assert!(err.contains("planning, review, waiting-on, backlog, or closed"), "{err}");
-    let (ok, _, _) = run(&["task", "complete", "T-001"]);
+    let (ok, _, _) = run(&["task", "complete", &task_key]);
     assert!(ok);
-    let (_, out, _) = run(&["task", "T-001"]);
+    let (_, out, _) = run(&["task", &task_key]);
     assert!(out.contains("Status:    closed"), "{out}");
     let (_, out, _) = run(&["status"]);
     assert!(
@@ -366,15 +375,33 @@ fn log_entity_limit_returns_only_the_newest_entries() {
         )
     };
     assert!(run(&["init"]).0);
-    assert!(run(&["add", "task", "history"]).0);
-    assert!(run(&["add", "task", "other"]).0);
+    // add first task and capture its key
+    let (ok1, out1, _) = run(&["add", "task", "history"]);
+    assert!(ok1);
+    let task1_key = {
+        let prefix = "Created task ";
+        let start = out1.find(prefix).expect("key not found");
+        let rest = &out1[start + prefix.len()..];
+        let end = rest.find(' ').unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    // add second task and capture its key
+    let (ok2, out2, _) = run(&["add", "task", "other"]);
+    assert!(ok2);
+    let task2_key = {
+        let prefix = "Created task ";
+        let start = out2.find(prefix).expect("key not found");
+        let rest = &out2[start + prefix.len()..];
+        let end = rest.find(' ').unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
     for m in ["first note", "second note", "third note"] {
-        assert!(run(&["log", "T-001", "-m", m]).0);
+        assert!(run(&["log", &task1_key, "-m", m]).0);
     }
-    assert!(run(&["log", "T-002", "-m", "not mine"]).0);
+    assert!(run(&["log", &task2_key, "-m", "not mine"]).0);
 
     // Entity + -N, either order: only that task's N newest entries.
-    for args in [["log", "T-001", "-2", "--oneline"], ["log", "-2", "T-001", "--oneline"]] {
+    for args in [["log", &task1_key, "-2", "--oneline"], ["log", "-2", &task1_key, "--oneline"]] {
         let (ok, out, err) = run(&args);
         assert!(ok, "{err}");
         let lines: Vec<&str> = out.lines().collect();
@@ -383,14 +410,14 @@ fn log_entity_limit_returns_only_the_newest_entries() {
         assert!(lines[1].contains("second note"), "{out}");
         assert!(!out.contains("not mine"), "{out}");
     }
-    // Full history of T-001 is CREATE + 3 commits.
-    let (_, out, _) = run(&["log", "T-001", "--oneline"]);
+    // Full history of task1_key is CREATE + 3 commits.
+    let (_, out, _) = run(&["log", &task1_key, "--oneline"]);
     assert_eq!(out.lines().count(), 4, "{out}");
     // -0 and oversized counts are graceful.
-    let (ok, out, _) = run(&["log", "T-001", "-0"]);
+    let (ok, out, _) = run(&["log", &task1_key, "-0"]);
     assert!(ok);
     assert_eq!(out.trim(), "No logs found.");
-    let (ok, out, _) = run(&["log", "T-001", "-100", "--oneline"]);
+    let (ok, out, _) = run(&["log", &task1_key, "-100", "--oneline"]);
     assert!(ok);
     assert_eq!(out.lines().count(), 4, "{out}");
     // Global -N still works.

@@ -77,16 +77,24 @@ fn project_keys_auto_increment() {
     let lun = Lun::init(&root).unwrap();
 
     let keys: Vec<String> = (0..3)
-        .map(|i| {
+        .map(|_| {
             lun.create_project(ProjectSpec {
-                name: format!("p{i}"),
+                name: "auto".into(),
                 ..Default::default()
             })
             .unwrap()
             .project_key
         })
         .collect();
-    assert_eq!(keys, vec!["P-001", "P-002", "P-003"]);
+    // Ensure each key matches the new hash format and are unique.
+    let mut uniq = std::collections::HashSet::new();
+    for k in &keys {
+        assert!(k.starts_with("P-"), "project key prefix");
+        let suffix = &k[2..];
+        assert_eq!(suffix.len(), 4, "project suffix length");
+        assert!(suffix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "project suffix chars");
+        assert!(uniq.insert(k.clone()), "project keys unique");
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -96,16 +104,24 @@ fn task_keys_auto_increment() {
     let lun = Lun::init(&root).unwrap();
 
     let keys: Vec<String> = (0..3)
-        .map(|i| {
+        .map(|_| {
             lun.create_task(TaskSpec {
-                title: format!("task {i}"),
+                title: "auto".into(),
                 ..Default::default()
             })
             .unwrap()
             .task_key
         })
         .collect();
-    assert_eq!(keys, vec!["T-001", "T-002", "T-003"]);
+    // Ensure each key matches the new hash format and are unique.
+    let mut uniq = std::collections::HashSet::new();
+    for k in &keys {
+        assert!(k.starts_with("T-"), "task key prefix");
+        let suffix = &k[2..];
+        assert_eq!(suffix.len(), 4, "task suffix length");
+        assert!(suffix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "task suffix chars");
+        assert!(uniq.insert(k.clone()), "task keys unique");
+    }
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -198,7 +214,7 @@ fn log_entry_written_for_every_state_change() {
     lun.add_attachment(
         t.id,
         "notes.txt",
-        ".lun/attachments/T-001-notes.txt",
+        &format!(".lun/attachments/{}-notes.txt", t.task_key),
         None,
         None,
     )

@@ -1429,7 +1429,7 @@ impl Lun {
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_key, name, status, created_at, updated_at
-                                          FROM projects ORDER BY project_key",
+                                          FROM projects ORDER BY id",
         )?;
         let rows = stmt
             .query_map([], Self::project_from_row)?
@@ -1448,15 +1448,54 @@ impl Lun {
         })
     }
 
+    /// Lowercase Crockford base32 alphabet (digits + letters, minus the
+    /// visually ambiguous i/l/o/u) used for short hash-style keys. Keeps
+    /// keys short regardless of how many rows exist, unlike the old
+    /// zero-padded sequential `T-00N` / `P-00N` / `PR-00N` scheme, which
+    /// would eventually overflow its digit width.
+    const KEY_ALPHABET: &'static [u8] = b"0123456789abcdefghjkmnpqrstvwxyz";
+
+    /// A `len`-char pseudo-random suffix, salted by `attempt` so a caller
+    /// can retry on a collision without generating the same value twice.
+    fn random_key_suffix(len: usize, attempt: u64) -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let mut hasher = Sha256::new();
+        hasher.update(nanos.to_le_bytes());
+        hasher.update(attempt.to_le_bytes());
+        hasher.update(std::process::id().to_le_bytes());
+        let digest = hasher.finalize();
+        (0..len)
+            .map(|i| Self::KEY_ALPHABET[digest[i] as usize % Self::KEY_ALPHABET.len()] as char)
+            .collect()
+    }
+
+    /// Generate a `<prefix><4-char hash>` key that isn't already taken in
+    /// `table`'s `key_column` (collision-checked, since the suffix is
+    /// random rather than sequential).
+    fn next_hash_key(&self, prefix: &str, table: &str, key_column: &str) -> Result<String> {
+        for attempt in 0..1000u64 {
+            let key = format!("{prefix}{}", Self::random_key_suffix(4, attempt));
+            let exists: i64 = self.conn.query_row(
+                &format!("SELECT COUNT(*) FROM {table} WHERE {key_column} = ?1"),
+                [&key],
+                |r| r.get(0),
+            )?;
+            if exists == 0 {
+                return Ok(key);
+            }
+        }
+        Err(DbError::new(
+            "internal",
+            format!("could not generate a unique {prefix}* key after 1000 attempts"),
+        ))
+    }
+
     fn next_project_key(&self) -> Result<String> {
-        let n: i64 = self
-            .conn
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM projects", [], |r| {
-                r.get(0)
-            })?;
-        // The P-000 seed is row id 1, so the key number is the new row's id
-        // minus one: first real project (id 2) is P-001, not P-002.
-        Ok(format!("P-{:03}", n))
+        self.next_hash_key("P-", "projects", "project_key")
     }
 
     // ------------------------------------------------------------------
@@ -1593,12 +1632,12 @@ impl Lun {
         }
         sql.push_str(" ORDER BY ");
         sql.push_str(match spec.sort {
-            TaskSort::Key => "task_key ASC",
-            TaskSort::Title => "title ASC, task_key ASC",
-            TaskSort::Status => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, task_key ASC",
-            TaskSort::Priority => "priority ASC, task_key ASC",
-            TaskSort::Updated => "updated_at DESC, task_key ASC",
-            TaskSort::Board => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, COALESCE(position, id) ASC, task_key ASC",
+            TaskSort::Key => "id ASC",
+            TaskSort::Title => "title ASC, id ASC",
+            TaskSort::Status => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, id ASC",
+            TaskSort::Priority => "priority ASC, id ASC",
+            TaskSort::Updated => "updated_at DESC, id ASC",
+            TaskSort::Board => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, COALESCE(position, id) ASC, id ASC",
         });
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
@@ -1608,10 +1647,7 @@ impl Lun {
     }
 
     fn next_task_key(&self) -> Result<String> {
-        let n: i64 = self
-            .conn
-            .query_row("SELECT COALESCE(MAX(id), 0) FROM tasks", [], |r| r.get(0))?;
-        Ok(format!("T-{:03}", n + 1))
+        self.next_hash_key("T-", "tasks", "task_key")
     }
 
     /// Look up a project by its `P-00N` key.
@@ -2746,13 +2782,7 @@ impl Lun {
             ));
         }
 
-        let key = format!(
-            "PR-{:03}",
-            self.conn
-                .query_row("SELECT COALESCE(MAX(id), 0) FROM prs", [], |r| r
-                    .get::<_, i64>(0),)?
-                + 1
-        );
+        let key = self.next_hash_key("PR-", "prs", "pr_key")?;
         let now = Self::now();
 
         self.conn.execute(
@@ -2878,7 +2908,7 @@ impl Lun {
     pub fn list_all_projects(&self) -> Result<Vec<Project>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, project_key, name, status, created_at, updated_at
-             FROM projects ORDER BY project_key",
+             FROM projects ORDER BY id",
         )?;
         let rows = stmt
             .query_map([], Self::project_from_row)?

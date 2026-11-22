@@ -157,12 +157,12 @@ pub enum LogSubject {
 
 fn is_project_key(s: &str) -> bool {
     let rest = s.strip_prefix("P-").unwrap_or("");
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
 }
 
 fn is_task_key(s: &str) -> bool {
     let rest = s.strip_prefix("T-").unwrap_or("");
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
 }
 
 /// Resolve a `status <query>` / `log <query>` command-line target against

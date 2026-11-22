@@ -98,10 +98,11 @@ fn add_proj_creates_project() {
         None,
     )
     .unwrap();
-    assert!(out.contains("Created project alpha [P-001]"), "{out}");
+    // placeholder removed, will assert after retrieving project
     let projects = app.lun.list_projects().unwrap();
     let alpha = projects.iter().find(|p| p.name == "alpha").unwrap();
     assert_eq!(alpha.status, "inactive");
+    assert!(out.contains(&format!("Created project alpha [{}]", alpha.project_key)), "{out}");
     let _ = std::fs::remove_dir_all(&root);
 }
 

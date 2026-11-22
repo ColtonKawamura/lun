@@ -16,7 +16,7 @@ use lun::tui::app::{App, View};
 use lun::tui::data;
 use lun::tui::render;
 use lun::tui::term;
-use lun::{Lun, ProjectSpec, TaskSpec};
+use lun::{Lun, Project, ProjectSpec, Task, TaskSpec};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
@@ -73,7 +73,7 @@ fn temp_root(name: &str) -> std::path::PathBuf {
 }
 
 /// Fixture: project "paper-stack" with one task in each status.
-fn fixture() -> (std::path::PathBuf, Lun) {
+fn fixture() -> (std::path::PathBuf, Lun, Project, Vec<Task>) {
     let root = temp_root("fx");
     let lun = Lun::init(&root).unwrap();
     let p1 = lun
@@ -82,13 +82,14 @@ fn fixture() -> (std::path::PathBuf, Lun) {
             ..Default::default()
         })
         .unwrap();
+    let mut tasks = Vec::new();
     for (title, status, priority) in [
         ("set up sim", "planning", "med"),
         ("tune damping", "review", "high"),
         ("write methods", "waiting-on", "low"),
         ("implement restitution", "closed", "med"),
     ] {
-        lun.create_task(TaskSpec {
+        let t = lun.create_task(TaskSpec {
             title: title.into(),
             project: Some(p1.id),
             status: Some(status.into()),
@@ -101,8 +102,9 @@ fn fixture() -> (std::path::PathBuf, Lun) {
             user: None,
         })
         .unwrap();
+        tasks.push(t);
     }
-    (root, lun)
+    (root, lun, p1, tasks)
 }
 
 fn app_for(root: &std::path::Path) -> App {
@@ -117,7 +119,7 @@ fn app_for(root: &std::path::Path) -> App {
 
 #[test]
 fn data_load_seeds_unassigned_and_current_project() {
-    let (_root, lun) = fixture();
+    let (_root, lun, p1, _tasks) = fixture();
     let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), None).unwrap();
     // P-000 Unassigned seed + paper-stack
     assert_eq!(d.projects.len(), 2);
@@ -125,14 +127,14 @@ fn data_load_seeds_unassigned_and_current_project() {
     // current project defaults to first project
     assert_eq!(d.current_project, 0);
     // loading with an explicit key keeps that project current
-    let d2 = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
+    let d2 = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some(&p1.project_key)).unwrap();
     assert_eq!(d2.projects[d2.current_project].name, "paper-stack");
 }
 
 #[test]
 fn data_board_columns_partition_by_status() {
-    let (root, lun) = fixture();
-    let d = data::load(&lun, "0.1.0", "p", "b".into(), Some("P-001")).unwrap();
+    let (root, lun, p1, _tasks) = fixture();
+    let d = data::load(&lun, "0.1.0", "p", "b".into(), Some(&p1.project_key)).unwrap();
     let cols = d.board_columns(2); // paper-stack is row id 2 (P-000=1)
     let titles: Vec<Vec<&str>> = cols
         .iter()
@@ -149,7 +151,7 @@ fn data_board_columns_partition_by_status() {
 
 #[test]
 fn data_summary_counts_exact() {
-    let (root, lun) = fixture();
+    let (root, lun, _p1, _tasks) = fixture();
     let d = data::load(&lun, "0.1.0", "p", "b".into(), None).unwrap();
     assert_eq!(
         d.summary(),
@@ -165,7 +167,7 @@ fn data_summary_counts_exact() {
 
 #[test]
 fn palette_opens_filters_and_executes() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
 
     // Fresh app: palette closed, no quit.
@@ -216,7 +218,7 @@ fn palette_opens_filters_and_executes() {
 
 #[test]
 fn palette_esc_closes_without_running() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     term::handle_key(&mut app, &key(KeyCode::Char('q'))); // filters to /quit
@@ -232,7 +234,7 @@ fn palette_esc_closes_without_running() {
 
 #[test]
 fn palette_esc_enables_j_k_suggestion_navigation() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     for c in "status ".chars() {
@@ -255,7 +257,7 @@ fn palette_esc_enables_j_k_suggestion_navigation() {
 
 #[test]
 fn palette_up_down_browse_command_history_and_restore_draft() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
 
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
@@ -286,7 +288,7 @@ fn palette_up_down_browse_command_history_and_restore_draft() {
 
 #[test]
 fn palette_accepts_shifted_printable_input() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     term::handle_key(
@@ -302,7 +304,7 @@ fn palette_accepts_shifted_printable_input() {
 
 #[test]
 fn palette_no_match_shows_error_message() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     for c in "xyz".chars() {
@@ -323,7 +325,7 @@ fn palette_no_match_shows_error_message() {
 
 #[test]
 fn q_quits_outside_palette() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     assert!(!app.quit);
     term::handle_key(&mut app, &key(KeyCode::Char('q')));
@@ -332,7 +334,7 @@ fn q_quits_outside_palette() {
 
 #[test]
 fn project_view_j_k_enter_navigation() {
-    let (root, _lun) = fixture();
+    let (root, _lun, p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Project;
     // fixture has P-000 (idx 0) and paper-stack (idx 1)
@@ -347,7 +349,7 @@ fn project_view_j_k_enter_navigation() {
     assert_eq!(app.data.current_project, 1);
     let (msg, is_err) = app.message.clone().unwrap();
     assert!(!is_err);
-    assert!(msg.contains("paper-stack") && msg.contains("P-001"));
+    assert!(msg.contains("paper-stack") && msg.contains(&p1.project_key));
 
     // j/k in other views do nothing (Phase 5 scope).
     app.view = View::Status;
@@ -362,7 +364,7 @@ fn project_view_j_k_enter_navigation() {
 
 #[test]
 fn initial_screen_renders_banner_context_and_board() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, tasks) = fixture();
     let mut app = app_for(&root);
     // Make paper-stack current so the board preview has tasks.
     app.data.current_project = 1;
@@ -392,7 +394,7 @@ fn initial_screen_renders_banner_context_and_board() {
 
     // Board preview sections + task keys/titles.
     assert!(s.contains("BOARD (PAPER-STACK)"));
-    assert!(s.contains("T-001"));
+    assert!(s.contains(&tasks[0].task_key));
     assert!(s.contains("set up sim"));
     assert!(s.contains("tune damping"));
 
@@ -410,7 +412,7 @@ fn initial_screen_renders_banner_context_and_board() {
 
 #[test]
 fn palette_renders_filtered_rows_with_inverted_selection() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     term::handle_key(&mut app, &key(KeyCode::Char('/')));
     for c in "st".chars() {
@@ -436,7 +438,7 @@ fn palette_renders_filtered_rows_with_inverted_selection() {
 
 #[test]
 fn palette_query_renders_on_bottom_prompt_line() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.palette_open = true;
     app.palette_query = "this is me typing".to_string();
@@ -448,7 +450,7 @@ fn palette_query_renders_on_bottom_prompt_line() {
 
 #[test]
 fn palette_commands_render_above_separator() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.palette_open = true;
     app.palette_query = "st".to_string();
@@ -466,7 +468,7 @@ fn palette_commands_render_above_separator() {
 
 #[test]
 fn palette_does_not_clobber_content_top() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Initial;
     app.palette_open = true;
@@ -478,7 +480,7 @@ fn palette_does_not_clobber_content_top() {
 
 #[test]
 fn palette_selection_highlight_still_applies() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.palette_open = true;
     app.palette_query = "st".to_string();
@@ -492,7 +494,7 @@ fn palette_selection_highlight_still_applies() {
 
 #[test]
 fn long_command_list_is_clamped_to_available_rows() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.palette_open = true;
     app.palette_query.clear();
@@ -506,7 +508,7 @@ fn long_command_list_is_clamped_to_available_rows() {
 
 #[test]
 fn statusline_query_renders_on_bottom_prompt_line() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.palette_open = true;
     app.palette_query = "status project".to_string();
@@ -518,7 +520,7 @@ fn statusline_query_renders_on_bottom_prompt_line() {
 
 #[test]
 fn status_view_lists_projects_and_all_tasks() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Status;
     let s = screen(&app, 80, 30);
@@ -527,14 +529,14 @@ fn status_view_lists_projects_and_all_tasks() {
     assert!(s.contains("P-000"));
     assert!(s.contains("paper-stack"));
     assert!(s.contains("ALL TASKS"));
-    assert!(s.contains("T-001"));
-    assert!(s.contains("T-004"));
+    assert!(s.contains(&tasks[0].task_key));
+    assert!(s.contains(&tasks[3].task_key));
     assert!(s.contains("2 projects \u{b7} 4 tasks"));
 }
 
 #[test]
 fn board_view_renders_five_columns() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, tasks) = fixture();
     let mut app = app_for(&root);
     app.data.current_project = 1;
     app.view = View::Board;
@@ -543,31 +545,30 @@ fn board_view_renders_five_columns() {
     for col in ["Planning", "Review", "Waiting-On", "Backlog", "Closed"] {
         assert!(s.contains(col), "missing column {col}");
     }
-    assert!(s.contains("T-001"));
-    assert!(s.contains("T-002"));
-    assert!(s.contains("T-003"));
-    assert!(s.contains("T-004"));
+    assert!(s.contains(&tasks[0].task_key));
+    assert!(s.contains(&tasks[1].task_key));
+    assert!(s.contains(&tasks[2].task_key));
+    assert!(s.contains(&tasks[3].task_key));
 }
 
 #[test]
 fn project_view_marks_selected_and_current() {
-    let (root, _lun) = fixture();
+    let (root, _lun, p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Project;
     app.data.current_project = 1;
     let s = screen(&app, 80, 24);
     assert!(s.contains("PROJECT"));
     assert!(s.contains("P-000"));
-    assert!(s.contains("P-001"));
+    assert!(s.contains(&p1.project_key));
     // Selection marker ">" on the currently selected row (idx 0).
     assert!(s.lines().any(|l| l.starts_with("> P-000")));
     // Current-project marker "*" on idx 1.
-    assert!(s.lines().any(|l| l.starts_with("* P-001")));
-}
+    assert!(s.lines().any(|l| l.starts_with(&format!("* {}", p1.project_key))));}
 
 #[test]
 fn help_view_lists_keybindings() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Help;
     let s = screen(&app, 80, 24);
@@ -578,7 +579,7 @@ fn help_view_lists_keybindings() {
 
 #[test]
 fn placeholder_view_says_coming_soon() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Placeholder;
     let s = screen(&app, 80, 24);
@@ -588,7 +589,7 @@ fn placeholder_view_says_coming_soon() {
 
 #[test]
 fn message_line_overlays_above_hint_bar() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.message = Some(("boom".to_string(), true));
     let s = screen(&app, 80, 24);
@@ -604,17 +605,16 @@ fn message_line_overlays_above_hint_bar() {
 
 #[test]
 fn output_view_styles_project_detail_sections_and_summary() {
-    let (root, _lun) = fixture();
+    let (root, _lun, p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Output;
     app.output = Some(lun::tui::app::CommandOutput {
-        command: "status P-001".into(),
+        command: format!("status {}", p1.project_key).into(),
         text: concat!(
             "Project: paper-stack\n",
             "====================\n\n",
             "Overview\n",
             "--------\n\n",
-            "ID:      P-001\n",
             "Status:  active\n\n",
             "Tasks by Status:\n",
             "- todo:         1\n",
@@ -622,10 +622,8 @@ fn output_view_styles_project_detail_sections_and_summary() {
             "Tasks\n",
             "-----\n\n",
             "ID   Project       Title   Status   Priority   Assignee   Branch\n",
-            "T-001 paper-stack  demo    todo     low        me\n",
             "Summary: 1 project · 1 task (1 planning, 0 review, 0 waiting-on, 0 backlog, 0 closed)\n"
-        )
-        .into(),
+        ).into(),
         is_error: false,
     });
     let s = screen(&app, 90, 30);
@@ -644,11 +642,11 @@ fn output_view_styles_project_detail_sections_and_summary() {
 
 #[test]
 fn output_view_project_detail_handles_narrow_widths() {
-    let (root, _lun) = fixture();
+    let (root, _lun, p1, _tasks) = fixture();
     let mut app = app_for(&root);
     app.view = View::Output;
     app.output = Some(lun::tui::app::CommandOutput {
-        command: "status P-001".into(),
+        command: format!("status {}", p1.project_key).into(),
         text: "Project: paper-stack\n====================\n\nOverview\n--------\n\nSummary: 1 project · 0 tasks (0 planning, 0 review, 0 waiting-on, 0 backlog, 0 closed)\n".into(),
         is_error: false,
     });
@@ -658,7 +656,7 @@ fn output_view_project_detail_handles_narrow_widths() {
 // Rendering must never panic on tiny screens (saturating clamps everywhere).
 #[test]
 fn tiny_screen_does_not_panic() {
-    let (root, _lun) = fixture();
+    let (root, _lun, _p1, _tasks) = fixture();
     let mut app = app_for(&root);
     for view in [
         View::Initial,

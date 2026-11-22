@@ -94,7 +94,11 @@ fn create_pr_defaults_source_to_task_branch_and_target_to_main() {
     let (root, lun, t01, _) = fixture();
     let before = lun.logs_for("task", t01.id).unwrap().len();
     let pr = open_pr(&lun, t01.id);
-    assert_eq!(pr.pr_key, "PR-001");
+    // New keys should have "PR-" prefix and 4-char suffix.
+    assert!(pr.pr_key.starts_with("PR-"), "pr key prefix");
+    let suffix = &pr.pr_key[3..];
+    assert_eq!(suffix.len(), 4, "pr suffix length");
+    assert!(suffix.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "pr suffix chars");
     assert_eq!(pr.source_branch, "pr9-sim-branch");
     assert_eq!(pr.target_branch, "main");
     assert_eq!(pr.status, "open");
@@ -106,7 +110,7 @@ fn create_pr_defaults_source_to_task_branch_and_target_to_main() {
     assert_eq!(logs.len(), before + 1);
     let e = logs.first().unwrap();
     assert_eq!(e.action, "UPDATE");
-    assert!(e.details.contains("\"pr\": \"PR-001\""));
+    assert!(e.details.contains(&format!("\"pr\": \"{}\"", pr.pr_key)));
     assert!(e.details.contains("\"source\": \"pr9-sim-branch\""));
     assert!(e.details.contains("\"target\": \"main\""));
     let _ = std::fs::remove_dir_all(&root);
@@ -170,11 +174,20 @@ fn one_open_pr_per_task() {
 fn pr_keys_are_sequenced_max_based_across_merge() {
     let (root, lun, t01, _) = fixture();
     let p1 = open_pr(&lun, t01.id);
-    assert_eq!(p1.pr_key, "PR-001");
+    // Verify first key format.
+    assert!(p1.pr_key.starts_with("PR-"), "pr key prefix");
+    let suffix1 = &p1.pr_key[3..];
+    assert_eq!(suffix1.len(), 4, "pr suffix length");
+    assert!(suffix1.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "pr suffix chars");
     lun.merge_pr(p1.id, None, None).unwrap();
     // Re-opening after a merge is allowed and continues the sequence.
     let p2 = open_pr(&lun, t01.id);
-    assert_eq!(p2.pr_key, "PR-002");
+    // Second key should also be valid and different from first.
+    assert!(p2.pr_key.starts_with("PR-"), "pr key prefix");
+    let suffix2 = &p2.pr_key[3..];
+    assert_eq!(suffix2.len(), 4, "pr suffix length");
+    assert!(suffix2.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()), "pr suffix chars");
+    assert_ne!(p2.pr_key, p1.pr_key, "pr keys unique after merge");
     assert_eq!(lun.list_open_prs().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -198,8 +211,8 @@ fn merge_pr_marks_pr_merged_and_task_done_with_merge_log() {
     assert_eq!(logs.len(), before + 1);
     let e = logs.first().unwrap();
     assert_eq!(e.action, "MERGE");
-    assert_eq!(e.message, "merge PR-001 (pr9-sim-branch -> main)");
-    assert!(e.details.contains("\"pr\": \"PR-001\""));
+    assert_eq!(e.message, format!("merge {} (pr9-sim-branch -> main)", pr.pr_key));
+    assert!(e.details.contains(&format!("\"pr\": \"{}\"", pr.pr_key)));
     assert!(e.details.contains("closed"));
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -283,9 +296,9 @@ fn task_view_shows_prs_section() {
     assert!(out.contains("PRs:"));
     assert!(out.contains("no PRs"));
     // After opening: the PR row with its branches.
-    open_pr(&app.lun, t01.id);
+    let pr = open_pr(&app.lun, t01.id);
     let out = lun::cli::task_view(&app, &t01.task_key).unwrap();
-    assert!(out.contains("PR-001"));
+    assert!(out.contains(&pr.pr_key));
     assert!(out.contains("pr9-sim-branch -> main"));
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -324,23 +337,28 @@ fn run_dispatch_pr_subcommands() {
     // `pr ls` on the empty DB succeeds.
     let args: Vec<String> = vec!["pr".into(), "ls".into()];
     assert_eq!(lun::cli::run(&app, &args), success);
-    // `pr new T-001` (defaults: task's branch -> main).
-    let args: Vec<String> = vec!["pr".into(), "new".into(), "T-001".into()];
+    // `pr new <t01>` (defaults: task's branch -> main).
+    let args: Vec<String> = vec!["pr".into(), "new".into(), t01.task_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), success);
+    // Capture generated PR key.
+    let prs = app.lun.list_prs().unwrap();
+    for p in &prs { println!("PR in db: {}", p.pr_key); }
+    let pr_key = prs[0].pr_key.clone();
+    println!("Using pr_key: {}", pr_key);
     // Second open PR on the same task: usage error.
-    let args: Vec<String> = vec!["pr".into(), "new".into(), "T-001".into()];
+    let args: Vec<String> = vec!["pr".into(), "new".into(), t01.task_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), usage);
     // `pr show` by key.
-    let args: Vec<String> = vec!["pr".into(), "show".into(), "PR-001".into()];
+    let args: Vec<String> = vec!["pr".into(), "show".into(), pr_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), success);
     // `pr merge` (logical merge; git glue only reports).
-    let args: Vec<String> = vec!["pr".into(), "merge".into(), "PR-001".into()];
+    let args: Vec<String> = vec!["pr".into(), "merge".into(), pr_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), success);
     // Merging again: usage error.
-    let args: Vec<String> = vec!["pr".into(), "merge".into(), "PR-001".into()];
+    let args: Vec<String> = vec!["pr".into(), "merge".into(), pr_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), usage);
     // Unknown subcommand: usage error.
-    let args: Vec<String> = vec!["pr".into(), "close".into(), "PR-001".into()];
+    let args: Vec<String> = vec!["pr".into(), "close".into(), pr_key.clone()];
     assert_eq!(lun::cli::run(&app, &args), usage);
     // Missing PR key: not-found -> usage exit.
     let args: Vec<String> = vec!["pr".into(), "show".into(), "PR-999".into()];

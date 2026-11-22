@@ -33,7 +33,7 @@ fn temp_root(name: &str) -> PathBuf {
 }
 
 /// Fresh root with one task T-001 in project `p1` (plus the P-000 seed).
-fn fixture() -> (PathBuf, App) {
+fn fixture() -> (PathBuf, App, String, String) {
     let root = temp_root("fx");
     let lun = Lun::init(&root).unwrap();
     lun.create_project(ProjectSpec {
@@ -54,7 +54,14 @@ fn fixture() -> (PathBuf, App) {
             user: None,
     })
     .unwrap();
-    (root, App { lun })
+    let task = lun.list_tasks().unwrap().pop().unwrap();
+    let proj = lun.project_by_name("p1").unwrap();
+    (
+        root,
+        App { lun },
+        task.task_key.clone(),
+        proj.project_key.clone(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -63,14 +70,14 @@ fn fixture() -> (PathBuf, App) {
 
 #[test]
 fn attach_in_repo_file_copies_it() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let src = root.join("notes.txt");
     std::fs::write(&src, "hello attachment").unwrap();
 
     let mut input = prompt_reader(&[]);
-    let out = attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
+    let out = attach_file(&app, &root, &task_key, src.to_str().unwrap(), &mut input).unwrap();
 
-    assert!(out.starts_with("Attached notes.txt to T-001"), "{out}");
+    assert!(out.starts_with(&format!("Attached notes.txt to {}", task_key)), "{out}");
     let stored = root.join(".lun/attachments/notes.txt");
     assert!(stored.is_file(), "copy must land in .lun/attachments/");
     assert_eq!(
@@ -80,7 +87,7 @@ fn attach_in_repo_file_copies_it() {
 
     let rows = app
         .lun
-        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .attachments_for_task(app.lun.task_by_key(&task_key).unwrap().id)
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].filename, "notes.txt");
@@ -91,7 +98,7 @@ fn attach_in_repo_file_copies_it() {
 
 #[test]
 fn attach_collision_gets_suffix() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let src = root.join("dup.txt");
     std::fs::write(&src, "first").unwrap();
     let src2 = root.join("sub").join("dup.txt");
@@ -99,8 +106,8 @@ fn attach_collision_gets_suffix() {
     std::fs::write(&src2, "second").unwrap();
 
     let mut input = prompt_reader(&[]);
-    attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
-    let out = attach_file(&app, &root, "T-001", src2.to_str().unwrap(), &mut input).unwrap();
+    attach_file(&app, &root, &task_key, src.to_str().unwrap(), &mut input).unwrap();
+    let out = attach_file(&app, &root, &task_key, src2.to_str().unwrap(), &mut input).unwrap();
 
     assert!(
         out.contains("dup-2.txt"),
@@ -108,7 +115,7 @@ fn attach_collision_gets_suffix() {
     );
     let rows = app
         .lun
-        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .attachments_for_task(app.lun.task_by_key(&task_key).unwrap().id)
         .unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].filename, "dup.txt");
@@ -122,7 +129,7 @@ fn attach_collision_gets_suffix() {
 
 #[test]
 fn attach_out_of_repo_yes_links_by_path_without_copying() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     // A file outside the lun root (sibling dir).
     let outside = root.parent().unwrap().join(format!(
         "outside-{}-{}.txt",
@@ -132,7 +139,7 @@ fn attach_out_of_repo_yes_links_by_path_without_copying() {
     std::fs::write(&outside, "external data").unwrap();
 
     let mut input = prompt_reader(&["y"]);
-    let out = attach_file(&app, &root, "T-001", outside.to_str().unwrap(), &mut input).unwrap();
+    let out = attach_file(&app, &root, &task_key, outside.to_str().unwrap(), &mut input).unwrap();
 
     assert!(out.starts_with("Attached outside-"), "{out}");
     // No copy made into .lun/attachments/.
@@ -144,7 +151,7 @@ fn attach_out_of_repo_yes_links_by_path_without_copying() {
     );
     let rows = app
         .lun
-        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .attachments_for_task(app.lun.task_by_key(&task_key).unwrap().id)
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
@@ -160,7 +167,7 @@ fn attach_out_of_repo_yes_links_by_path_without_copying() {
 
 #[test]
 fn attach_out_of_repo_no_aborts() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let outside = root.parent().unwrap().join(format!(
         "outside-no-{}-{}.txt",
         std::process::id(),
@@ -169,14 +176,14 @@ fn attach_out_of_repo_no_aborts() {
     std::fs::write(&outside, "external data").unwrap();
 
     let mut input = prompt_reader(&["n"]);
-    let e = attach_file(&app, &root, "T-001", outside.to_str().unwrap(), &mut input).unwrap_err();
+    let e = attach_file(&app, &root, &task_key, outside.to_str().unwrap(), &mut input).unwrap_err();
     assert_eq!(e.kind(), "declined");
     assert!(e.to_string().contains("outside"), "{}", e.to_string());
 
     // Nothing recorded, nothing copied.
     let rows = app
         .lun
-        .attachments_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .attachments_for_task(app.lun.task_by_key(&task_key).unwrap().id)
         .unwrap();
     assert!(rows.is_empty());
     let _ = std::fs::remove_file(&outside);
@@ -185,16 +192,16 @@ fn attach_out_of_repo_no_aborts() {
 
 #[test]
 fn attach_missing_file_errors() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let mut input = prompt_reader(&[]);
-    let e = attach_file(&app, &root, "T-001", "/no/such/file-xyz.txt", &mut input).unwrap_err();
+    let e = attach_file(&app, &root, &task_key, "/no/such/file-xyz.txt", &mut input).unwrap_err();
     assert_eq!(e.kind(), "not-found");
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn attach_unknown_task_errors() {
-    let (root, app) = fixture();
+    let (root, app, _task_key, _project_key) = fixture();
     let src = root.join("a.txt");
     std::fs::write(&src, "x").unwrap();
     let mut input = prompt_reader(&[]);
@@ -209,20 +216,20 @@ fn attach_unknown_task_errors() {
 
 #[test]
 fn link_task_and_project() {
-    let (root, app) = fixture();
+    let (root, app, task_key, project_key) = fixture();
     let uri = "obsidian://open?vault=personal&file=testing%20bar-impact";
-    let out = add_link_command(&app, "task", "T-001", "obsidian", uri).unwrap();
-    assert_eq!(out, format!("Linked obsidian to task T-001: {uri}"));
+    let out = add_link_command(&app, "task", &task_key, "obsidian", uri).unwrap();
+    assert_eq!(out, format!("Linked obsidian to task {}: {uri}", task_key));
 
     let out = add_link_command(&app, "project", "p1", "docs", "https://example.com/p1").unwrap();
     assert!(
-        out.starts_with("Linked docs to project p1 [P-001]"),
+        out.starts_with(&format!("Linked docs to project p1 [{}]", project_key)),
         "{out}"
     );
 
     let task_links = app
         .lun
-        .links_for_task(app.lun.task_by_key("T-001").unwrap().id)
+        .links_for_task(app.lun.task_by_key(&task_key).unwrap().id)
         .unwrap();
     assert_eq!(task_links.len(), 1);
     assert_eq!(task_links[0].label, "obsidian");
@@ -230,7 +237,7 @@ fn link_task_and_project() {
 
     let proj_links = app
         .lun
-        .links_for_project(app.lun.project_by_key("P-001").unwrap().id)
+        .links_for_project(app.lun.project_by_key(&project_key).unwrap().id)
         .unwrap();
     assert_eq!(proj_links.len(), 1);
     assert_eq!(proj_links[0].uri, "https://example.com/p1");
@@ -239,12 +246,12 @@ fn link_task_and_project() {
 
 #[test]
 fn link_validation_and_errors() {
-    let (root, app) = fixture();
-    let e = add_link_command(&app, "task", "T-001", "", "http://x").unwrap_err();
+    let (root, app, task_key, _project_key) = fixture();
+    let e = add_link_command(&app, "task", &task_key, "", "http://x").unwrap_err();
     assert_eq!(e.kind(), "usage");
-    let e = add_link_command(&app, "task", "T-001", "l", "  ").unwrap_err();
+    let e = add_link_command(&app, "task", &task_key, "l", "  ").unwrap_err();
     assert_eq!(e.kind(), "usage");
-    let e = add_link_command(&app, "bogus", "T-001", "l", "http://x").unwrap_err();
+    let e = add_link_command(&app, "bogus", &task_key, "l", "http://x").unwrap_err();
     assert_eq!(e.kind(), "usage");
     let e = add_link_command(&app, "task", "no-such", "l", "http://x").unwrap_err();
     assert_eq!(e.kind(), "not-found");
@@ -257,12 +264,12 @@ fn link_validation_and_errors() {
 
 #[test]
 fn resolve_link_returns_uri_for_task_and_project() {
-    let (root, app) = fixture();
-    add_link_command(&app, "task", "T-001", "obsidian", "obsidian://open?vault=p").unwrap();
-    add_link_command(&app, "project", "P-001", "site", "https://example.org").unwrap();
+    let (root, app, task_key, project_key) = fixture();
+    add_link_command(&app, "task", &task_key, "obsidian", "obsidian://open?vault=p").unwrap();
+    add_link_command(&app, "project", &project_key, "site", "https://example.org").unwrap();
 
     assert_eq!(
-        resolve_link(&app, "task", "T-001", "obsidian").unwrap(),
+        resolve_link(&app, "task", &task_key, "obsidian").unwrap(),
         "obsidian://open?vault=p"
     );
     assert_eq!(
@@ -270,21 +277,21 @@ fn resolve_link_returns_uri_for_task_and_project() {
         "https://example.org"
     );
 
-    let e = resolve_link(&app, "task", "T-001", "nope").unwrap_err();
+    let e = resolve_link(&app, "task", &task_key, "nope").unwrap_err();
     assert_eq!(e.kind(), "not-found");
     let e = resolve_link(&app, "project", "P-999", "site").unwrap_err();
     assert_eq!(e.kind(), "not-found");
-    let e = resolve_link(&app, "bogus", "T-001", "obsidian").unwrap_err();
+    let e = resolve_link(&app, "bogus", &task_key, "obsidian").unwrap_err();
     assert_eq!(e.kind(), "usage");
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn duplicate_link_labels_are_ambiguous() {
-    let (root, app) = fixture();
-    add_link_command(&app, "task", "T-001", "ref", "https://a").unwrap();
-    add_link_command(&app, "task", "T-001", "ref", "https://b").unwrap();
-    let e = resolve_link(&app, "task", "T-001", "ref").unwrap_err();
+    let (root, app, task_key, _project_key) = fixture();
+    add_link_command(&app, "task", &task_key, "ref", "https://a").unwrap();
+    add_link_command(&app, "task", &task_key, "ref", "https://b").unwrap();
+    let e = resolve_link(&app, "task", &task_key, "ref").unwrap_err();
     assert_eq!(e.kind(), "ambiguous");
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -295,14 +302,14 @@ fn duplicate_link_labels_are_ambiguous() {
 
 #[test]
 fn attach_and_link_appear_in_task_log() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let src = root.join("fig.png");
     std::fs::write(&src, "png-bytes").unwrap();
     let mut input = prompt_reader(&[]);
-    attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
-    add_link_command(&app, "task", "T-001", "obsidian", "obsidian://open?vault=p").unwrap();
+    attach_file(&app, &root, &task_key, src.to_str().unwrap(), &mut input).unwrap();
+    add_link_command(&app, "task", &task_key, "obsidian", "obsidian://open?vault=p").unwrap();
 
-    let out = log_view(&app, "T-001", false).unwrap();
+    let out = log_view(&app, &task_key, false).unwrap();
     assert!(out.contains("ATTACH"), "{out}");
     assert!(out.contains("LINK"), "{out}");
     assert!(out.contains("File: fig.png"), "{out}");
@@ -315,14 +322,14 @@ fn attach_and_link_appear_in_task_log() {
 
 #[test]
 fn task_view_shows_attachments_and_links() {
-    let (root, app) = fixture();
+    let (root, app, task_key, _project_key) = fixture();
     let src = root.join("data.csv");
     std::fs::write(&src, "a,b\n1,2\n").unwrap();
     let mut input = prompt_reader(&[]);
-    attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
-    add_link_command(&app, "task", "T-001", "wiki", "https://wiki.example/t1").unwrap();
+    attach_file(&app, &root, &task_key, src.to_str().unwrap(), &mut input).unwrap();
+    add_link_command(&app, "task", &task_key, "wiki", "https://wiki.example/t1").unwrap();
 
-    let out = task_view(&app, "T-001").unwrap();
+    let out = task_view(&app, &task_key).unwrap();
     assert!(out.contains("\nAttachments:\n"), "{out}");
     assert!(out.contains("- data.csv ("), "{out}");
     assert!(out.contains(".lun/attachments/data.csv"), "{out}");
@@ -333,8 +340,8 @@ fn task_view_shows_attachments_and_links() {
 
 #[test]
 fn task_view_empty_attachment_and_link_stubs() {
-    let (root, app) = fixture();
-    let out = task_view(&app, "T-001").unwrap();
+    let (root, app, task_key, _project_key) = fixture();
+    let out = task_view(&app, &task_key).unwrap();
     assert!(out.contains("Attachments:\n- (no attachments"), "{out}");
     assert!(out.contains("Links:\n- (no links"), "{out}");
     let _ = std::fs::remove_dir_all(&root);
@@ -342,7 +349,7 @@ fn task_view_empty_attachment_and_link_stubs() {
 
 #[test]
 fn project_attachments_can_be_added_listed_opened_and_removed() {
-    let (root, app) = fixture();
+    let (root, app, _task_key, project_key) = fixture();
     let src = root.join("roadmap.md");
     std::fs::write(&src, "# roadmap\n").unwrap();
     let mut input = prompt_reader(&[]);
@@ -355,7 +362,7 @@ fn project_attachments_can_be_added_listed_opened_and_removed() {
         &mut input,
     )
     .unwrap();
-    assert!(added.contains("P-001"));
+    assert!(added.contains(&project_key));
 
     let listed = list_attachments(&app, "project", "p1").unwrap();
     assert!(listed.contains("roadmap.md"));

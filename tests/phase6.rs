@@ -107,7 +107,10 @@ fn fixture() -> (std::path::PathBuf, Lun) {
 
 fn app_for(root: &std::path::Path) -> App {
     let lun = Lun::open(root).unwrap();
-    let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
+    // Use the actual project key generated for "paper-stack" when it exists;
+    // some tests load an empty board with no such project.
+    let p_key = lun.project_by_name("paper-stack").ok().map(|p| p.project_key);
+    let d = data::load(&lun, "0.1.0", "repo-path", "main".into(), p_key.as_deref()).unwrap();
     App::with_store(d, root.to_path_buf(), lun)
 }
 
@@ -159,19 +162,23 @@ fn resolve_log_query_precedence_and_ambiguity() {
     let (root, lun) = fixture();
     let d = data::load(&lun, "0.1.0", "p", "b".into(), None).unwrap();
 
+    // Capture generated keys for assertions.
+    let t2_key = lun.task_by_id(2).unwrap().task_key;
+    let p_key = lun.project_by_name("paper-stack").unwrap().project_key;
+
     // Task key.
-    match data::resolve_log_query(&d, "T-002").unwrap() {
-        data::LogSubject::Task(i) => assert_eq!(d.tasks[i].task_key, "T-002"),
+    match data::resolve_log_query(&d, t2_key.as_str()).unwrap() {
+        data::LogSubject::Task(i) => assert_eq!(d.tasks[i].task_key, t2_key),
         other => panic!("expected task subject, got {other:?}"),
     }
     // Project key.
-    match data::resolve_log_query(&d, "P-001").unwrap() {
+    match data::resolve_log_query(&d, p_key.as_str()).unwrap() {
         data::LogSubject::Project(i) => assert_eq!(d.projects[i].name, "paper-stack"),
         other => panic!("expected project subject, got {other:?}"),
     }
     // Exact task title.
     match data::resolve_log_query(&d, "tune damping").unwrap() {
-        data::LogSubject::Task(i) => assert_eq!(d.tasks[i].task_key, "T-002"),
+        data::LogSubject::Task(i) => assert_eq!(d.tasks[i].task_key, t2_key),
         other => panic!("expected task subject, got {other:?}"),
     }
     // Project name.
@@ -204,10 +211,12 @@ fn resolve_log_query_ambiguous_title_lists_keys() {
         })
         .unwrap();
     }
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
+    let t2_key = lun.task_by_id(2).unwrap().task_key;
     let d = data::load(&lun, "0.1.0", "p", "b".into(), None).unwrap();
     let err = data::resolve_log_query(&d, "dup").unwrap_err();
     assert!(err.contains("ambiguous"), "got: {err}");
-    assert!(err.contains("T-001") && err.contains("T-002"));
+    assert!(err.contains(&t1_key) && err.contains(&t2_key));
     drop(lun);
     drop(root);
 }
@@ -218,15 +227,18 @@ fn resolve_log_query_ambiguous_title_lists_keys() {
 
 #[test]
 fn t_opens_current_task_and_j_k_moves_task_selection() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
+    let t2_key = lun.task_by_id(2).unwrap().task_key;
     assert_eq!(app.task_selected, 0);
-    assert!(app.current_task().unwrap().task_key == "T-001");
+    assert!(app.current_task().unwrap().task_key == t1_key);
+
 
     // j/k move the task selection in non-project views.
     term::handle_key(&mut app, &key(KeyCode::Char('j')));
     assert_eq!(app.task_selected, 1);
-    assert_eq!(app.current_task().unwrap().task_key, "T-002");
+    assert_eq!(app.current_task().unwrap().task_key, t2_key);
     term::handle_key(&mut app, &key(KeyCode::Char('k')));
     assert_eq!(app.task_selected, 0);
     // Wraps around.
@@ -346,18 +358,19 @@ fn h_l_are_reserved_vim_noops() {
 
 #[test]
 fn colon_opens_command_prompt_and_executes_status_query() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
     term::handle_key(&mut app, &key(KeyCode::Char(':')));
     assert!(app.palette_open);
-    for c in "status T-001".chars() {
+    for c in format!("status {t1_key}").chars() {
         term::handle_key(&mut app, &key(KeyCode::Char(c)));
     }
     term::handle_key(&mut app, &key(KeyCode::Enter));
     assert!(!app.palette_open);
     assert_eq!(app.view, View::Output);
     let out = app.output.as_ref().unwrap();
-    assert!(out.text.contains("**Task T-001**"), "{}", out.text);
+    assert!(out.text.contains(&format!("**Task {t1_key}**")), "{}", out.text);
 }
 
 #[test]
@@ -505,21 +518,23 @@ fn open_palette_and_run(app: &mut App, query: &str) {
 
 #[test]
 fn palette_task_command_line_selects_task() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
-    open_palette_and_run(&mut app, "task T-003");
+    let t3_key = lun.task_by_id(3).unwrap().task_key;
+    open_palette_and_run(&mut app, &format!("task {t3_key}"));
     assert_eq!(app.view, View::Output);
-    assert!(app.current_task().unwrap().task_key == "T-003");
-    assert!(app.output.as_ref().unwrap().text.contains("Task T-003"));
+    assert!(app.current_task().unwrap().task_key == t3_key);
+    assert!(app.output.as_ref().unwrap().text.contains(&format!("Task {t3_key}")));
 }
 
 #[test]
 fn palette_task_by_title_selects_task() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t3_key = lun.task_by_id(3).unwrap().task_key;
     open_palette_and_run(&mut app, "task \"write methods\"");
     assert_eq!(app.view, View::Output);
-    assert!(app.current_task().unwrap().task_key == "T-003");
+    assert!(app.current_task().unwrap().task_key == t3_key);
 }
 
 #[test]
@@ -535,12 +550,13 @@ fn palette_task_bad_key_shows_error_and_stays() {
 
 #[test]
 fn palette_log_command_line_selects_subject() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
-    open_palette_and_run(&mut app, "log T-004");
+    let t4_key = lun.task_by_id(4).unwrap().task_key;
+    open_palette_and_run(&mut app, &format!("log {t4_key}"));
     assert_eq!(app.view, View::Output);
     assert!(app.output.as_ref().unwrap().text.contains("CREATE"));
-    assert!(app.current_task().unwrap().task_key == "T-004");
+    assert!(app.current_task().unwrap().task_key == t4_key);
 }
 
 #[test]
@@ -554,12 +570,13 @@ fn palette_log_default_is_current_project() {
 
 #[test]
 fn palette_task_command_with_spaces_between_words() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
     // "/task  T-001" (double space) still works: rest is trimmed.
-    open_palette_and_run(&mut app, "task  T-001");
+    open_palette_and_run(&mut app, &format!("task  {t1_key}"));
     assert_eq!(app.view, View::Output);
-    assert!(app.current_task().unwrap().task_key == "T-001");
+    assert!(app.current_task().unwrap().task_key == t1_key);
 }
 
 // ---------------------------------------------------------------------------
@@ -568,12 +585,13 @@ fn palette_task_command_with_spaces_between_words() {
 
 #[test]
 fn task_view_renders_fields_notes_and_history() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
     app.view = View::Task; // T-001: has attachment, link, COMMENT
     let s = screen(&app, 90, 40);
 
-    assert!(s.contains("Task T-001"));
+    assert!(s.contains(&format!("Task {t1_key}")));
     assert!(s.contains("Project:"));
     assert!(s.contains("paper-stack"));
     assert!(s.contains("Title:"));
@@ -625,12 +643,13 @@ fn task_view_insert_mode_shows_draft_lines() {
 
 #[test]
 fn log_view_task_renders_header_and_entries() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
     app.log_subject = Some(data::LogSubject::Task(0));
     app.view = View::Log;
     let s = screen(&app, 90, 40);
-    assert!(s.contains("Log: Task T-001 \"set up sim\""));
+    assert!(s.contains(&format!("Log: Task {t1_key} \"set up sim\"")));
     assert!(s.contains("CREATE"));
     assert!(s.contains("ATTACH"));
     assert!(s.contains("LINK"));
@@ -695,22 +714,23 @@ fn help_view_lists_phase6_keys() {
 
 #[test]
 fn arrows_home_end_page_and_gg_g_navigate() {
-    let (root, _lun) = fixture();
+    let (root, lun) = fixture();
     let mut app = app_for(&root);
+    let keys: Vec<String> = (1i64..=4).map(|i| lun.task_by_id(i).unwrap().task_key).collect();
     app.view = View::Status;
     term::handle_key(&mut app, &key(KeyCode::Down));
-    assert_eq!(app.current_task().unwrap().task_key, "T-002");
+    assert_eq!(app.current_task().unwrap().task_key, keys[1]);
     term::handle_key(&mut app, &key(KeyCode::End));
-    assert_eq!(app.current_task().unwrap().task_key, "T-004");
+    assert_eq!(app.current_task().unwrap().task_key, keys[3]);
     term::handle_key(&mut app, &key(KeyCode::Home));
-    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+    assert_eq!(app.current_task().unwrap().task_key, keys[0]);
     term::handle_key(&mut app, &key(KeyCode::PageDown));
-    assert_eq!(app.current_task().unwrap().task_key, "T-002");
+    assert_eq!(app.current_task().unwrap().task_key, keys[1]);
     term::handle_key(&mut app, &key(KeyCode::Char('G')));
-    assert_eq!(app.current_task().unwrap().task_key, "T-004");
+    assert_eq!(app.current_task().unwrap().task_key, keys[3]);
     term::handle_key(&mut app, &key(KeyCode::Char('g')));
     term::handle_key(&mut app, &key(KeyCode::Char('g')));
-    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+    assert_eq!(app.current_task().unwrap().task_key, keys[0]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -770,8 +790,14 @@ fn new_task_form_creates_tasks_in_selected_projects() {
         app.form_nav(1);
     }
     app.submit_form();
-    let t1 = app.lun.as_ref().unwrap().task_by_key("T-005").unwrap();
-    let p1 = app.lun.as_ref().unwrap().project_by_key("P-001").unwrap();
+    let t1 = app
+        .lun
+        .as_ref()
+        .unwrap()
+        .tasks_by_title("task on project")
+        .unwrap()
+        .remove(0);
+    let p1 = app.lun.as_ref().unwrap().project_by_name("paper-stack").unwrap();
     assert_eq!(t1.project_id, Some(p1.id));
 
     app.enter_view(View::NewTask, "task on unassigned");
@@ -781,7 +807,13 @@ fn new_task_form_creates_tasks_in_selected_projects() {
         app.form_nav(1);
     }
     app.submit_form();
-    let t2 = app.lun.as_ref().unwrap().task_by_key("T-006").unwrap();
+    let t2 = app
+        .lun
+        .as_ref()
+        .unwrap()
+        .tasks_by_title("task on unassigned")
+        .unwrap()
+        .remove(0);
     let p0 = app.lun.as_ref().unwrap().project_by_key("P-000").unwrap();
     assert_eq!(t2.project_id, Some(p0.id));
 
@@ -803,11 +835,10 @@ fn new_project_form_creates_project_and_selects_it() {
     app.submit_form();
 
     let p = app.lun.as_ref().unwrap().project_by_name("infra").unwrap();
-    assert_eq!(p.project_key, "P-002");
     assert_eq!(p.status, "inactive");
     assert_eq!(
         app.data.projects[app.data.current_project].project_key,
-        "P-002"
+        p.project_key
     );
 
     let _ = std::fs::remove_dir_all(&root);
@@ -864,20 +895,20 @@ fn move_form_reassigns_task_and_writes_update_log() {
     let (root, _lun) = fixture();
     let mut app = app_with_store(&root);
     app.view = View::Task;
-    assert_eq!(app.current_task().unwrap().task_key, "T-001");
+    let t1_key = app.current_task().unwrap().task_key.clone();
 
     app.enter_view(View::MoveTask, "");
     app.form_cycle(-1); // move to P-000 Unassigned
     app.form_nav(1);
     app.submit_form();
 
-    let t = app.lun.as_ref().unwrap().task_by_key("T-001").unwrap();
+    let t = app.lun.as_ref().unwrap().task_by_key(&t1_key).unwrap();
     let p0 = app.lun.as_ref().unwrap().project_by_key("P-000").unwrap();
     assert_eq!(t.project_id, Some(p0.id));
     let logs = app.lun.as_ref().unwrap().logs_for("task", t.id).unwrap();
     assert!(logs
         .iter()
-        .any(|e| e.message.contains("move T-001 to Unassigned")));
+        .any(|e| e.message.contains(&format!("move {t1_key} to Unassigned"))));
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -887,6 +918,7 @@ fn dropped_paths_support_escaped_quoted_and_file_uri_without_copy() {
     let (root, _lun) = fixture();
     let mut app = app_with_store(&root);
     app.view = View::Task;
+    let t1_key = app.current_task().unwrap().task_key.clone();
 
     let spaced = root.join("My File.pdf");
     let plain = root.join("second.txt");
@@ -904,7 +936,7 @@ fn dropped_paths_support_escaped_quoted_and_file_uri_without_copy() {
     );
     app.attach_dropped_file(&drop_text);
 
-    let t = app.lun.as_ref().unwrap().task_by_key("T-001").unwrap();
+    let t = app.lun.as_ref().unwrap().task_by_key(&t1_key).unwrap();
     assert!(t.notes.contains("[My File.pdf](file://"));
     assert!(t.notes.contains("[second.txt](file://"));
     assert!(t.notes.contains("[third.txt](file://"));

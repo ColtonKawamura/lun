@@ -36,33 +36,43 @@ fn temp_root(name: &str) -> PathBuf {
     dir
 }
 
-fn fixture() -> (PathBuf, CliApp, App) {
+fn fixture() -> (PathBuf, CliApp, App, String, String) {
+    // Initialise a fresh repository and capture the actually generated keys.
     let root = temp_root("fx");
     let lun = Lun::init(&root).unwrap();
+
+    // Create a project; keep its dynamic key.
     let project = lun
         .create_project(ProjectSpec {
             name: "paper-stack".into(),
             ..Default::default()
         })
         .unwrap();
-    lun.create_task(TaskSpec {
-        title: "write methods".into(),
-        project: Some(project.id),
-        status: Some("review".into()),
-        priority: Some("med".into()),
-        assignee: Some("me".into()),
-        branch: None,
-        labels: None,
-        message: None,
-        scope: None,
+    let project_key = project.project_key.clone();
+
+    // Create a task within that project and capture its key.
+    let task = lun
+        .create_task(TaskSpec {
+            title: "write methods".into(),
+            project: Some(project.id),
+            status: Some("review".into()),
+            priority: Some("med".into()),
+            assignee: Some("me".into()),
+            branch: None,
+            labels: None,
+            message: None,
+            scope: None,
             user: None,
-    })
-    .unwrap();
+        })
+        .unwrap();
+    let task_key = task.task_key.clone();
+
     let cli = CliApp::open(&root).unwrap();
     let lun = Lun::open(&root).unwrap();
-    let snapshot = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some("P-001")).unwrap();
+    // Load UI snapshot using the real project key instead of a hard‑coded literal.
+    let snapshot = data::load(&lun, "0.1.0", "repo-path", "main".into(), Some(&project_key)).unwrap();
     let tui = App::with_store(snapshot, root.clone(), lun);
-    (root, cli, tui)
+    (root, cli, tui, task_key, project_key)
 }
 
 fn send_command(app: &mut App, text: &str) {
@@ -100,7 +110,7 @@ fn cell(app: &App, w: u16, h: u16, x: u16, y: u16) -> (char, Color, bool) {
 
 #[test]
 fn tui_task_command_matches_cli_output_for_quoted_title() {
-    let (root, cli, mut tui) = fixture();
+    let (root, cli, mut tui, task_key, _project_key) = fixture();
     let mut input = prompt_reader(&[]);
     let cli_out =
         run_result_with_reader(&cli, &["task".into(), "write methods".into()], &mut input).unwrap();
@@ -109,21 +119,21 @@ fn tui_task_command_matches_cli_output_for_quoted_title() {
     let tui_out = tui.output.as_ref().unwrap();
     assert!(!tui_out.is_error);
     assert_eq!(tui_out.text, cli_out);
-    assert_eq!(tui.current_task().unwrap().task_key, "T-001");
+    assert_eq!(tui.current_task().unwrap().task_key, task_key);
 
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn tui_add_task_opens_native_form_with_prefilled_title_and_current_project() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, _task_key, project_key) = fixture();
     send_command(&mut tui, "add task \"task from tui\"");
     assert!(tui.prompt_session.is_none());
     assert_eq!(tui.view, View::NewTask);
     if let Some(lun::tui::app::FormState::NewTask(draft)) = tui.form() {
         assert_eq!(draft.title, "task from tui");
         let project = &tui.data.projects[draft.project_index];
-        assert_eq!(project.project_key, "P-001");
+        assert_eq!(project.project_key, project_key);
     } else {
         panic!("expected new-task form");
     }
@@ -131,8 +141,10 @@ fn tui_add_task_opens_native_form_with_prefilled_title_and_current_project() {
         term::handle_key(&mut tui, &key(KeyCode::Enter));
     }
     assert_eq!(tui.view, View::Task);
-    let task = tui.lun.as_ref().unwrap().task_by_key("T-002").unwrap();
-    let project = tui.lun.as_ref().unwrap().project_by_key("P-001").unwrap();
+    // Capture the key of the newly created task.
+    let new_task_key = tui.current_task().unwrap().task_key.clone();
+    let task = tui.lun.as_ref().unwrap().task_by_key(&new_task_key).unwrap();
+    let project = tui.lun.as_ref().unwrap().project_by_key(&project_key).unwrap();
     assert_eq!(task.project_id, Some(project.id));
 
     let _ = std::fs::remove_dir_all(&root);
@@ -140,7 +152,7 @@ fn tui_add_task_opens_native_form_with_prefilled_title_and_current_project() {
 
 #[test]
 fn tui_add_task_with_project_argument_prefills_selected_project() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, _task_key, _) = fixture();
     send_command(&mut tui, "add task \"task from tui\" proj P-000");
     assert_eq!(tui.view, View::NewTask);
     if let Some(lun::tui::app::FormState::NewTask(draft)) = tui.form() {
@@ -155,11 +167,11 @@ fn tui_add_task_with_project_argument_prefills_selected_project() {
 
 #[test]
 fn tui_log_without_subject_uses_current_task_in_task_view() {
-    let (root, cli, mut tui) = fixture();
+    let (root, cli, mut tui, task_key, _project_key) = fixture();
     tui.view = View::Task;
     let mut input = prompt_reader(&[]);
     let cli_out =
-        run_result_with_reader(&cli, &["log".into(), "T-001".into()], &mut input).unwrap();
+        run_result_with_reader(&cli, &["log".into(), task_key.clone().into()], &mut input).unwrap();
 
     send_command(&mut tui, "log");
     let tui_out = tui.output.as_ref().unwrap();
@@ -171,7 +183,7 @@ fn tui_log_without_subject_uses_current_task_in_task_view() {
 
 #[test]
 fn tui_grep_matches_cli_output_for_text_search() {
-    let (root, cli, mut tui) = fixture();
+    let (root, cli, mut tui, _task_key, _project_key) = fixture();
     let mut input = prompt_reader(&[]);
     let cli_out =
         run_result_with_reader(&cli, &["grep".into(), "paper".into()], &mut input).unwrap();
@@ -186,7 +198,7 @@ fn tui_grep_matches_cli_output_for_text_search() {
 
 #[test]
 fn command_output_colors_project_status_and_log_action() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, _task_key, _) = fixture();
     tui.output = Some(CommandOutput {
         command: "demo".into(),
         text: "Projects\n--------\n\nID      Name          Status   Todo   Doing   Follow-Up   Blocked   Done\nP-001   paper-stack   active   1      0       0           0         0\n\n2026-09-28 19:54  me  CREATE".into(),
@@ -211,12 +223,12 @@ fn command_output_colors_project_status_and_log_action() {
 
 #[test]
 fn tui_retains_last_output_while_editing_canceling_and_empty_submitting() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, task_key, _) = fixture();
     send_command(&mut tui, "status");
     let first = tui.output.as_ref().unwrap().text.clone();
 
     term::handle_key(&mut tui, &key(KeyCode::Char('/')));
-    for ch in "task T-001".chars() {
+    for ch in format!("task {}", task_key).chars() {
         term::handle_key(&mut tui, &key(KeyCode::Char(ch)));
     }
     assert_eq!(tui.output.as_ref().unwrap().text, first);
@@ -237,7 +249,7 @@ fn tui_retains_last_output_while_editing_canceling_and_empty_submitting() {
 
 #[test]
 fn tui_replaces_output_and_supports_scrolling() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, task_key, _) = fixture();
     tui.output = Some(CommandOutput {
         command: "demo".into(),
         text: (1..=20)
@@ -251,9 +263,9 @@ fn tui_replaces_output_and_supports_scrolling() {
     term::handle_key(&mut tui, &key(KeyCode::PageDown));
     assert!(tui.output_scroll > 0);
 
-    send_command(&mut tui, "task T-001");
+    send_command(&mut tui, &format!("task {}", task_key));
     let out = tui.output.as_ref().unwrap();
-    assert!(out.text.contains("Task T-001"));
+    assert!(out.text.contains(&format!("Task {}", task_key)));
     assert_eq!(tui.output_scroll, 0);
 
     let _ = std::fs::remove_dir_all(&root);
@@ -261,15 +273,16 @@ fn tui_replaces_output_and_supports_scrolling() {
 
 #[test]
 fn tui_attach_project_file_with_spaces_and_open_it() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, task_key, project_key) = fixture();
+    let _ = &task_key;
     let file = root.join("road map.md");
     std::fs::write(&file, "# roadmap\n").unwrap();
 
-    let quoted = format!("attach project P-001 \"{}\"", file.display());
+    let quoted = format!("attach project {} \"{}\"", project_key, file.display());
     send_command(&mut tui, &quoted);
     let tui_attach = tui.output.as_ref().unwrap().text.clone();
 
-    let (root2, cli2, _tui2) = fixture();
+    let (root2, cli2, _tui2, _task_key2, project_key2) = fixture();
     let file2 = root2.join("road map.md");
     std::fs::write(&file2, "# roadmap\n").unwrap();
     let mut input = prompt_reader(&[]);
@@ -278,18 +291,18 @@ fn tui_attach_project_file_with_spaces_and_open_it() {
         &[
             "attach".into(),
             "project".into(),
-            "P-001".into(),
+            project_key2.clone(),
             file2.display().to_string(),
         ],
         &mut input,
         Some(&root2),
     )
     .unwrap();
-    assert!(tui_attach.starts_with("Attached road map.md to P-001"));
-    assert!(cli_attach.starts_with("Attached road map.md to P-001"));
+    assert!(tui_attach.starts_with(&format!("Attached road map.md to {project_key}")));
+    assert!(cli_attach.starts_with(&format!("Attached road map.md to {project_key2}")));
 
     std::env::set_var("LUN_OPEN_BIN", "true");
-    send_command(&mut tui, "attach open project P-001 \"road map.md\"");
+    send_command(&mut tui, &format!("attach open project {project_key} \"road map.md\""));
     let out = tui.output.as_ref().unwrap();
     assert!(out.text.contains("Opened:"));
     std::env::remove_var("LUN_OPEN_BIN");
@@ -300,7 +313,7 @@ fn tui_attach_project_file_with_spaces_and_open_it() {
 
 #[test]
 fn tui_external_attach_decline_surfaces_visible_error() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, task_key, _) = fixture();
     send_command(&mut tui, "status");
     let previous = tui.output.as_ref().unwrap().text.clone();
 
@@ -313,7 +326,7 @@ fn tui_external_attach_decline_surfaces_visible_error() {
 
     send_command(
         &mut tui,
-        &format!("attach task T-001 \"{}\"", outside.display()),
+        &format!("attach task {} \"{}\"", task_key, outside.display()),
     );
     assert!(tui.prompt_session.is_some());
     for ch in "n".chars() {
@@ -331,7 +344,7 @@ fn tui_external_attach_decline_surfaces_visible_error() {
 
 #[test]
 fn tui_external_attach_prompt_accepts_shifted_confirmation() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, task_key, _) = fixture();
     let outside = root.parent().unwrap().join(format!(
         "outside-attach-yes-{}-{}.txt",
         std::process::id(),
@@ -341,7 +354,7 @@ fn tui_external_attach_prompt_accepts_shifted_confirmation() {
 
     send_command(
         &mut tui,
-        &format!("attach task T-001 \"{}\"", outside.display()),
+        &format!("attach task {} \"{}\"", task_key, outside.display()),
     );
     assert!(tui.prompt_session.is_some());
     term::handle_key(
@@ -359,7 +372,7 @@ fn tui_external_attach_prompt_accepts_shifted_confirmation() {
 
 #[test]
 fn tui_prompt_session_renders_typed_commit_message() {
-    let (root, _cli, mut tui) = fixture();
+    let (root, _cli, mut tui, _task_key, _) = fixture();
     send_command(&mut tui, "add proj myProj");
     assert!(tui.prompt_session.is_some());
 

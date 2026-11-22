@@ -245,6 +245,10 @@ fn fixture() -> (PathBuf, Lun) {
 #[test]
 fn status_all_matches_plan_format() {
     let (_root, lun) = fixture();
+    // Resolve dynamic project keys before `lun` moves into `app`.
+    let p_paper = resolve_project(&lun, "paper-stack").unwrap().project_key;
+    let p_gran = resolve_project(&lun, "granE-friction").unwrap().project_key;
+    let p_cli = resolve_project(&lun, "lun-cli").unwrap().project_key;
     let app = App { lun };
     let out = status_all(&app).unwrap();
 
@@ -257,7 +261,7 @@ fn status_all_matches_plan_format() {
     // (columns are padded; split on runs of 3+ spaces and compare cells)
     let proj_rows: Vec<Vec<String>> = out
         .lines()
-        .filter(|l| l.starts_with("P-00"))
+        .filter(|l| l.starts_with("P-"))
         .map(split_cols)
         .collect();
     assert_eq!(proj_rows.len(), 4, "four project rows: {out}");
@@ -267,16 +271,16 @@ fn status_all_matches_plan_format() {
         &["P-000", "Unassigned", "active", "2", "0", "0", "0", "0"]
     );
     assert_eq!(
-        row("P-001"),
-        &["P-001", "paper-stack", "active", "1", "1", "1", "0", "7"]
+        row(&p_paper),
+        &[&p_paper, "paper-stack", "active", "1", "1", "1", "0", "7"]
     );
     assert_eq!(
-        row("P-002"),
-        &["P-002", "granE-friction", "active", "2", "0", "0", "0", "0"]
+        row(&p_gran),
+        &[&p_gran, "granE-friction", "active", "2", "0", "0", "0", "0"]
     );
     assert_eq!(
-        row("P-003"),
-        &["P-003", "lun-cli", "active", "0", "1", "0", "0", "1"]
+        row(&p_cli),
+        &[&p_cli, "lun-cli", "active", "0", "1", "0", "0", "1"]
     );
 
     // Summary line: 4 projects, 16 tasks (5 planning, 2 review, 1 waiting-on, 0 backlog, 8 closed)
@@ -291,6 +295,7 @@ fn status_all_matches_plan_format() {
 #[test]
 fn status_project_matches_plan_format() {
     let (_root, lun) = fixture();
+    let p_key = resolve_project(&lun, "paper-stack").unwrap().project_key;
     let app = App { lun };
     let out = status_project(&app, "paper-stack").unwrap();
 
@@ -303,7 +308,7 @@ fn status_project_matches_plan_format() {
     // Overview block
     assert!(
         out.contains(
-            "Overview\n--------\n\nID:      P-001\nName:    paper-stack\nStatus:  active\n"
+            &format!("Overview\n--------\n\nID:      {p_key}\nName:    paper-stack\nStatus:  active\n")
         ),
         "overview: {out}"
     );
@@ -317,14 +322,16 @@ fn status_project_matches_plan_format() {
     // Task rows with project column (cells parsed, widths are dynamic)
     let t_rows: Vec<Vec<String>> = out
         .lines()
-        .filter(|l| l.starts_with("T-0"))
+        .filter(|l| l.starts_with("T-"))
         .map(split_cols)
         .collect();
     assert_eq!(t_rows.len(), 10, "ten task rows: {out}");
+    // Resolve dynamic task key for the first task
+    let task1 = resolve_task(&app.lun, "Tune ball–chain damping params").unwrap();
     assert_eq!(
         t_rows[0],
         &[
-            "T-001",
+            &task1.task_key,
             "paper-stack",
             "Tune ball–chain damping params",
             "review",
@@ -346,24 +353,29 @@ fn status_project_matches_plan_format() {
 #[test]
 fn status_project_board_groups_by_all_statuses() {
     let (_root, lun) = fixture();
+    // Resolve dynamic task keys before `lun` moves into `app`.
+    let task_analyze = resolve_task(&lun, "Analyze restitution vs stack size").unwrap();
+    let task_tune = resolve_task(&lun, "Tune ball–chain damping params").unwrap();
+    let task_write = resolve_task(&lun, "Write methods section draft").unwrap();
     let app = App { lun };
     let out = status_project_board(&app, "paper-stack").unwrap();
     assert!(out.contains("Board: paper-stack"));
-    assert!(out.contains("Planning\n--------\n- T-002  Analyze restitution vs stack size"));
-    assert!(out.contains("Review\n------\n- T-001  Tune ball–chain damping params"));
-    assert!(out.contains("Waiting-On\n----------\n- T-003  Write methods section draft"));
+    assert!(out.contains(&format!("Planning\n--------\n- {}  Analyze restitution vs stack size", task_analyze.task_key)));
+    assert!(out.contains(&format!("Review\n------\n- {}  Tune ball–chain damping params", task_tune.task_key)));
+    assert!(out.contains(&format!("Waiting-On\n----------\n- {}  Write methods section draft", task_write.task_key)));
     assert!(out.contains("Backlog\n-------\n- (none)"));
 }
 
 #[test]
 fn status_by_key_and_name_are_identical() {
     let (_root, lun) = fixture();
+    let proj_key = resolve_project(&lun, "paper-stack").unwrap().project_key;
     let app = App { lun };
     let by_name = status_project(&app, "paper-stack").unwrap();
-    let by_key = status_project(&app, "P-001").unwrap();
+    let by_key = status_project(&app, &proj_key).unwrap();
     assert_eq!(
         by_name, by_key,
-        "`lun status paper-stack` and `lun status P-001` must be identical"
+        "`lun status paper-stack` and `lun status <project key>` must be identical"
     );
 }
 
@@ -407,14 +419,16 @@ fn create_task_flow_with_explicit_answers() {
     let mut input = prompt_reader(&["planning", "med", "me", "", ""]);
     let out = create_task(&app, "my task title", Some("paper-stack"), &mut input).unwrap();
     let lines = out.split('\n').collect::<Vec<_>>();
-    assert_eq!(lines[0], "Created task T-001 in project paper-stack");
+    // Resolve the created task's key
+    let created_task = resolve_task(&app.lun, "my task title").unwrap();
+    assert_eq!(lines[0], &format!("Created task {} in project paper-stack", created_task.task_key));
     assert_eq!(
         lines[1],
         "Committed: add task \"my task title\" to paper-stack"
     );
 
     // Task exists in DB with the answered fields
-    let task = app.lun.task_by_key("T-001").unwrap();
+    let task = app.lun.task_by_key(&created_task.task_key).unwrap();
     assert_eq!(task.title, "my task title");
     assert_eq!(task.status, "planning");
     assert_eq!(task.priority, "med");
@@ -442,10 +456,12 @@ fn create_task_uses_defaults_for_empty_input() {
     let mut input = prompt_reader(&["", "", "", "", ""]);
     let out = create_task(&app, "bare task", None, &mut input).unwrap();
     let lines = out.split('\n').collect::<Vec<_>>();
-    assert_eq!(lines[0], "Created task T-001 in project Unassigned");
+    // Resolve created task key
+    let created = resolve_task(&app.lun, "bare task").unwrap();
+    assert_eq!(lines[0], &format!("Created task {} in project Unassigned", created.task_key));
     assert_eq!(lines[1], "Committed: add task \"bare task\" to Unassigned");
 
-    let t = app.lun.task_by_key("T-001").unwrap();
+    let t = app.lun.task_by_key(&created.task_key).unwrap();
     assert_eq!(t.status, "planning");
     assert_eq!(t.priority, "low");
     assert_eq!(t.assignee.as_deref(), Some("me"));
@@ -464,9 +480,10 @@ fn create_task_with_explicit_project_query() {
     let app = App { lun };
     let mut input = prompt_reader(&["review", "high", "me", "custom commit message"]);
     let out = create_task(&app, "solo task", Some("solo"), &mut input).unwrap();
+    let key = resolve_task(&app.lun, "solo task").unwrap().task_key;
     assert_eq!(
         out.lines().next().unwrap(),
-        "Created task T-001 in project solo"
+        &format!("Created task {} in project solo", key)
     );
     assert_eq!(
         out.lines().nth(1).unwrap(),
@@ -483,15 +500,16 @@ fn create_task_defaults_project_to_unassigned_when_no_projects() {
     let app = App { lun };
     let mut input = prompt_reader(&["planning", "med", "", ""]);
     let out = create_task(&app, "unhome task", None, &mut input).unwrap();
+    let task_key = resolve_task(&app.lun, "unhome task").unwrap().task_key;
     assert_eq!(
         out.lines().next().unwrap(),
-        "Created task T-001 in project Unassigned"
+        &format!("Created task {} in project Unassigned", task_key)
     );
     assert_eq!(
         out.lines().nth(1).unwrap(),
         "Committed: add task \"unhome task\" to Unassigned"
     );
-    let t = app.lun.task_by_key("T-001").unwrap();
+    let t = app.lun.task_by_key(&task_key).unwrap();
     let p000 = app.lun.project_by_key("P-000").unwrap();
     assert_eq!(t.project_id, Some(p000.id), "task belongs to the P-000 row");
     let _ = std::fs::remove_dir_all(&root);
@@ -535,8 +553,10 @@ fn task_view_matches_plan_format() {
     let app = App { lun };
     let out = task_view(&app, "Write methods section draft").unwrap(); // title
 
+    // Resolve task key
+    let task = resolve_task(&app.lun, "Write methods section draft").unwrap();
     // Header
-    assert!(out.starts_with("Task T-003\n"), "header: {out}");
+    assert!(out.starts_with(&format!("Task {}\n", task.task_key)), "header: {out}");
     assert!(
         out.lines().nth(1).unwrap().chars().all(|c| c == '='),
         "underline row: {out}"
@@ -568,7 +588,7 @@ fn task_view_matches_plan_format() {
     );
 
     assert!(
-        out.contains("Description:\n- (add a description with `lun task edit T-003 --notes \"...\"`)"),
+        out.contains(&format!("Description:\n- (add a description with `lun task edit {} --notes \"...\"`)", task.task_key)),
         "description stub: {out}"
     );
 
@@ -584,8 +604,9 @@ fn task_view_matches_plan_format() {
 fn task_view_by_key() {
     let (_root, lun) = fixture();
     let app = App { lun };
-    let out = task_view(&app, "T-001").unwrap();
-    assert!(out.starts_with("Task T-001\n"), "header: {out}");
+    let task = resolve_task(&app.lun, "Tune ball–chain damping params").unwrap();
+    let out = task_view(&app, &task.task_key).unwrap();
+    assert!(out.starts_with(&format!("Task {}\n", task.task_key)), "header: {out}");
     assert!(
         out.contains("Title:     Tune ball–chain damping params"),
         "title: {out}"
@@ -606,8 +627,9 @@ fn task_view_unknown_and_ambiguous() {
 fn status_for_task_shows_task_data_with_last_commit_only() {
     let (_root, lun) = fixture();
     let app = App { lun };
+    let task = resolve_task(&app.lun, "Write methods section draft").unwrap();
     let out = status_target(&app, "Write methods section draft").unwrap();
-    assert!(out.starts_with("**Task T-003**"), "header: {out}");
+    assert!(out.starts_with(&format!("**Task {}**", task.task_key)), "header: {out}");
     assert!(out.contains("Project:   paper-stack"), "project: {out}");
     assert!(
         out.contains("Title:     Write methods section draft"),
@@ -634,7 +656,7 @@ fn status_for_task_shows_task_data_with_last_commit_only() {
 fn task_list_edit_complete_reopen_and_archive_work() {
     let (_root, lun) = fixture();
     let app = App { lun };
-
+    let task = resolve_task(&app.lun, "Write methods section draft").unwrap();
     let listed = task_list(
         &app,
         &[
@@ -647,13 +669,13 @@ fn task_list_edit_complete_reopen_and_archive_work() {
         ],
     )
     .unwrap();
-    assert!(listed.contains("T-003"));
+    assert!(listed.contains(&task.task_key));
     assert!(!listed.contains("T-001"));
 
     let mut input = prompt_reader(&[""]);
     let edited = task_edit(
         &app,
-        "T-003",
+        &task.task_key,
         &[
             "--status".into(),
             "review".into(),
@@ -667,37 +689,37 @@ fn task_list_edit_complete_reopen_and_archive_work() {
         &mut input,
     )
     .unwrap();
-    assert!(edited.contains("Updated T-003"));
+    assert!(edited.contains(&format!("Updated {}", task.task_key)));
 
-    let out = task_view(&app, "T-003").unwrap();
+    let out = task_view(&app, &task.task_key).unwrap();
     assert!(out.contains("Status:    review"));
     assert!(out.contains("Priority:  med"));
     assert!(out.contains("Branch:    feat/edited"));
     assert!(out.contains("Labels:    [\"docs\", \"phase11\"]"));
 
     let mut input = prompt_reader(&[""]);
-    let completed = task_complete(&app, "T-003", &mut input).unwrap();
-    assert!(completed.contains("Completed T-003"));
-    assert!(task_view(&app, "T-003")
+    let completed = task_complete(&app, &task.task_key, &mut input).unwrap();
+    assert!(completed.contains(&format!("Completed {}", task.task_key)));
+    assert!(task_view(&app, &task.task_key)
         .unwrap()
         .contains("Status:    closed"));
 
     let mut input = prompt_reader(&[""]);
-    let reopened = task_reopen(&app, "T-003", &[], &mut input).unwrap();
-    assert!(reopened.contains("Reopened T-003"));
-    assert!(task_view(&app, "T-003")
+    let reopened = task_reopen(&app, &task.task_key, &[], &mut input).unwrap();
+    assert!(reopened.contains(&format!("Reopened {}", task.task_key)));
+    assert!(task_view(&app, &task.task_key)
         .unwrap()
         .contains("Status:    planning"));
 
     let mut input = prompt_reader(&[""]);
-    let archived = task_archive(&app, "T-003", &mut input).unwrap();
-    assert!(archived.contains("Archived T-003"));
-    let archived_view = task_view(&app, "T-003").unwrap();
+    let archived = task_archive(&app, &task.task_key, &mut input).unwrap();
+    assert!(archived.contains(&format!("Archived {}", task.task_key)));
+    let archived_view = task_view(&app, &task.task_key).unwrap();
     assert!(archived_view.contains("Archived:  yes"));
-    assert!(!task_list(&app, &[]).unwrap().contains("T-003"));
+    assert!(!task_list(&app, &[]).unwrap().contains(&task.task_key));
     assert!(task_list(&app, &["--all".into()])
         .unwrap()
-        .contains("T-003"));
+        .contains(&task.task_key));
 }
 
 // ---------------------------------------------------------------------------
@@ -721,7 +743,8 @@ fn log_for_task_matches_plan_format() {
 fn log_for_task_by_key() {
     let (_root, lun) = fixture();
     let app = App { lun };
-    let out = log_view(&app, "T-001", false).unwrap();
+    let task = resolve_task(&app.lun, "Write methods section draft").unwrap();
+    let out = log_view(&app, &task.task_key, false).unwrap();
     assert!(out.contains("  me  CREATE"), "entry present: {out}");
 }
 
@@ -793,22 +816,25 @@ fn log_unknown_entity_errors() {
 #[test]
 fn grep_searches_projects_tasks_and_commits() {
     let (_root, lun) = fixture();
+    let p_key = lun.project_by_name("paper-stack").unwrap().project_key;
     let app = App { lun };
     let out = grep_view(&app, "paper-stack").unwrap();
+    let task1 = resolve_task(&app.lun, "Tune ball–chain damping params").unwrap();
+    let task3 = resolve_task(&app.lun, "Write methods section draft").unwrap();
     assert!(out.starts_with("Grep: paper-stack\n"), "header: {out}");
     assert!(out.contains("Projects\n--------"), "project section: {out}");
     assert!(
-        out.contains("P-001") && out.contains("Name") && out.contains("paper-stack"),
+        out.contains(&p_key) && out.contains("Name") && out.contains("paper-stack"),
         "project hit: {out}"
     );
     assert!(out.contains("Tasks\n-----"), "task section: {out}");
     assert!(
-        out.contains("T-001") && out.contains("Project   paper-stack"),
+        out.contains(&task1.task_key) && out.contains("Project   paper-stack"),
         "task hit: {out}"
     );
     assert!(out.contains("Commits\n-------"), "commit section: {out}");
     assert!(
-        out.contains("T-003") && out.contains("Commit") && out.contains("paper-stack"),
+        out.contains(&task3.task_key) && out.contains("Commit") && out.contains("paper-stack"),
         "commit hit: {out}"
     );
     assert!(out.contains("Summary:"), "summary: {out}");
@@ -840,7 +866,8 @@ fn resolution_is_exact() {
     );
     // Exact title match works.
     let t = resolve_task(&lun, "Write methods section draft").unwrap();
-    assert_eq!(t.task_key, "T-003");
+    assert_eq!(t.task_key, lun.task_by_id(3).unwrap().task_key);
+    assert!(t.task_key.starts_with("T-"));
 }
 
 #[test]
@@ -854,9 +881,11 @@ fn ambiguous_task_title_errors() {
         })
         .unwrap();
     }
+    let t1_key = lun.task_by_id(1).unwrap().task_key;
+    let t2_key = lun.task_by_id(2).unwrap().task_key;
     let e = resolve_task(&lun, "same title").unwrap_err();
     assert_eq!(e.kind(), "ambiguous");
-    assert!(e.to_string().contains("T-001, T-002"));
+    assert!(e.to_string().contains(&format!("{t1_key}, {t2_key}")));
     let _ = std::fs::remove_dir_all(&root);
 }
 
