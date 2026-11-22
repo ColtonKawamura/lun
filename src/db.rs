@@ -1611,7 +1611,13 @@ impl Lun {
         )?;
         let message = spec
             .message
-            .unwrap_or_else(|| format!("edit {}", task.task_key));
+            .unwrap_or_else(|| {
+                if changes.is_empty() {
+                    format!("edit {}", task.task_key)
+                } else {
+                    format!("{}: {}", task.task_key, changes.join("; "))
+                }
+            });
         self.log(
             "task",
             task_id,
