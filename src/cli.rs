@@ -1881,6 +1881,45 @@ pub fn add_link_command(
     Ok(format!("Linked {label} to {label2}: {uri}"))
 }
 
+/// Delete a link by its DB ID. Mirrors the UI `dd` action.
+pub fn delete_link_command(app: &App, kind: &str, query: &str, id_str: &str) -> Result<String> {
+    match kind {
+        "task" => {
+            let _ = resolve_task(&app.lun, query)?;
+        }
+        "project" => {
+            let _ = resolve_project(&app.lun, query)?;
+        }
+        _ => {
+            return Err(DbError::new("usage", "link delete: kind must be 'task' or 'project'"));
+        }
+    }
+    let id: i64 = id_str
+        .parse()
+        .map_err(|_| DbError::new("usage", "link delete: ID must be an integer"))?;
+    let link = app.lun.delete_link(id, None)?;
+    Ok(format!("Deleted link \"{}\" ({})", link.label, link.uri))
+}
+
+/// Restore the most recently deleted link for a task or project. Mirrors the UI `u` action.
+pub fn restore_link_command(app: &App, kind: &str, query: &str) -> Result<String> {
+    let target = match kind {
+        "task" => {
+            let t = resolve_task(&app.lun, query)?;
+            LinkTarget::Task(t.id)
+        }
+        "project" => {
+            let p = resolve_project(&app.lun, query)?;
+            LinkTarget::Project(p.id)
+        }
+        _ => return Err(DbError::new("usage", "link restore: kind must be 'task' or 'project'")),
+    };
+    match app.lun.restore_last_link(target, None)? {
+        Some(link) => Ok(format!("Restored link \"{}\" ({})", link.label, link.uri)),
+        None => Err(DbError::new("not-found", "no deleted link to restore")),
+    }
+}
+
 /// Look up a link by label on a task or project; returns the URI.
 pub fn resolve_link(app: &App, kind: &str, query: &str, label: &str) -> Result<String> {
     let links = match kind {
@@ -3436,14 +3475,34 @@ pub fn run_result_in_reader(
                 "expected: lun attach <task|project> <key|title> /path/to/file | attach ls | attach rm | attach open",
             )),
         },
-        Some("link") => match (args.get(1), args.get(2), args.get(3), args.get(4)) {
-            (Some(kind), Some(q), Some(label), Some(uri)) => {
-                add_link_command(app, kind, q, label, uri)
+        Some("link") => {
+            match args.get(1).map(|s| s.as_str()) {
+                Some("delete") => {
+                    // lun link delete <task|project> <key|title> <id>
+                    let kind = args.get(2).ok_or_else(|| DbError::new("usage", "link delete: expected <task|project>"))?;
+                    let q = args.get(3).ok_or_else(|| DbError::new("usage", "link delete: expected <key|title>"))?;
+                    let id_str = args.get(4).ok_or_else(|| DbError::new("usage", "link delete: expected <id>"))?;
+                    delete_link_command(app, kind, q, id_str)
+                }
+                Some("restore") => {
+                    // lun link restore <task|project> <key|title>
+                    let kind = args.get(2).ok_or_else(|| DbError::new("usage", "link restore: expected <task|project>"))?;
+                    let q = args.get(3).ok_or_else(|| DbError::new("usage", "link restore: expected <key|title>"))?;
+                    restore_link_command(app, kind, q)
+                }
+                Some(k) if k == "task" || k == "project" => {
+                    // Add link (original behaviour)
+                    let kind = k;
+                    let q = args.get(2).ok_or_else(|| DbError::new("usage", "link add: expected <key|title>"))?;
+                    let label = args.get(3).ok_or_else(|| DbError::new("usage", "link add: expected <label>"))?;
+                    let uri = args.get(4).ok_or_else(|| DbError::new("usage", "link add: expected <uri>"))?;
+                    add_link_command(app, kind, q, label, uri)
+                }
+                _ => Err(DbError::new(
+                    "usage",
+                    "expected: lun link <task|project> <key|title> \"<label>\" \"<uri>\" OR lun link delete <task|project> <key|title> <id> OR lun link restore <task|project> <key|title>",
+                )),
             }
-            _ => Err(DbError::new(
-                "usage",
-                "expected: lun link <task|project> <key|title> \"<label>\" \"<uri>\"",
-            )),
         },
         Some("open-link") => match (args.get(1), args.get(2), args.get(3)) {
             (Some(kind), Some(q), Some(label)) => open_link(app, kind, q, label),
