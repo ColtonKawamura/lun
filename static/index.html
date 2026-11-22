@@ -360,6 +360,8 @@ body {
   background: var(--bg-secondary);
   border: 1px solid var(--accent);
 }
+.link-item { padding: 2px 6px; border-radius: 4px; border: 1px solid transparent; }
+.link-item.link-active { background: var(--bg-tertiary, rgba(255,255,255,0.08)); border-color: var(--accent); }
 .modal-section h3 {
   font-size: 13px;
   color: var(--text-muted);
@@ -750,6 +752,11 @@ textarea.notes-input {
         <input type="text" id="editTitle">
       </div>
       
+      <div class="modal-section" id="linksSection" style="display:none;">
+        <h3>Links</h3>
+        <div id="linksList"></div>
+      </div>
+      
       <div class="modal-section">
         <h3>Notes (Markdown)</h3>
         <textarea class="notes-input" id="editNotes" placeholder="Write notes in Markdown..."></textarea>
@@ -768,11 +775,6 @@ textarea.notes-input {
           Drop files here or click to upload
           <input type="file" id="fileInput" multiple style="display:none">
         </div>
-      </div>
-      
-      <div class="modal-section" id="linksSection" style="display:none;">
-        <h3>Links</h3>
-        <div id="linksList"></div>
       </div>
       
       <div class="modal-section" id="logsSection" style="display:none;">
@@ -870,8 +872,11 @@ let gBufferTimer = null;
 let leader = false;
 let leaderTimer = null;
 let modalFieldIndex = 0;
+let linkIndex = 0;
+let zBuffer = false;
+let zBufferTimer = null;
 let modalInsertMode = false;
-const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'editNotes', 'logMessageInput'];
+const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'linksSection', 'editNotes', 'logMessageInput'];
 
 // Initialize
 (async function init() {
@@ -1207,7 +1212,7 @@ function setView(view) {
 }
 
 // Modal field navigation
-function highlightModalField(idx) {
+function highlightModalField(idx, noScroll) {
   modalFields.forEach((id, i) => {
     const isActive = i === idx;
     const el = document.getElementById(id);
@@ -1233,6 +1238,59 @@ function highlightModalField(idx) {
       }
     }
   });
+  updateLinkHighlight();
+  if (!noScroll) scrollModalToField();
+}
+function modalFieldVisible(idx) {
+  const el = document.getElementById(modalFields[idx]);
+  return !!el && el.style.display !== 'none';
+}
+function modalStep(dir) {
+  let i = modalFieldIndex;
+  for (let n = 0; n < modalFields.length; n++) {
+    i = (i + dir + modalFields.length) % modalFields.length;
+    if (modalFieldVisible(i)) return i;
+  }
+  return modalFieldIndex;
+}
+function modalFieldContainer(idx) {
+  const el = document.getElementById(modalFields[idx]);
+  if (!el) return null;
+  return el.closest('.form-row') || el.closest('.modal-section') || el.closest('.log-input-row') || el;
+}
+function updateLinkHighlight() {
+  const active = modalFields[modalFieldIndex] === 'linksSection';
+  document.querySelectorAll('#linksList .link-item').forEach((d, i) => {
+    d.classList.toggle('link-active', active && i === linkIndex);
+  });
+}
+function scrollModalToField(mode) {
+  const box = document.querySelector('#modalOverlay .modal');
+  const el = modalFieldContainer(modalFieldIndex);
+  if (!box || !el) return;
+  const pad = 12;
+  const top = el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop;
+  const h = el.offsetHeight;
+  const ch = box.clientHeight;
+  let target;
+  if (mode === 'top') target = top - pad;
+  else if (mode === 'bottom') target = top + h - ch + pad;
+  else if (mode === 'center') target = top - (ch - h) / 2;
+  else { // minimal scroll to bring into view
+    if (top - pad < box.scrollTop) target = (modalFieldIndex === 0 || top < 120) ? 0 : top - pad;
+    else if (top + h + pad > box.scrollTop + ch) target = h + 2 * pad > ch ? top - pad : top + h - ch + pad;
+    else return;
+  }
+  box.scrollTo({ top: Math.max(0, target) });
+}
+function scrollLinkIntoView() {
+  const d = document.querySelectorAll('#linksList .link-item')[linkIndex];
+  if (d) d.scrollIntoView({ block: 'nearest' });
+}
+function openCurrentLink() {
+  const items = document.querySelectorAll('#linksList .link-item a');
+  const a = items[linkIndex];
+  if (a) window.open(a.href, '_blank', 'noopener');
 }
 function getModalField(idx) {
   const id = modalFields[idx];
@@ -1263,7 +1321,7 @@ async function openModal(key) {
   await loadTaskDetails(key);
   
   // Init modal navigation
-  modalFieldIndex = 0;
+  modalFieldIndex = 0; linkIndex = 0;
   modalInsertMode = false;
   highlightModalField(0);
   
@@ -1292,8 +1350,9 @@ async function loadTaskDetails(key) {
     const res = await fetch(`/api/tasks/${key}/links`);
     const links = await res.json();
     document.getElementById('linksSection').style.display = links.length ? 'block' : 'none';
+    linkIndex = Math.min(linkIndex, Math.max(0, links.length - 1));
     document.getElementById('linksList').innerHTML = links.map(l =>
-      `<div><a href="${escapeHtml(l.uri)}" target="_blank">${escapeHtml(l.label || l.uri)}</a></div>`
+      `<div class="link-item"><a href="${escapeHtml(l.uri)}" target="_blank">${escapeHtml(l.label || l.uri)}</a></div>`
     ).join('');
   } catch(e) {
     document.getElementById('linksSection').style.display = 'none';
@@ -1542,6 +1601,13 @@ function handleKeyboard(e) {
     return;
   }
 
+  // Ctrl+L opens the selected link when Links is selected in the modal
+  if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L') && modal.classList.contains('active')) {
+    e.preventDefault();
+    if (modalFields[modalFieldIndex] === 'linksSection') openCurrentLink();
+    return;
+  }
+
   // Cmd+Enter / Ctrl+Enter saves and exits modal (when modal is active)
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     e.preventDefault();
@@ -1587,16 +1653,40 @@ function handleKeyboard(e) {
     }
 
     // Normal mode
+    if (zBuffer && !e.ctrlKey && !e.metaKey) {
+      zBuffer = false;
+      clearTimeout(zBufferTimer);
+      const m = { z: 'center', t: 'top', b: 'bottom' }[e.key];
+      if (m) { e.preventDefault(); scrollModalToField(m); return; }
+    }
+    if (e.key === 'z' && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      zBuffer = true;
+      clearTimeout(zBufferTimer);
+      zBufferTimer = setTimeout(() => { zBuffer = false; }, 800);
+      return;
+    }
+    const onLinks = modalFields[modalFieldIndex] === 'linksSection';
+    const nLinks = document.querySelectorAll('#linksList .link-item').length;
     if (e.key === 'j' || e.key === 'ArrowDown') {
       e.preventDefault();
-      modalFieldIndex = (modalFieldIndex + 1) % modalFields.length;
+      if (onLinks && linkIndex < nLinks - 1) { linkIndex++; updateLinkHighlight(); scrollLinkIntoView(); return; }
+      modalFieldIndex = modalStep(1);
+      if (modalFields[modalFieldIndex] === 'linksSection') linkIndex = 0;
       highlightModalField(modalFieldIndex);
       return;
     }
     if (e.key === 'k' || e.key === 'ArrowUp') {
       e.preventDefault();
-      modalFieldIndex = (modalFieldIndex - 1 + modalFields.length) % modalFields.length;
+      if (onLinks && linkIndex > 0) { linkIndex--; updateLinkHighlight(); scrollLinkIntoView(); return; }
+      modalFieldIndex = modalStep(-1);
+      if (modalFields[modalFieldIndex] === 'linksSection') linkIndex = Math.max(0, document.querySelectorAll('#linksList .link-item').length - 1);
       highlightModalField(modalFieldIndex);
+      return;
+    }
+    if (e.key === 'Enter' && onLinks) {
+      e.preventDefault();
+      openCurrentLink();
       return;
     }
     if (e.key === 'i' && isInput) {
