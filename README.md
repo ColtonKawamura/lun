@@ -129,6 +129,20 @@ bind 'TAB:menu-complete'
 
 ## Docs
 
+- **[docs/wiki/](docs/wiki/)** — Full documentation wiki
+  - [Overview](docs/wiki/overview.md)
+  - [Installation](docs/wiki/installation.md)
+  - [CLI Commands](docs/wiki/cli-commands.md)
+  - [Web UI](docs/wiki/web-ui.md)
+  - [TUI](docs/wiki/tui.md)
+  - [Log System](docs/wiki/log-system.md)
+  - [Attachments & Links](docs/wiki/attachments-links.md)
+  - [PRs](docs/wiki/prs.md)
+  - [Schema](docs/wiki/schema.md)
+  - [Architecture](docs/wiki/architecture.md)
+  - [Shell Completion](docs/wiki/shell-completion.md)
+  - [nvim Plugin](docs/wiki/nvim.md)
+  - [FAQ](docs/wiki/faq.md)
 - [docs/plan.md](docs/plan.md) — the phase-by-phase plan
 - [docs/architecture.md](docs/architecture.md) — design notes
 - [docs/schema.md](docs/schema.md) — SQLite schema (v1→v5) reference
