@@ -441,7 +441,7 @@ Usage:
   lun task edit <task> [--field value]   Edit task fields
   lun proj <project> --status <active|inactive>   Update project status
   lun task complete|reopen|archive <task>   Update task lifecycle
-  lun log <project|task>    Commit-style history for a project or task
+  lun log <project|task> [-m \"message\"]   Commit-style history for a project or task (write a log with -m)
   lun grep \"<text>\"         Search project/task fields and commit text
   lun attach <task|project> <key|title> /path/to/file   Attach a file
   lun attach ls <task|project> <key|title>   List attachments
@@ -1417,6 +1417,17 @@ pub fn log_view(app: &App, query: &str) -> Result<String> {
         out.push('\n');
     }
     Ok(out.trim_end().to_string())
+}
+
+/// `lun log <project|task> -m "message"` — write a log entry (like `git commit -m`).
+pub fn log_write(app: &App, query: &str, message: &str) -> Result<String> {
+    let entity = resolve_entity(&app.lun, query)?;
+    let (entity_type, entity_id, label) = match entity {
+        Entity::Project(p) => ("project", p.id, p.project_key),
+        Entity::Task(t) => ("task", t.id, t.task_key),
+    };
+    let id = app.lun.log(entity_type, entity_id, "COMMIT", message, "{}", None)?;
+    Ok(format!("Log #{id} committed to {label}: {message}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -3141,10 +3152,28 @@ pub fn run_result_in_reader(
                 "expected: lun task <key|title> [--status ...] | task ls | task edit | task complete | task reopen | task archive",
             )),
         },
-        Some("log") => match args.get(1) {
-            Some(q) => log_view(app, q),
-            None => Err(DbError::new("usage", "expected: lun log <project|task>")),
-        },
+        Some("log") => {
+            let mut message: Option<String> = None;
+            let mut query: Option<String> = None;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "-m" {
+                    message = Some(args.get(i + 1).cloned()
+                        .ok_or_else(|| DbError::new("usage", "-m needs a value"))?);
+                    i += 2;
+                } else if !args[i].starts_with('-') {
+                    query = Some(args[i].clone());
+                    i += 1;
+                } else {
+                    return Err(DbError::new("usage", format!("unexpected argument '{}'", args[i])));
+                }
+            }
+            let q = query.ok_or_else(|| DbError::new("usage", "expected: lun log <project|task> [-m \"message\"]"))?;
+            match message {
+                Some(msg) => log_write(app, &q, &msg),
+                None => log_view(app, &q),
+            }
+        }
         Some("grep") => match args.get(1) {
             Some(q) => grep_view(app, q),
             None => Err(DbError::new("usage", "expected: lun grep <text>")),
