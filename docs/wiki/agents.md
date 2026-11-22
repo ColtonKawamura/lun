@@ -18,13 +18,20 @@ This page is the agent-facing cheat sheet. Full command reference:
 
 ## Ground rules
 
-- **The board is `$CWD/.lun/lun.db`.** lun resolves its data directory from
-  the current working directory only; there is no environment variable or
-  parent-directory search. Run every command from the directory that holds
-  the board (`cd ~/repos && lun ...`). An error like
-  `not-initialized: .../.lun/lun.db does not exist; run lun init first`
-  means *wrong directory* — do not run `lun init` there, it would create a
-  second, empty board.
+- **The board is the nearest `.lun/lun.db` at or above the current
+  directory**, found the way git finds a repo. The search stops at `$HOME`
+  (it never uses a `~/.lun`), and there is no environment variable. Run
+  commands from anywhere under the board's directory (`cd ~/repos && lun ...`
+  or any subdirectory); `lun root` prints which board is in use, and a
+  command that had to walk up says `lun: using board at <dir>` on stderr.
+  An error like `not-initialized: no lun board found in ... or any parent
+  directory` means *wrong directory* — do not run `lun init` there, it would
+  create a second, empty board.
+- **Several boards** (for example work and personal) are just several
+  directories that each ran `lun init` once, e.g. `~/repos` and
+  `~/personal-board`, each with its own `lun serve` on its own port. Which
+  board a command uses depends only on where it runs. `lun init` never walks
+  up: inside an existing board it creates a separate nested board and says so.
 - **Never block on a prompt.** Changes ask for a commit message on stdin
   (`add task` also asks for status, priority and assignee). Pass
   `--message "..."` where the command takes it (`add proj`, `proj`, `move`,

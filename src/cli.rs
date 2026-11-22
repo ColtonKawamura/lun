@@ -49,9 +49,10 @@ use crate::db::{
 };
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 17] = [
+const TOP_LEVEL_COMMANDS: [&str; 18] = [
     "brief",
     "init",
+    "root",
     "add",
     "task",
     "proj",
@@ -432,7 +433,8 @@ pub fn help_text(version: &str) -> String {
 
 Usage:
   lun                     Full-screen TUI in a terminal (plain banner when piped)
-  lun init                Create .lun/lun.db in the current directory (idempotent)
+  lun init                Create .lun/lun.db in the current directory (idempotent; never a parent)
+  lun root                Print the board directory in use (the current directory or nearest parent with .lun/lun.db; stops at $HOME)
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board
   lun /<name|key>         Shortcut for `lun status <name|key>`
   lun add proj \"<name>\" [--status active|inactive]  Create a project
@@ -3587,8 +3589,9 @@ pub fn run_result_in_reader(
                 (Some(kind), Some(q), Some(file)) => {
                 let root = match root_override {
                     Some(root) => Ok(root.to_path_buf()),
-                    None => std::env::current_dir()
-                        .map_err(|e| DbError::new("io", format!("resolving CWD: {e}"))),
+                    // Attachments live in the board's own `.lun/attachments/`,
+                    // wherever under the board the command runs.
+                    None => crate::root::from_cwd().map(|(root, _)| root),
                 }?;
                 attach_entity_file(app, &root, kind, q, file, stdin)
             }

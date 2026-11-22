@@ -7,6 +7,7 @@
 
 pub mod cli;
 pub mod db;
+pub mod root;
 pub mod server;
 pub mod tui;
 

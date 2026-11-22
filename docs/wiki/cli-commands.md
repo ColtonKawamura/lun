@@ -10,8 +10,10 @@ All commands can be run from the shell or inside the TUI (with `/` or `:`).
 Every change records a commit and asks for its message on stdin when
 `--message` is absent (`add task` also asks for status, priority, assignee).
 Scripts and agents should pass `--message` or close stdin (`</dev/null`).
-lun reads the board from `$CWD/.lun/lun.db` only — run commands from the
-board's directory. See [Using lun from agents](agents.md).
+lun finds the board like git finds a repo: the current directory if it holds
+`.lun/lun.db`, otherwise the nearest parent that does (the search stops at
+`$HOME`). `lun root` prints the board in use. See
+[Using lun from agents](agents.md).
 - `--help`: Print help text
 - `--version`: Print version
 

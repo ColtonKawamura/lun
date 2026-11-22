@@ -13,6 +13,7 @@ use std::process::ExitCode;
 
 pub mod cli;
 pub mod db;
+pub mod root;
 pub mod server;
 pub mod tui;
 
@@ -25,9 +26,9 @@ fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
 
     if args.first().map(String::as_str) == Some("complete") {
-        let app = env::current_dir()
+        let app = root::from_cwd()
             .ok()
-            .and_then(|cwd| cli::App::open(&cwd).ok());
+            .and_then(|(root, _)| cli::App::open(&root).ok());
         let out = cli::complete_output(app.as_ref(), &args[1..]);
         if !out.is_empty() {
             println!("{out}");
@@ -53,6 +54,16 @@ fn main() -> ExitCode {
             }
         },
         Some("serve") => run_serve(&args[1..]),
+        Some("root") => match root::from_cwd() {
+            Ok((root, _)) => {
+                println!("{}", root.display());
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("lun: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Some(_) => match open_app() {
             Ok(app) => cli::run(&app, &args),
             Err(e) => {
@@ -66,14 +77,14 @@ fn main() -> ExitCode {
             // can still capture `lun` output.
             use std::io::IsTerminal;
             if std::io::stdout().is_terminal() {
-                let cwd = match env::current_dir() {
-                    Ok(d) => d,
+                let root = match resolve_board() {
+                    Ok(r) => r,
                     Err(e) => {
-                        eprintln!("lun: resolving CWD: {e}");
+                        eprintln!("lun: {e}");
                         return ExitCode::FAILURE;
                     }
                 };
-                match tui::term::launch(&cwd, env!("CARGO_PKG_VERSION")) {
+                match tui::term::launch(&root, env!("CARGO_PKG_VERSION")) {
                     Ok(0) => return ExitCode::SUCCESS,
                     Ok(code) => return ExitCode::from(code as u8),
                     Err(e) => {
@@ -103,16 +114,36 @@ fn main() -> ExitCode {
     }
 }
 
-/// Open `.lun/lun.db` in the current working directory.
-fn open_app() -> Result<cli::App, String> {
-    let cwd = env::current_dir().map_err(|e| format!("resolving CWD: {e}"))?;
-    cli::App::open(&cwd).map_err(|e| e.to_string())
+/// Find the board for the current directory (here or the nearest parent),
+/// and say so on stderr when it is not the current directory, so a command
+/// never silently lands on a board the user did not expect.
+fn resolve_board() -> Result<std::path::PathBuf, String> {
+    let (root, cwd) = root::from_cwd().map_err(|e| e.to_string())?;
+    if root != cwd {
+        eprintln!("lun: using board at {}", root.display());
+    }
+    Ok(root)
 }
 
-/// `lun init`: create `.lun/lun.db` in the current working directory, run
-/// pending migrations, and print a short report. Idempotent on re-run.
+/// Open the board's `.lun/lun.db` (current directory or nearest parent).
+fn open_app() -> Result<cli::App, String> {
+    let root = resolve_board()?;
+    cli::App::open(&root).map_err(|e| e.to_string())
+}
+
+/// `lun init`: create `.lun/lun.db` in the current working directory (never
+/// a parent), run pending migrations, and print a short report. Idempotent
+/// on re-run.
 fn init_db() -> Result<(), String> {
     let cwd = env::current_dir().map_err(|e| format!("resolving CWD: {e}"))?;
+    if !root::is_board(&cwd) {
+        if let Ok((parent, _)) = root::from_cwd() {
+            eprintln!(
+                "lun init: note: {} is already a board; this creates a separate, nested board here",
+                parent.display()
+            );
+        }
+    }
     let lun = Lun::init(&cwd).map_err(|e| e.to_string())?;
     let version = lun.schema_version().map_err(|e| e.to_string())?;
 
@@ -130,17 +161,20 @@ fn print_help() {
 /// `lun serve` — Start the HTTP server + PWA.
 fn run_serve(args: &[String]) -> ExitCode {
     let bind = args.first().map(String::as_str).unwrap_or("100.71.78.78:9120");
-    let cwd = match env::current_dir() {
-        Ok(d) => d,
+    // serve never creates a board: it needs an existing one (here or the
+    // nearest parent), so a wrong working directory fails loudly.
+    let root = match root::from_cwd() {
+        Ok((root, _)) => root,
         Err(e) => {
-            eprintln!("lun: resolving CWD: {e}");
+            eprintln!("lun: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let data_dir = cwd.join(".lun");
+    let data_dir = root.join(".lun");
+    eprintln!("lun serve: board {}", root.display());
 
     // Open DB in WAL mode
-    let lun = match Lun::init(&cwd) {
+    let lun = match Lun::init(&root) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("lun: {e}");

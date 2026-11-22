@@ -62,7 +62,7 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
 ```sh
 make                      # release build -> target/release/lun
-lun init                  # create .lun/lun.db in the current directory
+lun init                  # create .lun/lun.db in the current directory (never a parent)
 lun status                # projects overview + per-project status counts
 lun                       # full-screen TUI (when run in a terminal)
 ```
@@ -84,7 +84,8 @@ lun attach open task T-003 mock.png
 ## For agents
 
 ```sh
-cd ~/repos                                  # the dir holding .lun/ (lun reads $CWD/.lun only; never `lun init` elsewhere)
+cd ~/repos                                  # any dir under the board works (nearest parent with .lun/lun.db); never `lun init` elsewhere
+lun root                                    # which board am I using?
 lun status --json                           # projects + per-status counts
 lun task ls --project "soft pack" --status review
 lun log T-014 -3 --oneline                  # just the 3 newest history entries
