@@ -53,16 +53,32 @@ something lun enforces.
 
 ## Reading state cheaply
 
+Load the least that answers the question; widen only if it does not.
+
 ```sh
+lun brief                           # session start: ONE LINE per open task (closed hidden)
+lun brief --project "soft pack" --last   # ...for one project, plus each task's newest commit message
+lun brief --status review --json    # machine-readable (key,title,status,priority,project_key,scope)
 lun status                          # one row per project, counts per status
 lun status --json                   # same, machine-readable
 lun status "soft pack" --board      # one project's board, one section per status
-lun task ls --project "soft pack" --status review
-lun task T-014                      # fields, notes, links, and the FULL history
+lun task ls --project "soft pack" --status review --scope physics
+lun task ls --fields key,status,title   # only the columns you ask for, one line per task
+lun task ls --json --fields key,status  # same as JSON (key order preserved)
 ```
 
-`lun task T-014` prints the whole history at the bottom. When you only need
-the recent past, ask the log directly:
+Reading one task:
+
+```sh
+lun task T-014 --brief              # fields, notes, links, PRs — history omitted (count only)
+lun task T-014 --log 3              # ...plus only the 3 newest history entries
+lun task T-014 --fields status,notes   # just those fields, "name: value" lines
+lun task T-014 --json --log 3       # JSON incl. links, history_count and the 3 newest entries
+lun task T-014                      # fields, notes, links, and the FULL history (largest output)
+```
+
+`--fields` takes any of `key,title,status,priority,assignee,branch,scope,labels,project,project_key,notes,created_at,updated_at,archived`
+(plus `links`, `history_count`, `history` on a single task); an unknown name is an error that lists the valid ones.
 
 ## History: pull only what you need
 
@@ -72,12 +88,17 @@ lun log T-014 --oneline             # every entry of one task, one line each
 lun log P-002 -5                    # 5 newest entries for a project (incl. its tasks)
 lun log -5 --oneline                # 5 newest entries anywhere on the board
 lun log HEAD~1                      # the 2nd-newest entry anywhere (HEAD~0 = newest)
+lun log --since 120 --oneline       # only entries with id > 120, anywhere (poll for changes)
+lun log T-014 --since 120 --json    # same for one entity, JSON (id, entity, user, action, message, details)
 lun grep "restitution"              # find tasks and commits by text
 ```
 
 `--oneline` gives one line per entry —
 `timestamp  user  ACTION  commit message | details`, e.g.
 `2026-11-22 10:20  me  UPDATE  PR #12 open | status: planning -> review`.
+With `--since` or `--json` each entry also carries its log id and entity key
+(`#121  T-014  ...`), so remember the highest id you have seen and ask for
+`--since <that id>` next time — an empty result is the cheap "nothing changed".
 Start with `-N --oneline`, and widen only if the answer is not there. Because
 the commit message is what shows up here, write `--message` text that says
 *why* the change happened.
@@ -85,8 +106,9 @@ the commit message is what shows up here, write `--message` text that says
 ## Writing
 
 ```sh
-# Create a task: answers for the four prompts on stdin
-printf 'planning\nmed\nagent-name\nopen task for X\n' | lun add task "soft pack - X" proj "soft pack"
+# Create a task with flags (no stdin prompts); unspecified ones default to planning / low / me
+lun add task "soft pack - X" proj "soft pack" --status planning --priority med --assignee agent-name --scope physics --message "open task for X"
+# (the old four-line stdin protocol still works when no flag is given)
 
 # Move it; the --message becomes the commit line in its history
 lun task T-014 --status review --message "PR #12 open for review"
@@ -94,6 +116,14 @@ lun task T-014 --status review --message "PR #12 open for review"
 # Fields (notes are markdown; [[wikilinks]] render as obsidian:// links on the web board)
 lun task edit T-014 --notes "..." --labels pr-open-needs-review --message "status note"
 lun task edit T-014 --branch fix-x --message "branch fix-x"
+
+# Append to notes instead of rewriting them (adds a blank line between entries)
+lun task edit T-014 --append-notes "2026-11-22: jobs resubmitted" --message "progress note"
+lun task edit T-014 --scope physics --message "set scope"       # --scope none clears it
+
+# Several tasks at once (comma list, no spaces): every key is resolved first, so a typo changes nothing
+lun task T-014,T-015,T-016 --status review --message "PRs open"
+lun task edit T-014,T-015 --labels pr-open-needs-review --priority high
 
 # Free-form commit entry
 lun log T-014 -m "jobs 4812331-2 submitted"
@@ -109,8 +139,10 @@ Each write prints a one- or two-line confirmation (`Updated T-014: ...` /
 
 ## Gaps to know about
 
-- `--json` works on `lun status` and `lun status <query>` only; `lun task`,
-  `lun task ls` and `lun log` reject it.
-- `scope` can be set from the web UI and the HTTP API, not from the CLI.
+- `--json` works on `lun status [query]`, `lun task <T>`, `lun task ls`, `lun log` and `lun brief`.
+  It is not available on write commands.
+- Bulk edit supports `--status --priority --assignee --labels --scope --project --append-notes --message`;
+  `--title`, `--notes` and `--branch` are per-task.
+- `lun log HEAD~N` does not combine with `--json`/`--since` (use `-N`).
 - Labels are stored and shown by `lun task`, but the web board does not
   display them.

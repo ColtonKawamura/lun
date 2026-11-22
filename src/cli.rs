@@ -38,6 +38,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::{Mutex, OnceLock};
 
+#[path = "cli_agent.rs"]
+mod agent;
+
 use crate::db::Result;
 use crate::db::{
     task_status_list, Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr,
@@ -46,7 +49,8 @@ use crate::db::{
 };
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 16] = [
+const TOP_LEVEL_COMMANDS: [&str; 17] = [
+    "brief",
     "init",
     "add",
     "task",
@@ -432,15 +436,16 @@ Usage:
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board
   lun /<name|key>         Shortcut for `lun status <name|key>`
   lun add proj \"<name>\" [--status active|inactive]  Create a project
-  lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)
+  lun add task \"<title>\" [proj \"<project>\"] [--status S --priority P --assignee A --scope S --message M]  Create a task (flags skip the prompts)
   lun move \"<task>\" \"<project>\"   Move a task to a project
-  lun task <T-00N|title>    View a task (fields, labels, history)
+  lun task <T-00N|title> [--brief | --log N] [--json] [--fields a,b]   View a task (--brief: no history; --log N: newest N entries)
+  lun brief [--project P] [--status S] [--all] [--last] [--json]   One line per open task (cheap session-start digest)
   lun task <task> --status <planning|review|waiting-on|backlog|closed>   Update task status
-  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)
-  lun task edit <task> [--field value]   Edit task fields
+  lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--scope/--sort/--all; --json, --fields a,b, --oneline)
+  lun task edit <task|T-1,T-2,...> [--field value]   Edit task fields (--append-notes TEXT, --scope S; comma list = bulk)
   lun proj <project> --status <active|inactive>   Update project status
   lun task complete|reopen|archive <task>   Update task lifecycle
-  lun log <project|task> [-N] [--oneline]   History of one project/task, newest first (-N: only the N newest)
+  lun log <project|task> [-N] [--oneline] [--json] [--since ID]   History of one project/task, newest first (-N: only the N newest)
   lun log -N | HEAD~N [--oneline]   N newest entries / the Nth-newest entry across everything
   lun log <project|task> -m \"<message>\"   Write a commit-style entry
   lun grep \"<text>\"         Search project/task fields and commit text
@@ -460,7 +465,7 @@ Usage:
   lun --help                Print this help
 
 Flags:
-  --json                    JSON output (`lun status` and `lun status <query>` only)
+  --json                    JSON output (status, task, task ls, log, brief; --fields a,b trims it)
   --message \"<msg>\"         Commit message, skipping the stdin prompt
                             (add proj, proj, move, task --status, task edit)
 
@@ -2073,7 +2078,7 @@ fn parse_sort(value: &str) -> Result<TaskSort> {
     }
 }
 
-pub fn task_list(app: &App, args: &[String]) -> Result<String> {
+pub(crate) fn parse_list_spec(app: &App, args: &[String]) -> Result<TaskListSpec> {
     let mut spec = TaskListSpec::default();
     let mut i = 0;
     while i < args.len() {
@@ -2113,6 +2118,14 @@ pub fn task_list(app: &App, args: &[String]) -> Result<String> {
                 );
                 i += 2;
             }
+            "--scope" => {
+                spec.scope = Some(
+                    args.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--scope needs a value"))?
+                        .clone(),
+                );
+                i += 2;
+            }
             "--sort" => {
                 spec.sort = parse_sort(
                     args.get(i + 1)
@@ -2128,6 +2141,11 @@ pub fn task_list(app: &App, args: &[String]) -> Result<String> {
             }
         }
     }
+    Ok(spec)
+}
+
+pub fn task_list(app: &App, args: &[String]) -> Result<String> {
+    let spec = parse_list_spec(app, args)?;
     let tasks = app.lun.list_tasks_with(&spec)?;
     let rows: Vec<Vec<String>> = tasks.iter().map(|t| task_row(&app.lun, t, true)).collect();
     let mut out = String::new();
@@ -2154,6 +2172,7 @@ pub fn task_edit(
     let task = resolve_task(&app.lun, query)?;
     let mut spec = TaskUpdateSpec::default();
     let mut explicit_message: Option<String> = None;
+    let mut append_notes: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
         let value = |i: usize, flag: &str, args: &[String]| {
@@ -2208,6 +2227,15 @@ pub fn task_edit(
                 spec.notes = Some(value(i, "--notes", args)?);
                 i += 2;
             }
+            "--append-notes" => {
+                append_notes = Some(value(i, "--append-notes", args)?);
+                i += 2;
+            }
+            "--scope" => {
+                let value = value(i, "--scope", args)?;
+                spec.scope = Some(if value == "none" { None } else { Some(value) });
+                i += 2;
+            }
             "--message" => {
                 explicit_message = Some(value(i, "--message", args)?);
                 i += 2;
@@ -2219,6 +2247,16 @@ pub fn task_edit(
                 ))
             }
         }
+    }
+    if let Some(extra) = append_notes {
+        if spec.notes.is_some() {
+            return Err(DbError::new("usage", "use either --notes or --append-notes, not both"));
+        }
+        spec.notes = Some(if task.notes.trim().is_empty() {
+            extra
+        } else {
+            format!("{}\n\n{}", task.notes.trim_end(), extra)
+        });
     }
     let default_message = format!("edit {}", task.task_key);
     spec.message = Some(read_commit_message_with_optional_override(
@@ -3112,6 +3150,9 @@ pub fn run_result_in_reader(
     root_override: Option<&Path>,
 ) -> Result<String> {
     let args = normalize_invocation_args(args.to_vec());
+    if let Some(result) = agent::try_dispatch(app, &args, stdin) {
+        return result;
+    }
     let json_output = args.iter().any(|a| a == "--json");
     // Filter --json from args before dispatch (it's a global flag)
     let filtered_args: Vec<String> = args.iter().filter(|a| *a != "--json").cloned().collect();

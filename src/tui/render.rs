@@ -1347,7 +1347,9 @@ fn paint_placeholder(buf: &mut Buffer, area: Rect, app: &App) {
 /// The command-completion overlay (bottom-anchored above the separator).
 fn paint_palette(buf: &mut Buffer, area: Rect, app: &App) {
     let sep_y = area.bottom().saturating_sub(2);
-    let available_rows = sep_y.saturating_sub(area.top()) as usize;
+    // Never paint over the top two content rows (banner / heading), however
+    // many commands there are; a longer list scrolls instead.
+    let available_rows = sep_y.saturating_sub(area.top() + 2) as usize;
     if available_rows == 0 {
         return;
     }

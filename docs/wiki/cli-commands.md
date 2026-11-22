@@ -78,6 +78,23 @@ lun task T-001 --status review --message "PR #12 open"
 lun task T-001 --status waiting-on --message "waiting on referee"
 ```
 
+### `lun brief [--project P] [--status S] [--scope S] [--all] [--last] [--json]`
+
+One line per open task (closed hidden unless `--all`/`--status closed`),
+ordered by status then priority: `T-014  review  high  P-002  title  [scope]`.
+`--last` appends each task's newest commit message. `lun status <project> --oneline` is the same view for one project.
+
+### `lun task <T> [--brief | --log N] [--json] [--fields a,b]`
+
+`--brief` omits the history section, `--log N` keeps the newest N entries,
+`--json`/`--fields` give machine-readable output (see [Agents](agents.md)).
+
+### `lun task edit <T[,T...]> --append-notes TEXT | --scope S`
+
+`--append-notes` adds to the notes instead of replacing them; `--scope none` clears the scope.
+A comma-separated list edits several tasks (status/priority/assignee/labels/scope/project/append-notes only).
+`lun task T-1,T-2 --status review` changes the status of several tasks.
+
 ### `lun task ls [filters]`
 List tasks with optional filters.
 ```sh
@@ -87,6 +104,8 @@ lun task ls --priority high
 lun task ls --assignee alice
 lun task ls --sort created_at
 lun task ls --all              # Include archived
+lun task ls --scope physics
+lun task ls --json --fields key,status   # JSON / `--fields` / `--oneline` output
 ```
 
 ### `lun task edit <task> [--field value]`
@@ -112,7 +131,10 @@ lun move T-001 "Website"
 
 ## Log System
 
-### `lun log <project|task> [-N] [--oneline]`
+### `lun log <project|task> [-N] [--oneline] [--json] [--since ID]`
+
+`--since ID` keeps only entries with a larger log id (an empty result means nothing changed); `--json` adds id and entity key.
+
 View commit-style history, newest first. `-N` keeps only the N newest
 entries, so you can look at the recent past of one task without reading all
 of it.
