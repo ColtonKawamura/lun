@@ -22,9 +22,22 @@ lun serve 127.0.0.1:8080         # Local only
 ## UI Layout
 
 ### Header
+- The `lun` logo with the board's directory next to it (`~/repos/`,
+  `~/personal-board/`; full path on hover; under the logo on narrow phones).
+  It comes from `GET /api/board`, so with several boards each tab says which
+  one it is. The label stays hidden if that call fails.
 - Project title
 - Task count
 - Search/filter buttons
+- Controls wrap onto extra rows on narrow screens instead of scrolling
+  sideways
+
+## Several boards
+Run one `lun serve` per board, each from inside that board's directory and on
+its own port (for example `~/repos` on `:9120` and `~/personal-board` on
+`:9121`). They share nothing: separate databases, separate processes, so one
+going down never affects the other. See
+[Installation](installation.md#multiple-boards).
 
 ### Board
 Five columns, left to right — the task statuses:

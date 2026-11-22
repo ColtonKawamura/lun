@@ -67,6 +67,11 @@ lun status                # projects overview + per-project status counts
 lun                       # full-screen TUI (when run in a terminal)
 ```
 
+A board is any directory that ran `lun init`, and lun finds it from anywhere
+beneath it (like git). Keep separate boards (work, personal) in separate
+directories, each with its own `lun serve <ip>:<port>`; the web header shows
+which directory it is. See [Installation](docs/wiki/installation.md#multiple-boards).
+
 Examples:
 
 ```sh

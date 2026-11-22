@@ -55,6 +55,9 @@ lun/
 
 ## API Endpoints
 
+### Board
+- `GET /api/board` — Which board this server serves: `{"root": "/Users/me/repos", "display": "~/repos/"}` (`display` is `~`-relative under `$HOME`, always with a trailing slash)
+
 ### Tasks
 - `GET /api/tasks` — List
 - `GET /api/tasks/{key}` — Get

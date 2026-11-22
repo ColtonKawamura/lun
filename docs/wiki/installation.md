@@ -63,11 +63,28 @@ lun serve 100.71.78.78:9120
 ```
 
 ### Database Location
-`.lun/lun.db` under the **current working directory**. There is no override
-variable and no parent-directory search: run `lun` (and `lun serve`) from the
-directory that holds `.lun/`. Running it anywhere else fails with
-`not-initialized ... run lun init first` — that means "wrong directory", not
-"initialize here".
+lun finds its board the way git finds a repo: `.lun/lun.db` in the **current
+directory**, otherwise in the nearest **parent** directory that has one. The
+search stops at `$HOME` (a `~/.lun` is never used), there is no override
+variable, and `lun root` prints the board in use. A command that had to walk
+up says `lun: using board at <dir>` on stderr. Outside any board, lun fails
+with `not-initialized: no lun board found ...` — that means "wrong
+directory", not "initialize here". `lun init` never walks up: it always
+creates the board in the current directory (and warns if that nests inside
+another board). `lun serve` never creates a board.
+
+### Multiple boards
+A board is just a directory that ran `lun init`, so separate boards (say work
+and personal) are separate directories, each with its own `lun serve` on its
+own port. Which board a command uses depends only on where you run it.
+
+```sh
+mkdir ~/personal-board && cd ~/personal-board && lun init
+cd ~/personal-board && lun serve 100.71.78.78:9121    # work board stays on :9120
+```
+
+Each board's web page shows its directory next to the logo (`~/repos/`,
+`~/personal-board/`) so the two are easy to tell apart.
 
 ## Uninstall
 

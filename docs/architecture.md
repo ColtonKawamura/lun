@@ -14,8 +14,10 @@
 ## Storage
 
 - **Canonical store: SQLite** (`rusqlite`), one file at `.lun/lun.db`.
-  - `.lun/` lives in the current working directory when `lun` is run (per
-    project/repo), so each tracked project gets its own database.
+  - `.lun/` lives in a board directory: lun uses the current directory's
+    `.lun/lun.db`, else the nearest parent's (git-style, stopping at
+    `$HOME`; `lun root` prints it). Separate boards are separate directories,
+    each with its own database and its own `lun serve`.
   - DB files, journals, and attachment copies are gitignored.
 - **Markdown is a view, not a source of truth.** CLI and TUI render
   markdown-like text to the terminal, but every value comes from the DB.
