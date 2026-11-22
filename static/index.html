@@ -1290,7 +1290,13 @@ function scrollLinkIntoView() {
 function openCurrentLink() {
   const items = document.querySelectorAll('#linksList .link-item a');
   const a = items[linkIndex];
-  if (a) window.open(a.href, '_blank', 'noopener');
+  if (!a) return;
+  // Custom-scheme links (hermes://, obsidian://) are handed to the OS. A
+  // window.open('_blank') for those leaves an empty Safari tab behind, which a
+  // mouse click doesn't. Navigating the current page opens no tab at all, and
+  // the page stays put because the navigation becomes an app hand-off.
+  if (/^https?:/i.test(a.href)) window.open(a.href, '_blank', 'noopener');
+  else window.location.href = a.href;
 }
 function getModalField(idx) {
   const id = modalFields[idx];
