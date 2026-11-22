@@ -25,6 +25,9 @@ test:
 
 install: release
 	@mkdir -p "$(PREFIX)/bin"
+	@# Unlink first: copying over the existing file in place keeps its inode,
+	@# and macOS then SIGKILLs the new binary (stale code-signature cache).
+	@rm -f "$(PREFIX)/bin/$(BIN)"
 	@cp target/release/$(BIN) "$(PREFIX)/bin/$(BIN)"
 	@echo "installed $(BIN) to $(PREFIX)/bin/$(BIN)"
 	@if command -v $(BIN) >/dev/null 2>&1; then \
