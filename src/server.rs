@@ -45,6 +45,8 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}/unarchive", post(unarchive_task))
         .route("/api/tasks/{key}/logs", get(task_logs))
         .route("/api/tasks/{key}/logs", post(add_task_log))
+        .route("/api/projects/{key}/logs", get(project_logs))
+        .route("/api/projects/{key}/logs", post(add_project_log))
         .route("/api/tasks/{key}/attachments", get(task_attachments))
         .route("/api/tasks/{key}/attachments", post(upload_attachment))
         .route("/api/tasks/{key}/links", get(task_links))
@@ -297,6 +299,35 @@ async fn add_task_log(
         return api_err(StatusCode::BAD_REQUEST, "message is empty");
     }
     let id = match lun.log("task", task.id, "COMMIT", &body.message, "{}", Some("web")) {
+        Ok(id) => id, Err(e) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response()
+}
+
+async fn project_logs(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let project = match lun.project_by_key(&key) {
+        Ok(p) => p, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.project_logs(project.id) {
+        Ok(l) => Json(l).into_response(),
+        Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn add_project_log(
+    state: State<Arc<ServerState>>,
+    Path(key): Path<String>,
+    Json(body): Json<LogMessage>,
+) -> Response {
+    let lun = state.lun.lock().await;
+    let project = match lun.project_by_key(&key) {
+        Ok(p) => p, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    if body.message.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "message is empty");
+    }
+    let id = match lun.log("project", project.id, "COMMIT", &body.message, "{}", Some("web")) {
         Ok(id) => id, Err(e) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response()

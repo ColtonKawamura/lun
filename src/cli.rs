@@ -1431,16 +1431,20 @@ pub fn log_command(app: &App, args: &[String]) -> Result<String> {
             oneline = true;
         } else if arg == "-m" {
             // Write mode: entity is the arg before -m, message is the arg after
-            let msg = args
-                .iter()
-                .skip_while(|a| *a != &"-m")
-                .nth(1)
-                .ok_or_else(|| DbError::new("usage", "expected: lun log <entity> -m \"message\""))?;
-            let entity = args
+            let pos = args
                 .iter()
                 .position(|a| *a == "-m")
-                .and_then(|pos| args.get(pos - 1))
                 .ok_or_else(|| DbError::new("usage", "expected: lun log <entity> -m \"message\""))?;
+            if pos == 0 {
+                return Err(DbError::new(
+                    "usage",
+                    "expected: lun log <entity> -m \"message\" (entity required before -m)",
+                ));
+            }
+            let msg = args.get(pos + 1).ok_or_else(|| {
+                DbError::new("usage", "expected: lun log <entity> -m \"message\"")
+            })?;
+            let entity = &args[pos - 1];
             return log_write(app, entity, msg);
         } else {
             positional.push(arg);

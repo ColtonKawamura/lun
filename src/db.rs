@@ -2237,6 +2237,14 @@ impl Lun {
         self.logs_for("task", task_id)
     }
 
+    /// Logs for a single project (including task logs within it).
+    pub fn project_logs(&self, project_id: i64) -> Result<Vec<LogEntry>> {
+        let mut all = self.logs_for("project", project_id)?;
+        all.extend(self.logs_for_project(project_id)?);
+        all.sort_by(|a, b| b.id.cmp(&a.id));
+        Ok(all)
+    }
+
     /// Attachments for a single task.
     pub fn task_attachments(&self, task_id: i64) -> Result<Vec<Attachment>> {
         self.attachments_for_task(task_id)
