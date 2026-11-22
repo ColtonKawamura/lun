@@ -140,6 +140,18 @@ Get all log entries.
 ]
 ```
 
+### POST /api/projects/{key}/logs
+Add a log entry to a project (same as task logs).
+
+```json
+{
+  "message": "Project update"
+}
+```
+
+### GET /api/projects/{key}/logs
+Get all log entries for a project (includes project and task logs).
+
 ## Automatic Logs
 
 The following actions automatically create log entries:
@@ -215,3 +227,36 @@ lun log P-001 | head -n 10
 - Logs are permanent and cannot be deleted
 - Use `--json` for scripting
 - Math renders in web UI and TUI, not CLI (CLI shows raw text)
+
+## Edge Cases
+
+### CLI
+
+| Command | Behavior |
+|---------|----------|
+| `lun log -0` | Shows "No logs found" |
+| `lun log -100` | Shows all available logs (no error) |
+| `lun log HEAD~0` | Same as latest log |
+| `lun log HEAD~999` | Error: "HEAD~999 is beyond the log history" |
+| `lun log HEAD~` | Error: "'HEAD~' is not valid HEAD~N" |
+| `lun log HEAD~-1` | Error: "'HEAD~-1' is not valid HEAD~N" |
+| `lun log -abc` | Error: "'-abc' is not a valid number" |
+| `lun log -m "msg"` | Error: entity required before -m |
+| `lun log T-999` | Error: task not found |
+| `lun log T-001 -m ""` | Creates empty log (allowed) |
+| `lun log T-001 -m "<script>..."` | Stored as-is (CLI shows raw) |
+
+### Web UI
+
+- Empty log message: Rejected (400 Bad Request)
+- XSS attempts: HTML entities escaped (`<script>` → `&lt;script&gt;`)
+- Math rendering: KaTeX renders `$...$` and `$$...$$` delimiters
+- Very long messages: Accepted (tested up to 10000 chars)
+- Unicode/emoji: Accepted and displayed correctly
+
+### API
+
+- `POST /api/tasks/{key}/logs` with empty message: `400 Bad Request`
+- `POST /api/tasks/{key}/logs` with XSS: HTML escaped in response
+- `POST /api/projects/{key}/logs`: Works same as task logs
+- Non-existent task/project: `404 Not Found`

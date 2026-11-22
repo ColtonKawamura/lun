@@ -90,7 +90,10 @@ Fields:
 - `POST /api/tasks/{key}/unarchive` — Unarchive task
 
 ### Logs
-- `GET /api/tasks/{key}/logs` — Get logs
+- `GET /api/tasks/{key}/logs` — Get task logs
+- `POST /api/tasks/{key}/logs` — Add task log
+- `GET /api/projects/{key}/logs` — Get project logs (includes task logs)
+- `POST /api/projects/{key}/logs` — Add project log
 
 ### Attachments
 - `GET /api/tasks/{key}/attachments` — List attachments
