@@ -15,7 +15,7 @@ use mime_guess::from_path;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::db::{Lun, TaskSpec, TaskUpdateSpec, TaskListSpec, TaskSort, Attachment, ProjectSpec};
+use crate::db::{LinkTarget, Lun, TaskSpec, TaskUpdateSpec, TaskListSpec, TaskSort, Attachment, ProjectSpec};
 
 use pulldown_cmark::{Event, Options as MdOptions, Tag};
 
@@ -50,6 +50,8 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}/attachments", get(task_attachments))
         .route("/api/tasks/{key}/attachments", post(upload_attachment))
         .route("/api/tasks/{key}/links", get(task_links))
+        .route("/api/tasks/{key}/links/restore", post(restore_task_link))
+        .route("/api/tasks/{key}/links/{id}/delete", post(delete_task_link))
         .route("/api/tasks/{key}/prs", get(task_prs))
         .route("/api/scopes", get(list_scopes))
         .route("/api/markdown/preview", post(markdown_preview))
@@ -388,6 +390,37 @@ async fn task_links(state: State<Arc<ServerState>>, Path(key): Path<String>) -> 
     };
     match lun.task_links(task.id) {
         Ok(l) => Json(l).into_response(),
+        Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn delete_task_link(
+    state: State<Arc<ServerState>>,
+    Path((key, id)): Path<(String, i64)>,
+) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.task_links(task.id) {
+        Ok(l) if l.iter().any(|x| x.id == id) => {}
+        Ok(_) => return api_err(StatusCode::NOT_FOUND, "link not on this task"),
+        Err(e) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+    match lun.delete_link(id, Some("web")) {
+        Ok(l) => Json(l).into_response(),
+        Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn restore_task_link(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.restore_last_link(LinkTarget::Task(task.id), Some("web")) {
+        Ok(Some(l)) => Json(l).into_response(),
+        Ok(None) => api_err(StatusCode::NOT_FOUND, "no deleted link to restore"),
         Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

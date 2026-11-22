@@ -1872,10 +1872,89 @@ impl Lun {
             entity_id,
             "LINK",
             &message,
-            &format!("{{\"label\": \"{}\", \"uri\": \"{}\"}}", label, uri),
+            &serde_json::json!({"label": label, "uri": uri}).to_string(),
             Some(user),
         )?;
         Ok(id)
+    }
+
+    /// Delete a link. Writes an `UNLINK` log entry on the owning task/project
+    /// that carries the label and uri, so the link can be restored later.
+    pub fn delete_link(&self, link_id: i64, user: Option<&str>) -> Result<Link> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let link = self
+            .conn
+            .query_row(
+                "SELECT id, task_id, project_id, label, uri, created_at FROM links WHERE id = ?1",
+                [link_id],
+                Self::link_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("link {link_id}: {e}")))?;
+        let (entity_type, entity_id) = match (link.task_id, link.project_id) {
+            (Some(t), _) => ("task", t),
+            (_, Some(p)) => ("project", p),
+            _ => return Err(DbError::new("db", "link has no owner")),
+        };
+        self.conn.execute("DELETE FROM links WHERE id = ?1", [link_id])?;
+        let details = serde_json::json!({"label": link.label, "uri": link.uri}).to_string();
+        self.log(
+            entity_type,
+            entity_id,
+            "UNLINK",
+            &format!("unlinked \"{}\" ({}) from {entity_type} #{entity_id}", link.label, link.uri),
+            &details,
+            Some(user),
+        )?;
+        Ok(link)
+    }
+
+    /// Restore the most recently deleted link of a task/project that has not
+    /// been re-added since (an `UNLINK` log entry with no later `LINK` for the
+    /// same uri). Returns `None` when there is nothing to restore.
+    pub fn restore_last_link(
+        &self,
+        target: LinkTarget,
+        user: Option<&str>,
+    ) -> Result<Option<Link>> {
+        let (entity_type, entity_id) = match target {
+            LinkTarget::Task(t) => ("task", t),
+            LinkTarget::Project(p) => ("project", p),
+        };
+        // Newest first.
+        let logs = self.logs_for(entity_type, entity_id)?;
+        let parse = |d: &str| -> Option<(String, String)> {
+            let v: serde_json::Value = serde_json::from_str(d).ok()?;
+            Some((v.get("label")?.as_str()?.to_string(), v.get("uri")?.as_str()?.to_string()))
+        };
+        // uri -> number of LINK entries seen newer than the log row under
+        // inspection; each one cancels out one older UNLINK for that uri.
+        let mut readded: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for entry in &logs {
+            let Some((label, uri)) = parse(&entry.details) else { continue };
+            match entry.action.as_str() {
+                "LINK" => *readded.entry(uri).or_insert(0) += 1,
+                "UNLINK" => {
+                    let n = readded.entry(uri.clone()).or_insert(0);
+                    if *n > 0 {
+                        *n -= 1;
+                        continue;
+                    }
+                    let message = format!("restored link \"{label}\" ({uri}) to {entity_type} #{entity_id}");
+                    let id = self.add_link(target, &label, &uri, Some(&message), user)?;
+                    let link = self
+                        .conn
+                        .query_row(
+                            "SELECT id, task_id, project_id, label, uri, created_at FROM links WHERE id = ?1",
+                            [id],
+                            Self::link_from_row,
+                        )
+                        .map_err(|e| DbError::new("db", format!("reading restored link: {e}")))?;
+                    return Ok(Some(link));
+                }
+                _ => {}
+            }
+        }
+        Ok(None)
     }
 
     /// List attachments recorded for a task, oldest first.

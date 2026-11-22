@@ -875,6 +875,8 @@ let modalFieldIndex = 0;
 let linkIndex = 0;
 let zBuffer = false;
 let zBufferTimer = null;
+let dBuffer = false;
+let dBufferTimer = null;
 let modalInsertMode = false;
 const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'linksSection', 'editNotes', 'logMessageInput'];
 
@@ -1298,6 +1300,27 @@ function openCurrentLink() {
   if (/^https?:/i.test(a.href)) window.open(a.href, '_blank', 'noopener');
   else window.location.href = a.href;
 }
+async function deleteCurrentLink() {
+  const d = document.querySelectorAll('#linksList .link-item')[linkIndex];
+  if (!d || !editingTask) return;
+  const res = await fetch(`/api/tasks/${editingTask}/links/${d.dataset.id}/delete`, { method: 'POST' });
+  if (!res.ok) return;
+  await loadTaskDetails(editingTask);
+  if (!document.querySelectorAll('#linksList .link-item').length) modalFieldIndex = modalStep(1);
+  highlightModalField(modalFieldIndex);
+}
+async function restoreLink() {
+  if (!editingTask) return;
+  const res = await fetch(`/api/tasks/${editingTask}/links/restore`, { method: 'POST' });
+  if (!res.ok) return;
+  await loadTaskDetails(editingTask);
+  // Land on the restored link (it is appended last).
+  modalFieldIndex = modalFields.indexOf('linksSection');
+  linkIndex = Math.max(0, document.querySelectorAll('#linksList .link-item').length - 1);
+  highlightModalField(modalFieldIndex);
+  updateLinkHighlight();
+  scrollLinkIntoView();
+}
 function getModalField(idx) {
   const id = modalFields[idx];
   return document.getElementById(id);
@@ -1358,7 +1381,7 @@ async function loadTaskDetails(key) {
     document.getElementById('linksSection').style.display = links.length ? 'block' : 'none';
     linkIndex = Math.min(linkIndex, Math.max(0, links.length - 1));
     document.getElementById('linksList').innerHTML = links.map(l =>
-      `<div class="link-item"><a href="${escapeHtml(l.uri)}" target="_blank">${escapeHtml(l.label || l.uri)}</a></div>`
+      `<div class="link-item" data-id="${l.id}"><a href="${escapeHtml(l.uri)}" target="_blank">${escapeHtml(l.label || l.uri)}</a></div>`
     ).join('');
   } catch(e) {
     document.getElementById('linksSection').style.display = 'none';
@@ -1673,6 +1696,24 @@ function handleKeyboard(e) {
       return;
     }
     const onLinks = modalFields[modalFieldIndex] === 'linksSection';
+    // dd deletes the selected link; u restores the most recently deleted one.
+    if (dBuffer && !e.ctrlKey && !e.metaKey) {
+      dBuffer = false;
+      clearTimeout(dBufferTimer);
+      if (e.key === 'd' && onLinks) { e.preventDefault(); deleteCurrentLink(); return; }
+    }
+    if (e.key === 'd' && onLinks && !e.ctrlKey && !e.metaKey) {
+      e.preventDefault();
+      dBuffer = true;
+      clearTimeout(dBufferTimer);
+      dBufferTimer = setTimeout(() => { dBuffer = false; }, 800);
+      return;
+    }
+    if (e.key === 'u' && !e.ctrlKey && !e.metaKey && !isInput) {
+      e.preventDefault();
+      restoreLink();
+      return;
+    }
     const nLinks = document.querySelectorAll('#linksList .link-item').length;
     if (e.key === 'j' || e.key === 'ArrowDown') {
       e.preventDefault();
