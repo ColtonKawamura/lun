@@ -1589,6 +1589,36 @@ impl Lun {
         })
     }
 
+    /// All log entries across all entities, newest first.
+    pub fn list_all_logs(&self) -> Result<Vec<LogEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, entity_type, entity_id, timestamp, user, action, message, details
+             FROM logs ORDER BY id DESC",
+        )?;
+        let rows = stmt
+            .query_map([], Self::log_from_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Insert a log entry. Returns the new row id.
+    pub fn insert_log(
+        &self,
+        entity_type: &str,
+        entity_id: i64,
+        user: &str,
+        action: &str,
+        message: &str,
+        details: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO logs (entity_type, entity_id, timestamp, user, action, message, details)
+             VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?3, ?4, ?5, ?6)",
+            params![entity_type, entity_id, user, action, message, details],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
     /// Row id of the seeded P-000 "Unassigned" project.
     pub fn unassigned_project_id(&self) -> Result<i64> {
         self.conn

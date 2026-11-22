@@ -858,6 +858,23 @@ pub fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
     lines
 }
 
+/// Single-line format like `git log --oneline`:
+/// `TIMESTAMP  USER  ACTION  message`
+pub fn log_oneline_line(entry: &LogEntry) -> String {
+    let detail = entry_inline_details(entry);
+    let extra = match detail {
+        Some(d) if !d.is_empty() => format!(" | {d}"),
+        _ => String::new(),
+    };
+    format!(
+        "{}  {}  {}{}",
+        display_ts(&entry.timestamp),
+        entry.user,
+        entry.action,
+        extra
+    )
+}
+
 /// Lines for `lun log <project>` (plan "Logs for projects" format): the
 /// commit message IS the line, with a compact detail line under it.
 /// `pub` so the TUI's log view (Phase 6) renders the identical lines.
@@ -1395,8 +1412,141 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     Ok(out)
 }
 
+/// `lun log [-N | HEAD~N | <entity> [-m "message"]] [--oneline]`
+///
+/// Parses args and dispatches to the right handler.
+pub fn log_command(app: &App, args: &[String]) -> Result<String> {
+    if args.is_empty() {
+        return Err(DbError::new(
+            "usage",
+            "expected: lun log <project|task> [-m \"message\"] | lun log -N | lun log HEAD~N",
+        ));
+    }
+
+    let mut oneline = false;
+    let mut positional: Vec<&String> = Vec::new();
+
+    for arg in args {
+        if arg == "--oneline" {
+            oneline = true;
+        } else if arg == "-m" {
+            // Write mode: entity is the arg before -m, message is the arg after
+            let msg = args
+                .iter()
+                .skip_while(|a| *a != &"-m")
+                .nth(1)
+                .ok_or_else(|| DbError::new("usage", "expected: lun log <entity> -m \"message\""))?;
+            let entity = args
+                .iter()
+                .position(|a| *a == "-m")
+                .and_then(|pos| args.get(pos - 1))
+                .ok_or_else(|| DbError::new("usage", "expected: lun log <entity> -m \"message\""))?;
+            return log_write(app, entity, msg);
+        } else {
+            positional.push(arg);
+        }
+    }
+
+    if positional.is_empty() {
+        return Err(DbError::new(
+            "usage",
+            "expected: lun log <project|task> [-m \"message\"] | lun log -N | lun log HEAD~N",
+        ));
+    }
+
+    let first = positional[0];
+
+    // -N: last N logs across all entities
+    if first.starts_with('-') {
+        let n = first
+            .trim_start_matches('-')
+            .parse::<usize>()
+            .map_err(|_| DbError::new("usage", format!("'{}' is not a valid number", first)))?;
+        return log_last_n(app, n, oneline);
+    }
+
+    // HEAD~N: Nth most recent (HEAD~1 = 2nd most recent, HEAD~2 = 3rd, etc.)
+    if first.starts_with("HEAD~") {
+        let n = first
+            .trim_start_matches("HEAD~")
+            .parse::<usize>()
+            .map_err(|_| DbError::new("usage", format!("'{}' is not valid HEAD~N", first)))?;
+        return log_head_n(app, n, oneline);
+    }
+
+    // Regular entity query
+    log_view(app, first, oneline)
+}
+
+/// Show last N log entries across all entities.
+fn log_last_n(app: &App, n: usize, oneline: bool) -> Result<String> {
+    let logs = app.lun.list_all_logs()?;
+    let entries: Vec<&LogEntry> = logs.iter().take(n).collect();
+
+    if entries.is_empty() {
+        return Ok("No logs found.".to_string());
+    }
+
+    let mut out = String::new();
+    for entry in entries {
+        if oneline {
+            out.push_str(&format!("{}\n", log_oneline_line(entry)));
+        } else {
+            let lines = task_log_entry_lines(entry);
+            for line in lines {
+                out.push_str(&format!("{}\n", line));
+            }
+            out.push('\n');
+        }
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// Show the Nth most recent log.
+/// HEAD~1 = 2nd most recent, HEAD~2 = 3rd, etc.
+fn log_head_n(app: &App, n: usize, oneline: bool) -> Result<String> {
+    let logs = app.lun.list_all_logs()?;
+    let entry = logs.iter().nth(n).ok_or_else(|| {
+        DbError::new("not-found", format!("HEAD~{} is beyond the log history", n))
+    })?;
+
+    if oneline {
+        return Ok(format!("{}", log_oneline_line(entry)));
+    }
+
+    let lines = task_log_entry_lines(entry);
+    let mut out = String::new();
+    for line in lines {
+        out.push_str(&format!("{}\n", line));
+    }
+    Ok(out.trim_end().to_string())
+}
+
+/// Write a log entry for an entity.
+fn log_write(app: &App, entity: &str, message: &str) -> Result<String> {
+    let resolved = resolve_entity(&app.lun, entity)?;
+    let (entity_type, entity_id, key) = match resolved {
+        Entity::Project(p) => ("project", p.id, p.project_key),
+        Entity::Task(t) => ("task", t.id, t.task_key),
+    };
+
+    let log_id = app.lun.insert_log(
+        entity_type,
+        entity_id,
+        "me",
+        "COMMIT",
+        message,
+        "{}",
+    )?;
+
+    Ok(format!(
+        "Log #{} committed to {}: {}",
+        log_id, key, message
+    ))
+}
+
 /// `lun log <project|task>` — commit-style history, newest first.
-pub fn log_view(app: &App, query: &str) -> Result<String> {
+pub fn log_view(app: &App, query: &str, oneline: bool) -> Result<String> {
     let entity = resolve_entity(&app.lun, query)?;
     let entries: Vec<LogEntry> = match entity {
         Entity::Project(p) => {
@@ -1410,11 +1560,15 @@ pub fn log_view(app: &App, query: &str) -> Result<String> {
 
     let mut out = String::new();
     for e in &entries {
-        let lines = task_view_entry_lines(e);
-        for line in lines {
-            out.push_str(&format!("{line}\n"));
+        if oneline {
+            out.push_str(&format!("{}\n", log_oneline_line(e)));
+        } else {
+            let lines = task_view_entry_lines(e);
+            for line in lines {
+                out.push_str(&format!("{line}\n"));
+            }
+            out.push('\n');
         }
-        out.push('\n');
     }
     Ok(out.trim_end().to_string())
 }
@@ -3141,10 +3295,7 @@ pub fn run_result_in_reader(
                 "expected: lun task <key|title> [--status ...] | task ls | task edit | task complete | task reopen | task archive",
             )),
         },
-        Some("log") => match args.get(1) {
-            Some(q) => log_view(app, q),
-            None => Err(DbError::new("usage", "expected: lun log <project|task>")),
-        },
+        Some("log") => log_command(app, &args[1..]),
         Some("grep") => match args.get(1) {
             Some(q) => grep_view(app, q),
             None => Err(DbError::new("usage", "expected: lun grep <text>")),
