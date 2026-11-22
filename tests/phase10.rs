@@ -172,7 +172,7 @@ fn fresh_init_reaches_current_schema_with_all_tables() {
     let root = temp_root("fresh");
     let _lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 8);
+    assert_eq!(schema_version(&conn), 9);
     assert_eq!(
         table_count(
             &conn,
@@ -210,7 +210,7 @@ fn fresh_init_reaches_current_schema_with_all_tables() {
         )
         .unwrap();
     assert_eq!(task_cols, 1);
-    assert_eq!(lun::db::CURRENT_VERSION, 8);
+    assert_eq!(lun::db::CURRENT_VERSION, 9);
     let migration_rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM migrations", [], |r| r.get(0))
         .unwrap();
@@ -240,7 +240,7 @@ fn binary_init_in_empty_directory_creates_database() {
     assert!(root.join(".lun/lun.db").exists());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("lun init: .lun/lun.db ready (schema v8)"),
+        stdout.contains("lun init: .lun/lun.db ready (schema v9)"),
         "stdout:\n{stdout}"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -258,7 +258,7 @@ fn v1_database_upgrades_to_current_with_data_preserved() {
     // `lun init` on the existing directory must run the pending migrations in one shot.
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 8);
+    assert_eq!(schema_version(&conn), 9);
     // Debug: print actual column order
     let cols: Vec<String> = conn.prepare("PRAGMA table_info(tasks)").unwrap()
         .query_map([], |r| r.get::<_, String>(1)).unwrap()
@@ -277,7 +277,7 @@ fn v1_database_upgrades_to_current_with_data_preserved() {
             r.get(0)
         })
         .unwrap();
-    assert_eq!(status, "doing", "legacy task status is normalized");
+    assert_eq!(status, "planning", "legacy task status is normalized");
     let notes: String = conn
         .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
             r.get(0)
@@ -308,7 +308,7 @@ fn v2_database_upgrades_to_current_preserving_notes() {
     }
     let lun = Lun::init(&root).unwrap();
     let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
-    assert_eq!(schema_version(&conn), 8);
+    assert_eq!(schema_version(&conn), 9);
     let notes: String = conn
         .query_row("SELECT notes FROM tasks WHERE task_key='T-001'", [], |r| {
             r.get(0)

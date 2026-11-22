@@ -48,7 +48,7 @@ fn fixture() -> (PathBuf, CliApp, App) {
     lun.create_task(TaskSpec {
         title: "write methods".into(),
         project: Some(project.id),
-        status: Some("doing".into()),
+        status: Some("review".into()),
         priority: Some("med".into()),
         assignee: Some("me".into()),
         branch: None,

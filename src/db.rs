@@ -13,7 +13,43 @@ use rusqlite::{params, types::Value, Connection};
 use serde::Serialize;
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 8;
+pub const CURRENT_VERSION: i64 = 9;
+
+/// Task statuses, in board-column order (schema v9). These mirror Colton's
+/// Obsidian kanban stages: `planning` (scope being worked out), `review`
+/// (back with results / a PR / a decision), `waiting-on` (out with people or
+/// an external process), `backlog`, and `closed`.
+pub const TASK_STATUSES: [&str; 5] = ["planning", "review", "waiting-on", "backlog", "closed"];
+
+/// Status a new task starts in.
+pub const DEFAULT_TASK_STATUS: &str = "planning";
+
+/// Status `complete`, `pr merge`, and the "done" shortcuts move a task to.
+pub const CLOSED_TASK_STATUS: &str = "closed";
+
+/// Map a user-typed status (including the pre-v9 names) onto a v9 status.
+/// Unknown values pass through unchanged so validation can reject them.
+pub fn normalize_task_status(status: &str) -> String {
+    let status = status.trim().to_ascii_lowercase();
+    match status.as_str() {
+        "todo" | "doing" | "in-progress" | "open" => "planning".to_string(),
+        "follow-up" | "followup" => "review".to_string(),
+        "blocked" | "waiting" | "waiting-on" | "waitingon" => "waiting-on".to_string(),
+        "done" | "complete" | "completed" => "closed".to_string(),
+        _ => status,
+    }
+}
+
+/// Is `status` one of the v9 task statuses (after normalization)?
+pub fn is_task_status(status: &str) -> bool {
+    TASK_STATUSES.contains(&status)
+}
+
+/// Human-readable list for error messages: "planning, review, ... or closed".
+pub fn task_status_list() -> String {
+    let (last, rest) = TASK_STATUSES.split_last().expect("non-empty");
+    format!("{}, or {}", rest.join(", "), last)
+}
 
 /// Default actor for log entries (Phase 2 has no user-profile table yet).
 const DEFAULT_USER: &str = "me";
@@ -107,7 +143,7 @@ pub struct TaskSpec {
     pub title: String,
     /// Project the task belongs to; `None` falls back to P-000 "Unassigned".
     pub project: Option<i64>,
-    /// `todo`, `doing`, `follow-up`, `blocked`, or `done`. Defaults to `todo`.
+    /// `planning`, `review`, `waiting-on`, `backlog`, or `closed`. Defaults to `planning`.
     pub status: Option<String>,
     /// `low`, `med`, `high`. Defaults to `low`.
     pub priority: Option<String>,
@@ -256,11 +292,7 @@ impl Lun {
     }
 
     fn normalize_task_status(status: &str) -> String {
-        match status {
-            "in-progress" => "doing".to_string(),
-            "review" => "follow-up".to_string(),
-            other => other.to_string(),
-        }
+        normalize_task_status(status)
     }
 
     fn validate_project_status(status: &str) -> Result<()> {
@@ -275,14 +307,12 @@ impl Lun {
     }
 
     fn validate_task_status(status: &str) -> Result<()> {
-        if matches!(status, "todo" | "doing" | "follow-up" | "blocked" | "done") {
+        if is_task_status(status) {
             Ok(())
         } else {
             Err(DbError::new(
                 "invalid",
-                format!(
-                    "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
-                ),
+                format!("invalid status '{status}' (expected {})", task_status_list()),
             ))
         }
     }
@@ -353,8 +383,8 @@ impl Lun {
                 task_key    TEXT NOT NULL UNIQUE,
                 project_id  INTEGER REFERENCES projects(id),
                 title       TEXT NOT NULL,
-                status      TEXT NOT NULL DEFAULT 'todo'
-                           CHECK (status IN ('todo', 'doing', 'follow-up', 'blocked', 'done')),
+                status      TEXT NOT NULL DEFAULT 'planning'
+                           CHECK (status IN ('planning', 'review', 'waiting-on', 'backlog', 'closed')),
                 priority    TEXT NOT NULL DEFAULT 'low'
                            CHECK (priority IN ('low', 'med', 'high')),
                 assignee    TEXT,
@@ -417,7 +447,7 @@ impl Lun {
                      'seed P-000 \"Unassigned\" project',
                      '{\"seed\": true}');
              INSERT INTO migrations (version, applied_at)
-                 VALUES (8, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+                 VALUES (9, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
         )?;
         Ok(())
     }
@@ -770,6 +800,10 @@ impl Lun {
                     [],
                 )?;
             }
+
+            if version < 9 {
+                Self::migrate_v9_obsidian_stages(conn)?;
+            }
         }
 
         let version: i64 = conn.query_row(
@@ -784,6 +818,73 @@ impl Lun {
             ));
         }
         Ok(())
+    }
+
+    /// v9: task statuses become Colton's Obsidian kanban stages
+    /// (`planning`, `review`, `waiting-on`, `backlog`, `closed`).
+    ///
+    /// SQLite cannot alter a CHECK constraint, so `tasks` is rebuilt with the
+    /// documented 12-step procedure: foreign keys off, copy into a new table
+    /// with the new CHECK, drop the old one, rename, check FKs, foreign keys
+    /// back on. Old values map `todo`/`doing` -> `planning`,
+    /// `follow-up` -> `review`, `blocked` -> `waiting-on`, `done` -> `closed`.
+    fn migrate_v9_obsidian_stages(conn: &mut Connection) -> Result<()> {
+        conn.pragma_update(None, "foreign_keys", "OFF")?;
+        let result = (|| -> Result<()> {
+            let tx = conn.transaction()?;
+            tx.execute_batch(
+                "CREATE TABLE tasks_v9 (
+                    id          INTEGER PRIMARY KEY,
+                    task_key    TEXT NOT NULL UNIQUE,
+                    project_id  INTEGER REFERENCES projects(id),
+                    title       TEXT NOT NULL,
+                    status      TEXT NOT NULL DEFAULT 'planning'
+                               CHECK (status IN ('planning', 'review', 'waiting-on', 'backlog', 'closed')),
+                    priority    TEXT NOT NULL DEFAULT 'low'
+                               CHECK (priority IN ('low', 'med', 'high')),
+                    assignee    TEXT,
+                    branch      TEXT,
+                    labels      TEXT NOT NULL DEFAULT '[]',
+                    scope       TEXT,
+                    notes       TEXT NOT NULL DEFAULT '',
+                    position    INTEGER,
+                    created_at  TEXT NOT NULL,
+                    updated_at  TEXT NOT NULL,
+                    archived_at TEXT
+                 );
+                 INSERT INTO tasks_v9 (id, task_key, project_id, title, status, priority,
+                                       assignee, branch, labels, scope, notes, position,
+                                       created_at, updated_at, archived_at)
+                 SELECT id, task_key, project_id, title,
+                        CASE status
+                            WHEN 'todo'      THEN 'planning'
+                            WHEN 'doing'     THEN 'planning'
+                            WHEN 'follow-up' THEN 'review'
+                            WHEN 'blocked'   THEN 'waiting-on'
+                            WHEN 'done'      THEN 'closed'
+                            ELSE status
+                        END,
+                        priority, assignee, branch, labels, scope, notes, position,
+                        created_at, updated_at, archived_at
+                   FROM tasks;
+                 DROP TABLE tasks;
+                 ALTER TABLE tasks_v9 RENAME TO tasks;
+                 INSERT INTO migrations (version, applied_at)
+                     VALUES (9, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+            )?;
+            let fk_violations: i64 =
+                tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
+            if fk_violations != 0 {
+                return Err(DbError::new(
+                    "migration",
+                    format!("v9: {fk_violations} foreign-key violations after rebuilding tasks"),
+                ));
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        result
     }
 
     pub fn now() -> String {
@@ -967,7 +1068,7 @@ impl Lun {
     /// Writes a `CREATE` log entry.
     pub fn create_task(&self, spec: TaskSpec) -> Result<Task> {
         let user = spec.user.as_deref().unwrap_or(DEFAULT_USER);
-        let status = Self::normalize_task_status(spec.status.as_deref().unwrap_or("todo"));
+        let status = Self::normalize_task_status(spec.status.as_deref().unwrap_or(DEFAULT_TASK_STATUS));
         Self::validate_task_status(&status)?;
         let priority = spec.priority.unwrap_or_else(|| "low".to_string());
         let labels = spec.labels.unwrap_or_else(|| "[]".to_string());
@@ -1071,7 +1172,7 @@ impl Lun {
         }
         if let Some(status) = &spec.status {
             clauses.push("status = ?".to_string());
-            values.push(Value::Text(status.clone()));
+            values.push(Value::Text(normalize_task_status(status)));
         }
         if let Some(priority) = &spec.priority {
             clauses.push("priority = ?".to_string());
@@ -1093,10 +1194,10 @@ impl Lun {
         sql.push_str(match spec.sort {
             TaskSort::Key => "task_key ASC",
             TaskSort::Title => "title ASC, task_key ASC",
-            TaskSort::Status => "status ASC, task_key ASC",
+            TaskSort::Status => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, task_key ASC",
             TaskSort::Priority => "priority ASC, task_key ASC",
             TaskSort::Updated => "updated_at DESC, task_key ASC",
-            TaskSort::Board => "CASE status WHEN 'todo' THEN 0 WHEN 'doing' THEN 1 WHEN 'follow-up' THEN 2 WHEN 'blocked' THEN 3 WHEN 'done' THEN 4 END, COALESCE(position, id) ASC, task_key ASC",
+            TaskSort::Board => "CASE status WHEN 'planning' THEN 0 WHEN 'review' THEN 1 WHEN 'waiting-on' THEN 2 WHEN 'backlog' THEN 3 WHEN 'closed' THEN 4 END, COALESCE(position, id) ASC, task_key ASC",
         });
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt
@@ -1406,7 +1507,7 @@ impl Lun {
         self.update_task(
             task_id,
             TaskUpdateSpec {
-                status: Some("done".to_string()),
+                status: Some(CLOSED_TASK_STATUS.to_string()),
                 message: Some(
                     message
                         .map(str::to_string)
@@ -1426,7 +1527,7 @@ impl Lun {
         user: Option<&str>,
     ) -> Result<Task> {
         let task = self.task_by_id(task_id)?;
-        let target_status = Self::normalize_task_status(status.unwrap_or("doing"));
+        let target_status = Self::normalize_task_status(status.unwrap_or(DEFAULT_TASK_STATUS));
         Self::validate_task_status(&target_status)?;
         self.update_task(
             task_id,
@@ -2145,15 +2246,15 @@ impl Lun {
             )
             .map_err(|e| DbError::new("not-found", format!("task {}: {e}", pr.task_id)))?;
 
-        // Merged PR -> task done (the logical-merge step; `git merge`
+        // Merged PR -> task closed (the logical-merge step; `git merge`
         // itself is optional glue the CLI may run on top of this).
-        let changes = if task.status == "done" {
+        let changes = if task.status == CLOSED_TASK_STATUS {
             format!("PR {}: merged", pr.pr_key)
         } else {
-            format!("Status: {} -> done, PR {}: merged", task.status, pr.pr_key)
+            format!("Status: {} -> closed, PR {}: merged", task.status, pr.pr_key)
         };
         self.conn.execute(
-            "UPDATE tasks SET status = 'done', updated_at = ?1 WHERE id = ?2",
+            "UPDATE tasks SET status = 'closed', updated_at = ?1 WHERE id = ?2",
             params![now, task.id],
         )?;
 

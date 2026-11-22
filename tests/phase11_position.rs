@@ -79,9 +79,9 @@ fn make(lun: &Lun, title: &str, status: &str) -> lun::db::Task {
 fn new_tasks_get_incrementing_position_in_column() {
     let root = temp_root("pos-new");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "todo");
-    let b = make(&lun, "beta", "todo");
-    let c = make(&lun, "gamma", "doing");
+    let a = make(&lun, "alpha", "planning");
+    let b = make(&lun, "beta", "planning");
+    let c = make(&lun, "gamma", "review");
     println!("positions: a={:?}, b={:?}, c={:?}", position_of(&root, &a.task_key), position_of(&root, &b.task_key), position_of(&root, &c.task_key));
     println!("board order: {:?}", board_list(&lun));
 
@@ -90,7 +90,7 @@ fn new_tasks_get_incrementing_position_in_column() {
     let pc: Option<i64> = position_of(&root, &c.task_key);
 
     assert!(pa.is_some() && pb.is_some() && pc.is_some(), "position assigned");
-    assert!(pb.unwrap() > pa.unwrap(), "second todo card after first");
+    assert!(pb.unwrap() > pa.unwrap(), "second planning card after first");
     assert_eq!(pc.unwrap(), 1, "first card in a column starts at 1");
 
     let keys = board_list(&lun);
@@ -104,9 +104,9 @@ fn new_tasks_get_incrementing_position_in_column() {
 fn reorder_task_swaps_with_neighbor_and_back() {
     let root = temp_root("pos-reorder");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "todo");
-    let b = make(&lun, "beta", "todo");
-    let _c = make(&lun, "gamma", "todo");
+    let a = make(&lun, "alpha", "planning");
+    let b = make(&lun, "beta", "planning");
+    let _c = make(&lun, "gamma", "planning");
 
     assert_eq!(board_list(&lun), expected(&[&a.task_key, &b.task_key, &_c.task_key]));
 
@@ -125,8 +125,8 @@ fn reorder_task_swaps_with_neighbor_and_back() {
 fn reorder_at_column_edge_is_noop() {
     let root = temp_root("pos-edge");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "todo");
-    let _b = make(&lun, "beta", "todo");
+    let a = make(&lun, "alpha", "planning");
+    let _b = make(&lun, "beta", "planning");
 
     // Already at the top: moving up changes nothing.
     let before = board_list(&lun);
@@ -140,10 +140,10 @@ fn reorder_at_column_edge_is_noop() {
 fn reorder_respects_column_boundary() {
     let root = temp_root("pos-boundary");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "todo");
-    let b = make(&lun, "beta", "doing");
+    let a = make(&lun, "alpha", "planning");
+    let b = make(&lun, "beta", "review");
 
-    // beta is the only card in `doing`: moving down must not pull a card
+    // beta is the only card in `review`: moving down must not pull a card
     // from another column.
     let before = board_list(&lun);
     lun.reorder_task(b.id, 1).unwrap();
@@ -156,8 +156,8 @@ fn reorder_respects_column_boundary() {
 fn archive_unarchive_roundtrip() {
     let root = temp_root("pos-archive");
     let lun = Lun::init(&root).unwrap();
-    let a = make(&lun, "alpha", "todo");
-    let _b = make(&lun, "beta", "todo");
+    let a = make(&lun, "alpha", "planning");
+    let _b = make(&lun, "beta", "planning");
 
     lun.archive_task(a.id, None, Some("test")).unwrap();
     let keys = board_list(&lun);
@@ -215,7 +215,7 @@ fn v7_database_upgrades_to_v8_seeding_position() {
              VALUES
                ('T-003', 1, 'charlie', 'todo', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
                ('T-001', 1, 'alpha',   'todo', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-               ('T-002', 1, 'beta',    'doing', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+               ('T-002', 1, 'beta',    'follow-up', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
     )
     .unwrap();
     drop(conn);
@@ -223,7 +223,7 @@ fn v7_database_upgrades_to_v8_seeding_position() {
     // Opening with the new binary must run the v8 migration.
     let lun = Lun::init(&root).unwrap();
     let keys = board_list(&lun);
-    // todo column keeps task_key order (seeded positions), doing after.
+    // todo -> planning keeps task_key order (seeded positions); follow-up -> review after.
     assert_eq!(keys, [
         "T-001".to_string(),
         "T-003".to_string(),
@@ -234,7 +234,7 @@ fn v7_database_upgrades_to_v8_seeding_position() {
         .unwrap()
         .query_row("SELECT MAX(version) FROM migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
 
     let _ = std::fs::remove_dir_all(&root);
 }

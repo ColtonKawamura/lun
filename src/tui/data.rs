@@ -50,7 +50,7 @@ impl TuiData {
         }
     }
 
-    /// Board columns for a project: (todo, doing, follow-up, blocked, done).
+    /// Board columns for a project: (planning, review, waiting-on, backlog, closed).
     pub fn board_columns(&self, project_id: i64) -> [Vec<&Task>; 5] {
         let mut cols: [Vec<&Task>; 5] = [vec![], vec![], vec![], vec![], vec![]];
         for t in self
@@ -59,40 +59,43 @@ impl TuiData {
             .filter(|t| t.project_id == Some(project_id))
         {
             match t.status.as_str() {
-                "todo" => cols[0].push(t),
-                "doing" => cols[1].push(t),
-                "follow-up" => cols[2].push(t),
-                "blocked" => cols[3].push(t),
-                "done" => cols[4].push(t),
+                "planning" => cols[0].push(t),
+                "review" => cols[1].push(t),
+                "waiting-on" => cols[2].push(t),
+                "backlog" => cols[3].push(t),
+                "closed" => cols[4].push(t),
                 _ => {}
             }
         }
         cols
     }
 
-    /// `4 projects · 16 tasks (5 todo, 2 doing, 1 follow-up, 1 blocked, 7 done)`.
+    /// `4 projects · 16 tasks (5 planning, 2 review, 1 waiting-on, 8 closed)`.
+    /// Statuses with no tasks are left out so the line fits an 80-column
+    /// terminal next to the `Summary:` label.
     pub fn summary(&self) -> String {
         let mut counts = [0usize; 5];
         for t in &self.tasks {
-            match t.status.as_str() {
-                "todo" => counts[0] += 1,
-                "doing" => counts[1] += 1,
-                "follow-up" => counts[2] += 1,
-                "blocked" => counts[3] += 1,
-                "done" => counts[4] += 1,
-                _ => {}
+            if let Some(i) = crate::db::TASK_STATUSES.iter().position(|s| *s == t.status) {
+                counts[i] += 1;
             }
         }
-        format!(
-            "{} projects \u{b7} {} tasks ({} todo, {} doing, {} follow-up, {} blocked, {} done)",
+        let parts: Vec<String> = crate::db::TASK_STATUSES
+            .iter()
+            .zip(counts)
+            .filter(|(_, n)| *n > 0)
+            .map(|(s, n)| format!("{n} {s}"))
+            .collect();
+        let head = format!(
+            "{} projects \u{b7} {} tasks",
             self.projects.len(),
-            self.tasks.len(),
-            counts[0],
-            counts[1],
-            counts[2],
-            counts[3],
-            counts[4]
-        )
+            self.tasks.len()
+        );
+        if parts.is_empty() {
+            head
+        } else {
+            format!("{head} ({})", parts.join(", "))
+        }
     }
 
     pub fn attachments_for_task(&self, task_id: i64) -> Vec<&Attachment> {

@@ -63,10 +63,10 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         })
         .unwrap();
     for (title, status, priority) in [
-        ("set up sim", "todo", "med"),
-        ("tune damping", "doing", "high"),
-        ("write methods", "follow-up", "low"),
-        ("implement restitution", "done", "med"),
+        ("set up sim", "planning", "med"),
+        ("tune damping", "review", "high"),
+        ("write methods", "waiting-on", "low"),
+        ("implement restitution", "closed", "med"),
     ] {
         lun.create_task(TaskSpec {
             title: title.into(),
@@ -753,9 +753,9 @@ fn o_opens_selected_attachment_and_c_toggles_completion_with_store() {
     assert!(msg.contains("Opened:"));
 
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
-    assert_eq!(app.current_task().unwrap().status, "done");
+    assert_eq!(app.current_task().unwrap().status, "closed");
     term::handle_key(&mut app, &key(KeyCode::Char('c')));
-    assert_eq!(app.current_task().unwrap().status, "doing");
+    assert_eq!(app.current_task().unwrap().status, "planning");
     std::env::remove_var("LUN_OPEN_BIN");
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -76,7 +76,7 @@ pub enum TaskFocus {
     Links,
 }
 
-const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
+use crate::db::{CLOSED_TASK_STATUS, DEFAULT_TASK_STATUS, TASK_STATUSES};
 const TASK_PRIORITIES: [&str; 3] = ["low", "med", "high"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const FORM_ESC_CANCEL_WINDOW: Duration = Duration::from_millis(450);
@@ -916,7 +916,7 @@ impl App {
         match args.first().map(String::as_str) {
             Some("add") if args.get(1).map(String::as_str) == Some("task") => {
                 prompts.extend([
-                    "Status? (todo, doing, follow-up, blocked, done): ".to_string(),
+                    "Status? (planning, review, waiting-on, backlog, closed): ".to_string(),
                     "Priority? (low, med, or high): ".to_string(),
                     "Assignee? (default: me): ".to_string(),
                     "Commit Message: ".to_string(),
@@ -1658,7 +1658,7 @@ impl App {
     pub fn toggle_complete_current_task(&mut self) {
         let Some((task_id, task_key, done)) = self
             .current_task()
-            .map(|t| (t.id, t.task_key.clone(), t.status == "done"))
+            .map(|t| (t.id, t.task_key.clone(), t.status == CLOSED_TASK_STATUS))
         else {
             self.message = Some(("no current task".to_string(), true));
             return;
@@ -1671,7 +1671,7 @@ impl App {
             return;
         };
         let result = if done {
-            lun.reopen_task(task_id, Some("doing"), None, None)
+            lun.reopen_task(task_id, Some(DEFAULT_TASK_STATUS), None, None)
         } else {
             lun.complete_task(task_id, None, None)
         };

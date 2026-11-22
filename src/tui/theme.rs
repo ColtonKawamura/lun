@@ -26,16 +26,19 @@ pub const ERROR: Color = Color::Rgb(255, 80, 80);
 pub const ACTIVE: Color = Color::Rgb(90, 220, 180);
 /// Muted lavender-gray — inactive projects.
 pub const INACTIVE: Color = Color::Rgb(150, 150, 180);
+/// Amber — tasks waiting on people or an external process.
+pub const WAITING: Color = Color::Rgb(245, 180, 60);
 
-/// `todo` = blue, `doing` = bright purple, `follow-up` = magenta,
-/// `blocked` = red, `done` = bright green.
+/// `planning` = blue, `review` = magenta (needs Colton), `waiting-on` =
+/// amber, `backlog` = muted gray, `closed` = bright green. Matches the web
+/// board's column colors. Accepts the column headings ("Planning", ...) too.
 pub fn status_color(status: &str) -> Color {
-    match status {
-        "todo" => Color::Rgb(80, 140, 255),
-        "doing" => PURPLE,
-        "follow-up" => MAGENTA,
-        "blocked" => ERROR,
-        "done" => DONE,
+    match status.to_ascii_lowercase().as_str() {
+        "planning" => Color::Rgb(80, 140, 255),
+        "review" => MAGENTA,
+        "waiting-on" => WAITING,
+        "backlog" => INACTIVE,
+        "closed" => DONE,
         _ => TEXT,
     }
 }

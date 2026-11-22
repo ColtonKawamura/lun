@@ -40,11 +40,10 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::db::Result;
 use crate::db::{
-    Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr, PrSpec, Project,
-    Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec,
+    task_status_list, Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr,
+    PrSpec, Project, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec, DEFAULT_TASK_STATUS,
+    TASK_STATUSES,
 };
-
-const TASK_STATUSES: [&str; 5] = ["todo", "doing", "follow-up", "blocked", "done"];
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
 const TOP_LEVEL_COMMANDS: [&str; 16] = [
@@ -428,7 +427,7 @@ pub fn help_text(version: &str) -> String {
         "lun v{version} — CLI-first markdown task & project tracker
 
 Usage:
-  lun                     Show banner
+  lun                     Full-screen TUI in a terminal (plain banner when piped)
   lun init                Create .lun/lun.db in the current directory (idempotent)
   lun status [name|P-00N] [--board] Projects overview, or one project's tasks/board
   lun /<name|key>         Shortcut for `lun status <name|key>`
@@ -436,12 +435,14 @@ Usage:
   lun add task \"<title>\" [proj \"<project>\"]  Create a task (interactive prompts)
   lun move \"<task>\" \"<project>\"   Move a task to a project
   lun task <T-00N|title>    View a task (fields, labels, history)
-  lun task <task> --status <todo|doing|follow-up|blocked|done>   Update task status
+  lun task <task> --status <planning|review|waiting-on|backlog|closed>   Update task status
   lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--sort/--all)
   lun task edit <task> [--field value]   Edit task fields
   lun proj <project> --status <active|inactive>   Update project status
   lun task complete|reopen|archive <task>   Update task lifecycle
-  lun log <project|task>    Commit-style history for a project or task
+  lun log <project|task> [-N] [--oneline]   History of one project/task, newest first (-N: only the N newest)
+  lun log -N | HEAD~N [--oneline]   N newest entries / the Nth-newest entry across everything
+  lun log <project|task> -m \"<message>\"   Write a commit-style entry
   lun grep \"<text>\"         Search project/task fields and commit text
   lun attach <task|project> <key|title> /path/to/file   Attach a file
   lun attach ls <task|project> <key|title>   List attachments
@@ -452,17 +453,29 @@ Usage:
   lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR
   lun pr show <PR-00N|task>   View a PR (branches, status, PR log history)
   lun pr ls               List open and merged PRs
-  lun pr merge <PR-00N|task>   Merge a PR (task -> done; runs `git merge` when possible)
+  lun pr merge <PR-00N|task>   Merge a PR (task -> closed; runs `git merge` when possible)
   lun import obsidian [--vault PATH] [--dry-run]   Scan Obsidian vault for tasks (dry-run default)
   lun serve [BIND]          Start the web server (PWA + API) on Tailscale (default: 100.71.78.78:9120)
   lun --version             Print version
   lun --help                Print this help
 
 Flags:
-  --json                    Output in JSON format (read commands: status, task, log, grep, pr, attach)
+  --json                    JSON output (`lun status` and `lun status <query>` only)
+  --message \"<msg>\"         Commit message, skipping the stdin prompt
+                            (add proj, proj, move, task --status, task edit)
 
-Planned (later phases):
-  lun (no args in TUI mode) Full-screen TUI (Phase 5+)"
+Task statuses (board columns, left to right):
+  planning     scope still being worked out; new tasks start here
+  review       back with results, a decision, or a PR to review
+  waiting-on   out with other people or an external process
+  backlog      parked for later
+  closed       finished (`task complete`, `pr merge`)
+  Old names still work: todo/doing -> planning, follow-up -> review,
+  blocked -> waiting-on, done -> closed.
+
+Every change asks for a commit message (and `add task` for status, priority,
+assignee) on stdin. Scripts and agents: pass --message where supported, or
+close stdin (</dev/null) to take the defaults."
     )
 }
 
@@ -663,7 +676,7 @@ pub fn display_ts(ts: &str) -> String {
 }
 
 /// Pull a string value out of a small flat JSON object stored as TEXT
-/// (e.g. `{"status": "todo", "priority": "med"}`). Details are written by
+/// (e.g. `{"status": "planning", "priority": "med"}`). Details are written by
 /// lun itself with string values only; this avoids a JSON dependency.
 pub fn json_str(details: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\"");
@@ -728,7 +741,7 @@ pub fn summary_line(n_projects: usize, tasks: &[Task]) -> String {
         }
     }
     format!(
-        "Summary: {n_projects} project{} · {} task{} ({} todo, {} doing, {} follow-up, {} blocked, {} done)",
+        "Summary: {n_projects} project{} · {} task{} ({} planning, {} review, {} waiting-on, {} backlog, {} closed)",
         if n_projects == 1 { "" } else { "s" },
         tasks.len(),
         if tasks.len() == 1 { "" } else { "s" },
@@ -859,18 +872,27 @@ pub fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
 }
 
 /// Single-line format like `git log --oneline`:
-/// `TIMESTAMP  USER  ACTION  message`
+/// `<timestamp>  <user>  <ACTION>  <commit message> | <details>`.
+/// The commit message is the point of the line (it says *why*), so it is
+/// always shown, collapsed to a single line; details follow when present.
 pub fn log_oneline_line(entry: &LogEntry) -> String {
+    let message = entry.message.split_whitespace().collect::<Vec<_>>().join(" ");
+    let message = if message.is_empty() {
+        String::new()
+    } else {
+        format!("  {message}")
+    };
     let detail = entry_inline_details(entry);
     let extra = match detail {
         Some(d) if !d.is_empty() => format!(" | {d}"),
         _ => String::new(),
     };
     format!(
-        "{}  {}  {}{}",
+        "{}  {}  {}{}{}",
         display_ts(&entry.timestamp),
         entry.user,
         entry.action,
+        message,
         extra
     )
 }
@@ -908,11 +930,11 @@ pub fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
 
 fn status_name(status: &str) -> &'static str {
     match status {
-        "todo" => "Todo",
-        "doing" => "Doing",
-        "follow-up" => "Follow-Up",
-        "blocked" => "Blocked",
-        "done" => "Done",
+        "planning" => "Planning",
+        "review" => "Review",
+        "waiting-on" => "Waiting-On",
+        "backlog" => "Backlog",
+        "closed" => "Closed",
         _ => "?",
     }
 }
@@ -923,19 +945,18 @@ pub fn status_all_json(app: &App) -> Result<String> {
     let mut result = Vec::new();
     for proj in &projects {
         let tasks = app.lun.tasks_for_project(proj.id)?;
-        let done_count = tasks.iter().filter(|t| t.status == "done").count();
-        let todo_count = tasks.iter().filter(|t| t.status == "todo").count();
-        let doing_count = tasks.iter().filter(|t| t.status == "doing").count();
-        result.push(serde_json::json!({
+        let mut entry = serde_json::json!({
             "key": proj.project_key,
             "name": proj.name,
             "status": proj.status,
             "tasks": tasks.len(),
-            "done": done_count,
-            "todo": todo_count,
-            "doing": doing_count,
             "updated_at": proj.updated_at,
-        }));
+        });
+        // One count per task status, keyed by the status name.
+        for (status, count) in counts_by_status(&tasks) {
+            entry[status] = serde_json::json!(count);
+        }
+        result.push(entry);
     }
     Ok(serde_json::to_string_pretty(&result)
         .map_err(|e| DbError::new("json", format!("serializing JSON: {e}")))?
@@ -1011,11 +1032,11 @@ pub fn status_all(app: &App) -> Result<String> {
             "ID",
             "Name",
             "Status",
-            "Todo",
-            "Doing",
-            "Follow-Up",
-            "Blocked",
-            "Done",
+            "Planning",
+            "Review",
+            "Waiting-On",
+            "Backlog",
+            "Closed",
         ],
         &prow,
     ));
@@ -1460,6 +1481,29 @@ pub fn log_command(app: &App, args: &[String]) -> Result<String> {
 
     let first = positional[0];
 
+    // Per-entity limit: `lun log <entity> -N` (or `lun log -N <entity>`) shows
+    // only that entity's N newest entries, so an agent can pull just the
+    // recent history of one task instead of the whole thing.
+    if positional.len() == 2 {
+        let count = |s: &str| -> Option<Result<usize>> {
+            let digits = s.strip_prefix('-')?;
+            if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            Some(
+                digits
+                    .parse::<usize>()
+                    .map_err(|_| DbError::new("usage", format!("'{s}' is not a valid number"))),
+            )
+        };
+        let (a, b) = (positional[0].as_str(), positional[1].as_str());
+        match (count(a), count(b)) {
+            (Some(n), None) => return log_view_limited(app, b, oneline, Some(n?)),
+            (None, Some(n)) => return log_view_limited(app, a, oneline, Some(n?)),
+            _ => {}
+        }
+    }
+
     // -N: last N logs across all entities
     if first.starts_with('-') {
         let n = first
@@ -1551,6 +1595,17 @@ fn log_write(app: &App, entity: &str, message: &str) -> Result<String> {
 
 /// `lun log <project|task>` — commit-style history, newest first.
 pub fn log_view(app: &App, query: &str, oneline: bool) -> Result<String> {
+    log_view_limited(app, query, oneline, None)
+}
+
+/// `lun log <project|task> [-N]` — like [`log_view`], keeping only the
+/// `limit` newest entries when given.
+pub fn log_view_limited(
+    app: &App,
+    query: &str,
+    oneline: bool,
+    limit: Option<usize>,
+) -> Result<String> {
     let entity = resolve_entity(&app.lun, query)?;
     let entries: Vec<LogEntry> = match entity {
         Entity::Project(p) => {
@@ -1561,6 +1616,13 @@ pub fn log_view(app: &App, query: &str, oneline: bool) -> Result<String> {
         }
         Entity::Task(t) => app.lun.logs_for("task", t.id)?,
     };
+    let entries: Vec<LogEntry> = match limit {
+        Some(n) => entries.into_iter().take(n).collect(),
+        None => entries,
+    };
+    if entries.is_empty() && limit.is_some() {
+        return Ok("No logs found.".to_string());
+    }
 
     let mut out = String::new();
     for e in &entries {
@@ -2200,9 +2262,7 @@ pub fn task_reopen(
                 status = Some(resolve_task_status(raw).ok_or_else(|| {
                     DbError::new(
                         "invalid",
-                        format!(
-                            "invalid status '{raw}' (expected todo, doing, follow-up, blocked, or done)"
-                        ),
+                        format!("invalid status '{raw}' (expected {})", task_status_list()),
                     )
                 })?);
                 i += 2;
@@ -2215,7 +2275,7 @@ pub fn task_reopen(
             }
         }
     }
-    let target = status.as_deref().unwrap_or("doing");
+    let target = status.as_deref().unwrap_or(DEFAULT_TASK_STATUS);
     let default = format!("reopen {} to {}", task.task_key, target);
     let message = read_commit_message(stdin, &default)?;
     let updated = app
@@ -2249,9 +2309,7 @@ pub fn task_set_status(
     let status = resolve_task_status(status).ok_or_else(|| {
         DbError::new(
             "invalid",
-            format!(
-                "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
-            ),
+            format!("invalid status '{status}' (expected {})", task_status_list()),
         )
     })?;
     let default_message = format!("set {} status to {}", task.task_key, status);
@@ -2379,10 +2437,6 @@ fn read_prompt(stdin: &mut dyn BufRead, label: &str) -> Result<String> {
     Ok(line.trim().to_string())
 }
 
-fn valid_task_status(s: &str) -> bool {
-    matches!(s, "todo" | "doing" | "follow-up" | "blocked" | "done")
-}
-
 fn valid_project_status(s: &str) -> bool {
     matches!(s, "active" | "inactive")
 }
@@ -2391,13 +2445,11 @@ fn valid_priority(s: &str) -> bool {
     matches!(s, "low" | "med" | "high")
 }
 
+/// Resolve a typed task status (v9 names, or the pre-v9 aliases `todo`,
+/// `doing`, `follow-up`, `blocked`, `done`) to a v9 status.
 fn resolve_task_status(value: &str) -> Option<String> {
-    match value {
-        "in-progress" => Some("doing".to_string()),
-        "review" => Some("follow-up".to_string()),
-        other if valid_task_status(other) => Some(other.to_string()),
-        _ => None,
-    }
+    let status = crate::db::normalize_task_status(value);
+    crate::db::is_task_status(&status).then_some(status)
 }
 
 fn resolve_project_status(value: &str) -> Option<String> {
@@ -2433,7 +2485,7 @@ fn read_commit_message_with_optional_override(
 /// `lun add task "<title>" [proj "<name|P-00N>"]`.
 ///
 /// Prompts (printed to stderr; empty input accepts the default):
-/// - `Status? (todo, doing, follow-up, blocked, done):` (default: todo)
+/// - `Status? (planning, review, waiting-on, backlog, closed):` (default: planning)
 /// - `Priority? (low, med, or high):` (default: low)
 /// - `Assignee? (default: me):`
 /// - `Commit Message:` — default `add task "<title>" to <project>`.
@@ -2458,16 +2510,14 @@ pub fn create_task(
         app.lun.project_by_key("P-000")?
     };
 
-    let status = read_prompt(stdin, "Status? (todo, doing, follow-up, blocked, done): ")?;
+    let status = read_prompt(stdin, "Status? (planning, review, waiting-on, backlog, closed): ")?;
     let status = if status.is_empty() {
-        "todo".to_string()
+        DEFAULT_TASK_STATUS.to_string()
     } else {
         resolve_task_status(&status).ok_or_else(|| {
             DbError::new(
                 "invalid",
-                format!(
-                    "invalid status '{status}' (expected todo, doing, follow-up, blocked, or done)"
-                ),
+                format!("invalid status '{status}' (expected {})", task_status_list()),
             )
         })?
     };
@@ -3288,7 +3338,7 @@ pub fn run_result_in_reader(
                     let status = status.ok_or_else(|| {
                         DbError::new(
                             "usage",
-                            "expected: lun task <key|title> [--status <todo|doing|follow-up|blocked|done>] [--message \"...\"]",
+                            "expected: lun task <key|title> [--status <planning|review|waiting-on|backlog|closed>] [--message \"...\"]",
                         )
                     })?;
                     task_set_status(app, q, status, message, stdin)

@@ -232,7 +232,7 @@ fn paint_initial(buf: &mut Buffer, area: Rect, app: &App) {
             return;
         }
         let cols = app.data.board_columns(p.id);
-        let names = ["Todo", "Doing", "Follow-Up", "Blocked", "Done"];
+        let names = ["Planning", "Review", "Waiting-On", "Backlog", "Closed"];
         for (i, tasks) in cols.iter().enumerate() {
             if y >= area.bottom() {
                 return;
@@ -530,7 +530,7 @@ fn status_count_line(line: &str) -> Option<(&str, &str, &str)> {
     let status = &body[..=colon];
     if !matches!(
         status.trim_end_matches(':'),
-        "todo" | "doing" | "follow-up" | "blocked" | "done"
+        "planning" | "review" | "waiting-on" | "backlog" | "closed"
     ) {
         return None;
     }
@@ -595,23 +595,23 @@ fn paint_project_status_row(buf: &mut Buffer, x: u16, y: u16, line: &str) -> boo
     if let Some(g) = gaps.get(2) {
         segments.push((g, Style::default().fg(t::DIM)));
     }
-    segments.push((cols[3], t::status_style("todo")));
+    segments.push((cols[3], t::status_style("planning")));
     if let Some(g) = gaps.get(3) {
         segments.push((g, Style::default().fg(t::DIM)));
     }
-    segments.push((cols[4], t::status_style("doing")));
+    segments.push((cols[4], t::status_style("review")));
     if let Some(g) = gaps.get(4) {
         segments.push((g, Style::default().fg(t::DIM)));
     }
-    segments.push((cols[5], t::status_style("follow-up")));
+    segments.push((cols[5], t::status_style("waiting-on")));
     if let Some(g) = gaps.get(5) {
         segments.push((g, Style::default().fg(t::DIM)));
     }
-    segments.push((cols[6], t::status_style("blocked")));
+    segments.push((cols[6], t::status_style("backlog")));
     if let Some(g) = gaps.get(6) {
         segments.push((g, Style::default().fg(t::DIM)));
     }
-    segments.push((cols[7], t::status_style("done")));
+    segments.push((cols[7], t::status_style("closed")));
     put_segments(buf, x, y, &segments);
     true
 }
@@ -704,11 +704,11 @@ fn project_counts(app: &App, project_id: i64) -> [usize; 5] {
             continue;
         }
         match task.status.as_str() {
-            "todo" => counts[0] += 1,
-            "doing" => counts[1] += 1,
-            "follow-up" => counts[2] += 1,
-            "blocked" => counts[3] += 1,
-            "done" => counts[4] += 1,
+            "planning" => counts[0] += 1,
+            "review" => counts[1] += 1,
+            "waiting-on" => counts[2] += 1,
+            "backlog" => counts[3] += 1,
+            "closed" => counts[4] += 1,
             _ => {}
         }
     }
@@ -733,11 +733,11 @@ fn paint_status(buf: &mut Buffer, area: Rect, app: &App) {
     }
 
     let count_cols = [
-        ("Todo", "todo", 0usize),
-        ("Doing", "doing", 1usize),
-        ("Follow-Up", "follow-up", 2usize),
-        ("Blocked", "blocked", 3usize),
-        ("Done", "done", 4usize),
+        ("Planning", "planning", 0usize),
+        ("Review", "review", 1usize),
+        ("Waiting-On", "waiting-on", 2usize),
+        ("Backlog", "backlog", 3usize),
+        ("Closed", "closed", 4usize),
     ];
     let gap = "  ";
     let key_w = 5usize;
@@ -903,7 +903,7 @@ fn paint_board(buf: &mut Buffer, area: Rect, app: &App) {
         return;
     }
     let cols = app.data.board_columns(p.id);
-    let names = ["Todo", "Doing", "Follow-Up", "Blocked", "Done"];
+    let names = ["Planning", "Review", "Waiting-On", "Backlog", "Closed"];
 
     let min_side_by_side_width = 72u16;
     if area.width < min_side_by_side_width {
@@ -981,7 +981,7 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
     let base_info_w = 5usize // marker + key + two spaces
         + 3 // key gap
         + 2; // status gap
-    let counts_template = "todo 0  doing 0  follow-up 0  blocked 0  done 0";
+    let counts_template = "planning 0  review 0  waiting-on 0  backlog 0  closed 0";
     let counts_w = counts_template.chars().count();
     let min_name_w = 8usize;
     let min_status_w = 6usize;
@@ -1035,7 +1035,7 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
             counts_x,
             y,
             &format!(
-                "  todo {}  doing {}  follow-up {}  blocked {}  done {}",
+                "  planning {}  review {}  waiting-on {}  backlog {}  closed {}",
                 counts[0], counts[1], counts[2], counts[3], counts[4]
             ),
             Style::default().fg(t::TEXT),
@@ -1174,8 +1174,8 @@ fn paint_new_task(buf: &mut Buffer, area: Rect, app: &App) {
         ("Project", project, Style::default().fg(t::PURPLE)),
         (
             "Status",
-            ["todo", "doing", "follow-up", "blocked", "done"][draft.status_index].to_string(),
-            t::status_style(["todo", "doing", "follow-up", "blocked", "done"][draft.status_index]),
+            crate::db::TASK_STATUSES[draft.status_index].to_string(),
+            t::status_style(crate::db::TASK_STATUSES[draft.status_index]),
         ),
         (
             "Priority",

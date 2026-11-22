@@ -255,8 +255,8 @@ fn complete_status_values_for_task_and_project_contexts() {
         ],
     );
     let task_lines = lines(&task_status);
-    assert!(task_lines.iter().any(|s| s == "todo"), "{task_status}");
-    assert!(task_lines.iter().any(|s| s == "done"), "{task_status}");
+    assert!(task_lines.iter().any(|s| s == "planning"), "{task_status}");
+    assert!(task_lines.iter().any(|s| s == "closed"), "{task_status}");
     assert!(!task_lines.iter().any(|s| s == "active"), "{task_status}");
 
     let project_status = complete_output(

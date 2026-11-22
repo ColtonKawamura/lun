@@ -26,11 +26,12 @@
   --success: #22c55e;
   --warning: #f59e0b;
   --danger: #ef4444;
-  --todo: #64748b;
-  --doing: #3b82f6;
-  --follow-up: #f59e0b;
-  --blocked: #ef4444;
-  --done: #22c55e;
+  /* Task statuses = Colton's Obsidian kanban stages (schema v9). */
+  --planning: #3b82f6;
+  --review: #d946ef;
+  --waiting-on: #f59e0b;
+  --backlog: #64748b;
+  --closed: #22c55e;
   --radius: 8px;
   --shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
@@ -180,11 +181,11 @@ body {
   font-size: 12px;
   color: var(--text-muted);
 }
-.column[data-status="todo"] .column-header { border-left: 3px solid var(--todo); }
-.column[data-status="doing"] .column-header { border-left: 3px solid var(--doing); }
-.column[data-status="follow-up"] .column-header { border-left: 3px solid var(--follow-up); }
-.column[data-status="blocked"] .column-header { border-left: 3px solid var(--blocked); }
-.column[data-status="done"] .column-header { border-left: 3px solid var(--done); }
+.column[data-status="planning"] .column-header { border-left: 3px solid var(--planning); }
+.column[data-status="review"] .column-header { border-left: 3px solid var(--review); }
+.column[data-status="waiting-on"] .column-header { border-left: 3px solid var(--waiting-on); }
+.column[data-status="backlog"] .column-header { border-left: 3px solid var(--backlog); }
+.column[data-status="closed"] .column-header { border-left: 3px solid var(--closed); }
 .card-list {
   padding: 8px;
   overflow-y: auto;
@@ -436,7 +437,7 @@ textarea.notes-input {
 .log-action.UPDATE { color: var(--accent-light); }
 .log-action.COMMIT { color: var(--warning); }
 .log-action.ATTACH { color: var(--doing); }
-.log-action.LINK { color: var(--follow-up); }
+.log-action.LINK { color: var(--warning); }
 
 /* Log input row */
 .log-input-row {
@@ -666,25 +667,25 @@ textarea.notes-input {
 
 <!-- Board view -->
 <div class="board" id="boardView">
-  <div class="column" data-status="todo">
-    <div class="column-header">Todo <span class="count">0</span></div>
-    <div class="card-list" id="todo"></div>
+  <div class="column" data-status="planning">
+    <div class="column-header">Planning <span class="count">0</span></div>
+    <div class="card-list" id="planning"></div>
   </div>
-  <div class="column" data-status="doing">
-    <div class="column-header">Doing <span class="count">0</span></div>
-    <div class="card-list" id="doing"></div>
+  <div class="column" data-status="review">
+    <div class="column-header">Review <span class="count">0</span></div>
+    <div class="card-list" id="review"></div>
   </div>
-  <div class="column" data-status="follow-up">
-    <div class="column-header">Follow-Up <span class="count">0</span></div>
-    <div class="card-list" id="follow-up"></div>
+  <div class="column" data-status="waiting-on">
+    <div class="column-header">Waiting-On <span class="count">0</span></div>
+    <div class="card-list" id="waiting-on"></div>
   </div>
-  <div class="column" data-status="blocked">
-    <div class="column-header">Blocked <span class="count">0</span></div>
-    <div class="card-list" id="blocked"></div>
+  <div class="column" data-status="backlog">
+    <div class="column-header">Backlog <span class="count">0</span></div>
+    <div class="card-list" id="backlog"></div>
   </div>
-  <div class="column" data-status="done">
-    <div class="column-header">Done <span class="count">0</span></div>
-    <div class="card-list" id="done"></div>
+  <div class="column" data-status="closed">
+    <div class="column-header">Closed <span class="count">0</span></div>
+    <div class="card-list" id="closed"></div>
   </div>
 </div>
 
@@ -717,11 +718,11 @@ textarea.notes-input {
       <div class="form-row">
         <label>Status</label>
         <select id="editStatus">
-          <option value="todo">Todo</option>
-          <option value="doing">Doing</option>
-          <option value="follow-up">Follow-Up</option>
-          <option value="blocked">Blocked</option>
-          <option value="done">Done</option>
+          <option value="planning">Planning</option>
+          <option value="review">Review</option>
+          <option value="waiting-on">Waiting-On</option>
+          <option value="backlog">Backlog</option>
+          <option value="closed">Closed</option>
         </select>
       </div>
       <div class="form-row">
@@ -786,7 +787,7 @@ textarea.notes-input {
       
       <div style="display:flex;gap:8px;margin-top:16px;">
         <button class="btn" id="saveBtn">Save</button>
-        <button class="btn btn-secondary" id="doneBtn" title="Mark done (x)">Mark Done</button>
+        <button class="btn btn-secondary" id="doneBtn" title="Close task (x)">Close</button>
       </div>
     </div>
   </div>
@@ -818,11 +819,11 @@ textarea.notes-input {
       <tr><td>k / ↑</td><td>Move up (across board)</td></tr>
       <tr><td>h</td><td>Focus previous column</td></tr>
       <tr><td>l</td><td>Focus next column</td></tr>
-      <tr><td>d / D / &gt;</td><td>Move card forward (toward done)</td></tr>
-      <tr><td>u / U / &lt;</td><td>Move card backward (toward todo)</td></tr>
+      <tr><td>d / D / &gt;</td><td>Move card forward (toward closed)</td></tr>
+      <tr><td>u / U / &lt;</td><td>Move card backward (toward planning)</td></tr>
       <tr><td>Enter</td><td>Open card detail</td></tr>
       <tr><td>a</td><td>New card in column</td></tr>
-      <tr><td>x</td><td>Mark done</td></tr>
+      <tr><td>x</td><td>Close task</td></tr>
       <tr><td>f</td><td>Toggle filters</td></tr>
       <tr><td>g p</td><td>Cycle projects</td></tr>
       <tr><td>g b</td><td>Board view</td></tr>
@@ -843,7 +844,7 @@ textarea.notes-input {
   <span><kbd>d/u</kbd> status</span>
   <span><kbd>Enter</kbd> detail</span>
   <span><kbd>a</kbd> new</span>
-  <span><kbd>x</kbd> done</span>
+  <span><kbd>x</kbd> close</span>
   <span><kbd>f</kbd> filter</span>
   <span><kbd>/</kbd> palette</span>
   <span><kbd>?</kbd> help</span>
@@ -851,7 +852,13 @@ textarea.notes-input {
 
 <script>
 // State
-const STATUS_ORDER = ['todo', 'doing', 'follow-up', 'blocked', 'done'];
+// Board columns, left to right: Colton's Obsidian kanban stages (schema v9).
+const STATUS_ORDER = ['planning', 'review', 'waiting-on', 'backlog', 'closed'];
+const STATUS_LABELS = {
+  'planning': 'Planning', 'review': 'Review', 'waiting-on': 'Waiting-On',
+  'backlog': 'Backlog', 'closed': 'Closed',
+};
+const PRIORITY_ORDER = ['low', 'med', 'high'];
 let tasks = [];
 let projects = [];
 let scopes = [];
@@ -868,6 +875,7 @@ const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', '
 
 // Initialize
 (async function init() {
+  populateStaticFilters();
   await loadProjects();
   await loadTasks();
   render();
@@ -958,6 +966,20 @@ function populateProjectFilters() {
   });
   // Update accent colour to match currently selected project (or default)
   updateProjectTitle(document.getElementById('projectFilter').value);
+}
+
+// Status / priority filter options (static lists; selected value survives).
+function populateStaticFilters() {
+  const sf = document.getElementById('statusFilter');
+  if (sf.options.length <= 1) {
+    sf.innerHTML = '<option value="">All Statuses</option>' + STATUS_ORDER.map(s =>
+      `<option value="${s}">${STATUS_LABELS[s]}</option>`).join('');
+  }
+  const pf = document.getElementById('priorityFilter');
+  if (pf.options.length <= 1) {
+    pf.innerHTML = '<option value="">All Priorities</option>' + PRIORITY_ORDER.map(p =>
+      `<option value="${p}">${p}</option>`).join('');
+  }
 }
 
 function populateScopeFilter() {
@@ -1075,7 +1097,7 @@ function setupEventListeners() {
 
   // Filter bar
   document.getElementById('newCardBtn').addEventListener('click', () => {
-    const status = activeCard?.col || 'todo';
+    const status = activeCard?.col || STATUS_ORDER[0];
     startNewCard(status);
   });
 
@@ -1121,7 +1143,7 @@ function setupEventListeners() {
   document.getElementById('saveBtn').addEventListener('click', saveModal);
   document.getElementById('doneBtn').addEventListener('click', () => {
     if (editingTask) {
-      updateTaskOnServer(editingTask, {status: 'done'}).then(() => {
+      updateTaskOnServer(editingTask, {status: 'closed'}).then(() => {
         closeModal();
         loadTasks().then(render);
       });
@@ -1650,12 +1672,12 @@ function handleKeyboard(e) {
 
   // New card
   if (e.key === 'a') {
-    const status = activeCard?.col || 'todo';
+    const status = activeCard?.col || STATUS_ORDER[0];
     startNewCard(status);
     return;
   }
 
-  // Mark done
+  // Close task
   if (e.key === 'x' && activeCard?.key) {
     markDone(activeCard.key);
     return;
@@ -1813,7 +1835,7 @@ function moveToLastCard() {
 }
 
 function markDone(key) {
-  updateTaskOnServer(key, {status: 'done'}).then(() => {
+  updateTaskOnServer(key, {status: 'closed'}).then(() => {
     activeCard = null;
     loadTasks().then(render);
   });

@@ -54,7 +54,7 @@ fn fixture() -> (PathBuf, Lun, Task, Task) {
         .create_task(TaskSpec {
             title: "branchless task".into(),
             project: Some(p.id),
-            status: Some("todo".into()),
+            status: Some("planning".into()),
             priority: Some("med".into()),
             assignee: Some("me".into()),
             branch: None,
@@ -191,7 +191,7 @@ fn merge_pr_marks_pr_merged_and_task_done_with_merge_log() {
     let merged = lun.merge_pr(pr.id, None, None).unwrap();
     assert_eq!(merged.status, "merged");
     assert!(merged.merged_at.is_some());
-    assert_eq!(lun.task_by_id(t01.id).unwrap().status, "done");
+    assert_eq!(lun.task_by_id(t01.id).unwrap().status, "closed");
     // Exactly one new log entry: the MERGE with the PR key in details
     // (newest-first, so `first()`).
     let logs = lun.logs_for("task", t01.id).unwrap();
@@ -200,7 +200,7 @@ fn merge_pr_marks_pr_merged_and_task_done_with_merge_log() {
     assert_eq!(e.action, "MERGE");
     assert_eq!(e.message, "merge PR-001 (pr9-sim-branch -> main)");
     assert!(e.details.contains("\"pr\": \"PR-001\""));
-    assert!(e.details.contains("done"));
+    assert!(e.details.contains("closed"));
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -393,7 +393,7 @@ fn merge_glue_never_fails_the_command_outside_a_repo() {
     let out = lun::cli::pr_merge(&app, &pr.pr_key, &scratch).unwrap();
     assert!(out.contains(&format!("Merged {}", pr.pr_key)));
     assert!(!out.contains("git:"));
-    assert_eq!(app.lun.task_by_id(t01.id).unwrap().status, "done");
+    assert_eq!(app.lun.task_by_id(t01.id).unwrap().status, "closed");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&scratch);
 }

@@ -44,7 +44,7 @@ fn fixture() -> (PathBuf, App) {
     lun.create_task(TaskSpec {
         title: "task one".into(),
         project: None,
-        status: Some("todo".into()),
+        status: Some("planning".into()),
         priority: Some("med".into()),
         assignee: Some("me".into()),
         branch: None,
@@ -302,7 +302,7 @@ fn attach_and_link_appear_in_task_log() {
     attach_file(&app, &root, "T-001", src.to_str().unwrap(), &mut input).unwrap();
     add_link_command(&app, "task", "T-001", "obsidian", "obsidian://open?vault=p").unwrap();
 
-    let out = log_view(&app, "T-001").unwrap();
+    let out = log_view(&app, "T-001", false).unwrap();
     assert!(out.contains("ATTACH"), "{out}");
     assert!(out.contains("LINK"), "{out}");
     assert!(out.contains("File: fig.png"), "{out}");

@@ -83,10 +83,10 @@ fn fixture() -> (std::path::PathBuf, Lun) {
         })
         .unwrap();
     for (title, status, priority) in [
-        ("set up sim", "todo", "med"),
-        ("tune damping", "doing", "high"),
-        ("write methods", "follow-up", "low"),
-        ("implement restitution", "done", "med"),
+        ("set up sim", "planning", "med"),
+        ("tune damping", "review", "high"),
+        ("write methods", "waiting-on", "low"),
+        ("implement restitution", "closed", "med"),
     ] {
         lun.create_task(TaskSpec {
             title: title.into(),
@@ -153,7 +153,7 @@ fn data_summary_counts_exact() {
     let d = data::load(&lun, "0.1.0", "p", "b".into(), None).unwrap();
     assert_eq!(
         d.summary(),
-        "2 projects \u{b7} 4 tasks (1 todo, 1 doing, 1 follow-up, 0 blocked, 1 done)"
+        "2 projects \u{b7} 4 tasks (1 planning, 1 review, 1 waiting-on, 1 closed)"
     );
     drop(lun);
     drop(root);
@@ -387,7 +387,7 @@ fn initial_screen_renders_banner_context_and_board() {
     assert!(s.contains("Project:"));
     assert!(s.contains("paper-stack"));
     assert!(
-        s.contains("2 projects \u{b7} 4 tasks (1 todo, 1 doing, 1 follow-up, 0 blocked, 1 done)")
+        s.contains("2 projects \u{b7} 4 tasks (1 planning, 1 review, 1 waiting-on, 1 closed)")
     );
 
     // Board preview sections + task keys/titles.
@@ -540,7 +540,7 @@ fn board_view_renders_five_columns() {
     app.view = View::Board;
     let s = screen(&app, 120, 24);
     assert!(s.contains("BOARD (PAPER-STACK)"));
-    for col in ["Todo", "Doing", "Follow-Up", "Blocked", "Done"] {
+    for col in ["Planning", "Review", "Waiting-On", "Backlog", "Closed"] {
         assert!(s.contains(col), "missing column {col}");
     }
     assert!(s.contains("T-001"));
@@ -623,7 +623,7 @@ fn output_view_styles_project_detail_sections_and_summary() {
             "-----\n\n",
             "ID   Project       Title   Status   Priority   Assignee   Branch\n",
             "T-001 paper-stack  demo    todo     low        me\n",
-            "Summary: 1 project · 1 task (1 todo, 0 doing, 0 follow-up, 0 blocked, 0 done)\n"
+            "Summary: 1 project · 1 task (1 planning, 0 review, 0 waiting-on, 0 backlog, 0 closed)\n"
         )
         .into(),
         is_error: false,
@@ -649,7 +649,7 @@ fn output_view_project_detail_handles_narrow_widths() {
     app.view = View::Output;
     app.output = Some(lun::tui::app::CommandOutput {
         command: "status P-001".into(),
-        text: "Project: paper-stack\n====================\n\nOverview\n--------\n\nSummary: 1 project · 0 tasks (0 todo, 0 doing, 0 follow-up, 0 blocked, 0 done)\n".into(),
+        text: "Project: paper-stack\n====================\n\nOverview\n--------\n\nSummary: 1 project · 0 tasks (0 planning, 0 review, 0 waiting-on, 0 backlog, 0 closed)\n".into(),
         is_error: false,
     });
     let _ = screen(&app, 32, 12);
