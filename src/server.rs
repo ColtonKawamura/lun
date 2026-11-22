@@ -15,7 +15,7 @@ use mime_guess::from_path;
 use serde::Deserialize;
 use tokio::sync::Mutex;
 
-use crate::db::{Lun, TaskSpec, TaskUpdateSpec, TaskListSpec, TaskSort, Attachment};
+use crate::db::{Lun, TaskSpec, TaskUpdateSpec, TaskListSpec, TaskSort, Attachment, ProjectSpec};
 
 use pulldown_cmark::{Event, Options as MdOptions, Tag};
 
@@ -34,6 +34,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
 
     let app = Router::new()
         .route("/api/projects", get(list_projects))
+        .route("/api/projects", post(create_project))
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks", post(create_task))
         .route("/api/tasks/search", get(search_tasks))
@@ -43,6 +44,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}/archive", post(archive_task))
         .route("/api/tasks/{key}/unarchive", post(unarchive_task))
         .route("/api/tasks/{key}/logs", get(task_logs))
+        .route("/api/tasks/{key}/logs", post(add_task_log))
         .route("/api/tasks/{key}/attachments", get(task_attachments))
         .route("/api/tasks/{key}/attachments", post(upload_attachment))
         .route("/api/tasks/{key}/links", get(task_links))
@@ -73,6 +75,30 @@ async fn list_projects(state: State<Arc<ServerState>>) -> Response {
     match lun.list_all_projects() {
         Ok(p) => Json(p).into_response(),
         Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+// Create a new project via the web UI.
+#[derive(Deserialize)]
+struct CreateProjectRequest {
+    name: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+async fn create_project(state: State<Arc<ServerState>>, Json(body): Json<CreateProjectRequest>) -> Response {
+    let lun = state.lun.lock().await;
+    let spec = ProjectSpec {
+        name: body.name,
+        status: body.status,
+        message: body.message,
+        user: Some("web".to_string()),
+    };
+    match lun.create_project(spec) {
+        Ok(p) => (StatusCode::CREATED, Json(p)).into_response(),
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }
 
@@ -253,6 +279,27 @@ async fn task_logs(state: State<Arc<ServerState>>, Path(key): Path<String>) -> R
         Ok(l) => Json(l).into_response(),
         Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+#[derive(serde::Deserialize)]
+struct LogMessage { message: String }
+
+async fn add_task_log(
+    state: State<Arc<ServerState>>,
+    Path(key): Path<String>,
+    Json(body): Json<LogMessage>,
+) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    if body.message.trim().is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "message is empty");
+    }
+    let id = match lun.log("task", task.id, "COMMIT", &body.message, "{}", Some("web")) {
+        Ok(id) => id, Err(e) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response()
 }
 
 async fn task_attachments(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {

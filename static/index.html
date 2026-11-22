@@ -434,6 +434,25 @@ textarea.notes-input {
 .log-action { font-weight: 600; }
 .log-action.CREATE { color: var(--success); }
 .log-action.UPDATE { color: var(--accent-light); }
+.log-action.COMMIT { color: var(--warning); }
+.log-action.ATTACH { color: var(--doing); }
+.log-action.LINK { color: var(--follow-up); }
+
+/* Log input row */
+.log-input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.log-input-row input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  color: var(--text);
+  font-size: 13px;
+}
 
 /* Attachments */
 .attachment-item {
@@ -753,6 +772,10 @@ textarea.notes-input {
       <div class="modal-section" id="logsSection" style="display:none;">
         <h3>History</h3>
         <div id="logsList"></div>
+        <div class="log-input-row">
+          <input type="text" id="logMessageInput" placeholder="Add a log message (markdown, $math$ supported)">
+          <button class="btn" id="addLogBtn">Log</button>
+        </div>
       </div>
       
       <div class="modal-section" id="prsSection" style="display:none;">
@@ -1104,6 +1127,12 @@ function setupEventListeners() {
     }
   });
 
+  // Log message
+  document.getElementById('addLogBtn').addEventListener('click', addLogMessage);
+  document.getElementById('logMessageInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') addLogMessage();
+  });
+
   // Notes preview
   document.getElementById('editNotes').addEventListener('input', debounce(updateNotesPreview, 200));
 
@@ -1288,6 +1317,27 @@ async function saveModal() {
   closeModal();
   await loadTasks();
   render();
+}
+
+async function addLogMessage() {
+  if (!editingTask) return;
+  const input = document.getElementById('logMessageInput');
+  const message = input.value.trim();
+  if (!message) return;
+  
+  try {
+    const res = await fetch(`/api/tasks/${editingTask}/logs`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message})
+    });
+    if (!res.ok) throw new Error(await res.text());
+    input.value = '';
+    await loadTaskDetails(editingTask);
+  } catch(e) {
+    console.error('Failed to add log:', e);
+    alert('Failed to add log: ' + e.message);
+  }
 }
 
 function updateNotesPreview() {
