@@ -99,6 +99,7 @@ Fields:
 - `GET /api/tasks/{key}` — Get task
 - `POST /api/tasks/{key}` — Update task
 - `POST /api/tasks/{key}/logs` — Add log entry
+- `GET /api/tasks/{key}/diffs` — Get note-edit diff history
 - `POST /api/tasks/{key}/archive` — Archive task
 - `POST /api/tasks/{key}/unarchive` — Unarchive task
 
@@ -107,6 +108,11 @@ Fields:
 - `POST /api/tasks/{key}/logs` — Add task log
 - `GET /api/projects/{key}/logs` — Get project logs (includes task logs)
 - `POST /api/projects/{key}/logs` — Add project log
+
+### Note Diffs
+- `GET /api/tasks/{key}/diffs` — Note-edit diff history (oldest first).
+  Each entry has `id`, `task_id`, `version`, `diff` (unified diff),
+  `old_text` (full previous notes), `timestamp`, `user`.
 
 ### Attachments
 - `GET /api/tasks/{key}/attachments` — List attachments

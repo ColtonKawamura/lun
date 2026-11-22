@@ -84,10 +84,12 @@ One line per open task (closed hidden unless `--all`/`--status closed`),
 ordered by status then priority: `T-014  review  high  P-002  title  [scope]`.
 `--last` appends each task's newest commit message. `lun status <project> --oneline` is the same view for one project.
 
-### `lun task <T> [--brief | --log N] [--json] [--fields a,b]`
+### `lun task <T> [--brief | --log N | --diffs] [--json] [--fields a,b]`
 
 `--brief` omits the history section, `--log N` keeps the newest N entries,
 `--json`/`--fields` give machine-readable output (see [Agents](agents.md)).
+`--diffs` shows the note-edit diff history (every edit to the notes field),
+useful for recovering accidentally overwritten notes.
 
 ### `lun task edit <T[,T...]> --append-notes TEXT | --scope S`
 

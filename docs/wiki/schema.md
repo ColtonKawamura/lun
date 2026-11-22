@@ -1,6 +1,6 @@
 # Schema
 
-Database schema version 9 (SQLite).
+Database schema version 10 (SQLite).
 
 ## Tables
 
@@ -92,6 +92,20 @@ CREATE TABLE pulls (
 );
 ```
 
+### note_diffs
+```sql
+CREATE TABLE note_diffs (
+  id INTEGER PRIMARY KEY,
+  task_id INTEGER NOT NULL,
+  version INTEGER NOT NULL,
+  diff TEXT NOT NULL,
+  old_text TEXT NOT NULL,
+  timestamp TEXT NOT NULL,
+  user TEXT NOT NULL,
+  FOREIGN KEY (task_id) REFERENCES tasks(id)
+);
+```
+
 ## Enums
 
 ### Project Status
@@ -99,7 +113,7 @@ CREATE TABLE pulls (
 - `inactive`
 
 ### Task Status
-Board columns, left to right (schema v9):
+Board columns, left to right (schema v10):
 - `planning` — scope still being worked out; default for new tasks
 - `review` — back with results, a decision, or a PR to review
 - `waiting-on` — out with other people or an external process
@@ -137,6 +151,7 @@ CREATE INDEX idx_logs_entity ON logs(entity_type, entity_id);
 CREATE INDEX idx_attachments_task ON attachments(task_id);
 CREATE INDEX idx_links_task ON links(task_id);
 CREATE INDEX idx_pulls_task ON pulls(task_id);
+CREATE INDEX idx_note_diffs_task ON note_diffs(task_id);
 ```
 
 ## Migrations
@@ -150,3 +165,7 @@ v9 rebuilt `tasks` with the new status CHECK and mapped existing rows:
 (logs, links, attachments, PRs) are kept. A pre-v9 binary refuses to open a
 v9 database (version mismatch), so upgrade every `lun` that touches a board
 together.
+
+v10 added the `note_diffs` table: on every notes change, a unified diff and
+the full old text are saved so any previous version can be recovered without
+replaying the diff chain.
