@@ -754,7 +754,12 @@ textarea.notes-input {
         <textarea class="notes-input" id="editNotes" placeholder="Write notes in Markdown..."></textarea>
         <div class="notes-preview" id="notesPreview" style="display:none;"></div>
       </div>
-      
+
+      <div class="log-input-row">
+        <input type="text" id="logMessageInput" placeholder="Add a log message (markdown, $math$ supported)">
+        <button class="btn" id="addLogBtn">Log</button>
+      </div>
+
       <div class="modal-section" id="attachmentsSection" style="display:none;">
         <h3>Attachments</h3>
         <div id="attachmentsList"></div>
@@ -772,10 +777,6 @@ textarea.notes-input {
       <div class="modal-section" id="logsSection" style="display:none;">
         <h3>History</h3>
         <div id="logsList"></div>
-        <div class="log-input-row">
-          <input type="text" id="logMessageInput" placeholder="Add a log message (markdown, $math$ supported)">
-          <button class="btn" id="addLogBtn">Log</button>
-        </div>
       </div>
       
       <div class="modal-section" id="prsSection" style="display:none;">
@@ -863,7 +864,7 @@ let leader = false;
 let leaderTimer = null;
 let modalFieldIndex = 0;
 let modalInsertMode = false;
-const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'editNotes'];
+const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'editNotes', 'logMessageInput'];
 
 // Initialize
 (async function init() {
@@ -1193,6 +1194,21 @@ function highlightModalField(idx) {
       if (row) row.classList.toggle('modal-active', isActive);
       const section = el.closest('.modal-section');
       if (section) section.classList.toggle('modal-active', isActive);
+      const logRow = el.closest('.log-input-row');
+      if (logRow) {
+        logRow.classList.toggle('modal-active', isActive);
+        if (isActive) {
+          logRow.style.outline = '2px solid var(--accent)';
+          logRow.style.outlineOffset = '2px';
+          logRow.style.borderRadius = 'var(--radius)';
+          logRow.style.padding = '6px';
+        } else {
+          logRow.style.outline = '';
+          logRow.style.outlineOffset = '';
+          logRow.style.borderRadius = '';
+          logRow.style.padding = '';
+        }
+      }
     }
   });
 }
@@ -1266,13 +1282,31 @@ async function loadTaskDetails(key) {
     const res = await fetch(`/api/tasks/${key}/logs`);
     const logs = await res.json();
     document.getElementById('logsSection').style.display = logs.length ? 'block' : 'none';
-    document.getElementById('logsList').innerHTML = logs.map(l =>
-      `<div class="log-entry">
-        <span class="log-time">${l.timestamp}</span>
+    document.getElementById('logsList').innerHTML = logs.map(l => {
+      const msgEl = document.createElement('div');
+      msgEl.className = 'log-entry';
+      msgEl.innerHTML = `<span class="log-time">${l.timestamp}</span>
         <span class="log-action ${l.action}">${l.action}</span>
-        ${escapeHtml(l.message)}
-      </div>`
-    ).join('');
+        <span class="log-message"></span>`;
+      const msgSpan = msgEl.querySelector('.log-message');
+      // Render markdown+math for log messages
+      const tempDiv = document.createElement('div');
+      tempDiv.textContent = l.message;
+      msgSpan.appendChild(tempDiv);
+      return msgEl.outerHTML;
+    }).join('');
+    // Render math in log entries
+    const logMessages = document.querySelectorAll('#logsList .log-message');
+    logMessages.forEach(el => {
+      if (window.renderMathInElement) {
+        renderMathInElement(el, {
+          delimiters: [
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+          ]
+        });
+      }
+    });
   } catch(e) {
     document.getElementById('logsSection').style.display = 'none';
   }
