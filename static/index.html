@@ -1290,7 +1290,11 @@ function scrollLinkIntoView() {
 function openCurrentLink() {
   const items = document.querySelectorAll('#linksList .link-item a');
   const a = items[linkIndex];
-  if (a) window.open(a.href, '_blank', 'noopener');
+  // Open the selected link in the current window/tab instead of spawning a
+  // new tab. Using `a.click()` respects the link's target attribute (if any)
+  // and avoids the unwanted Safari tab that `window.open(..., '_blank')`
+  // creates.
+  if (a) a.click();
 }
 function getModalField(idx) {
   const id = modalFields[idx];
