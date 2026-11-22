@@ -1669,6 +1669,13 @@ function handleKeyboard(e) {
     return;
   }
 
+  // Ctrl+L on the board: open the first link of the selected card
+  if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L') && !modal.classList.contains('active') && activeCard?.key) {
+    e.preventDefault();
+    openActiveCardLink();
+    return;
+  }
+
   // Ctrl+L opens the selected link when Links is selected in the modal
   if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L') && modal.classList.contains('active')) {
     e.preventDefault();
@@ -2007,6 +2014,22 @@ function moveToLastCard() {
     activeCard = {key: cards[cards.length - 1].dataset.key};
     cards[cards.length - 1].focus();
     setActiveCard();
+  }
+}
+
+// Open the first link on the active card (without opening the modal)
+async function openActiveCardLink() {
+  if (!activeCard?.key) return;
+  try {
+    const res = await fetch(`/api/tasks/${activeCard.key}/links`);
+    const links = await res.json();
+    if (!links || !links.length) return;
+    // Open the first link (front of the card)
+    const uri = links[0].uri;
+    if (/^https?:/i.test(uri)) window.open(uri, '_blank', 'noopener');
+    else window.location.href = uri;
+  } catch(e) {
+    console.error('Failed to open card link:', e);
   }
 }
 
