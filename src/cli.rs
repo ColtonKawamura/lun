@@ -1438,6 +1438,42 @@ pub fn task_view(app: &App, query: &str) -> Result<String> {
     Ok(out)
 }
 
+/// `lun task <key|title> --diffs` — note-edit diff history for a task.
+///
+/// Shows each version with a timestamp, the unified diff, and a compact
+/// indicator of the change size. Useful for recovering accidentally lost
+/// note text.
+pub fn task_view_diffs(app: &App, query: &str) -> Result<String> {
+    let task = resolve_task(&app.lun, query)?;
+    let diffs = app.lun.get_note_diffs(task.id)?;
+
+    let header = format!("Note diffs for {}", task.task_key);
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&"=".repeat(header.chars().count()));
+    out.push('\n');
+
+    if diffs.is_empty() {
+        out.push_str("  (no diffs recorded yet)\n");
+    } else {
+        out.push_str(&format!("  {} version(s) recorded\n", diffs.len()));
+        for d in &diffs {
+            let old_lines = if d.old_text.is_empty() { 0 } else { d.old_text.lines().count() };
+            let ts = display_ts(&d.timestamp);
+            out.push_str(&format!(
+                "\n  v{}  {}  {}  ({} -> {} lines)\n",
+                d.version, ts, d.user, old_lines,
+                task.notes.lines().count() // current line count as reference
+            ));
+            for line in d.diff.lines() {
+                out.push_str(&format!("  {line}\n"));
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// `lun log [-N | HEAD~N | <entity> [-m "message"]] [--oneline]`
 ///
 /// Parses args and dispatches to the right handler.
@@ -3393,6 +3429,8 @@ pub fn run_result_in_reader(
             Some(q) => {
                 if args.len() == 2 {
                     task_view(app, q)
+                } else if args[2..].contains(&"--diffs".to_string()) {
+                    task_view_diffs(app, q)
                 } else {
                     let (filtered, message) = parse_message_flag(&args[2..])?;
                     let mut status: Option<&str> = None;
@@ -3426,7 +3464,7 @@ pub fn run_result_in_reader(
             }
             None => Err(DbError::new(
                 "usage",
-                "expected: lun task <key|title> [--status ...] | task ls | task edit | task complete | task reopen | task archive",
+                "expected: lun task <key|title> [--status ... | --diffs] | task ls | task edit | task complete | task reopen | task archive",
             )),
         },
         Some("log") => log_command(app, &args[1..]),

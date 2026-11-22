@@ -46,6 +46,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}/unarchive", post(unarchive_task))
         .route("/api/tasks/{key}/logs", get(task_logs))
         .route("/api/tasks/{key}/logs", post(add_task_log))
+        .route("/api/tasks/{key}/diffs", get(task_diffs))
         .route("/api/projects/{key}/logs", get(project_logs))
         .route("/api/projects/{key}/logs", post(add_project_log))
         .route("/api/tasks/{key}/attachments", get(task_attachments))
@@ -305,6 +306,17 @@ async fn add_task_log(
         Ok(id) => id, Err(e) => return api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     (StatusCode::CREATED, Json(serde_json::json!({"id": id}))).into_response()
+}
+
+async fn task_diffs(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.get_note_diffs(task.id) {
+        Ok(d) => Json(d).into_response(),
+        Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 async fn project_logs(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {

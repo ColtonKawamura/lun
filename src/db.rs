@@ -13,7 +13,7 @@ use rusqlite::{params, types::Value, Connection};
 use serde::Serialize;
 use std::path::Path;
 
-pub const CURRENT_VERSION: i64 = 9;
+pub const CURRENT_VERSION: i64 = 10;
 
 /// Task statuses, in board-column order (schema v9). These mirror Colton's
 /// Obsidian kanban stages: `planning` (scope being worked out), `review`
@@ -170,6 +170,26 @@ pub struct Pr {
     pub status: String,
     pub created_at: String,
     pub merged_at: Option<String>,
+}
+
+/// Row of the `note_diffs` table (v10: incremental diffs of note edits).
+///
+/// Stores the unified diff (`diff`) and the *old* full notes text (`old_text`)
+/// so that any previous version can be reconstructed without replaying all
+/// diffs. The diff itself is compact — only the changed regions plus a few
+/// context lines — so it is small relative to the full notes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct NoteDiff {
+    pub id: i64,
+    pub task_id: i64,
+    /// Version number (1 = the first diff recorded for this task).
+    pub version: i64,
+    /// Unified diff from old_text -> new notes.
+    pub diff: String,
+    /// Full text of the notes before this change (for direct recovery).
+    pub old_text: String,
+    pub timestamp: String,
+    pub user: String,
 }
 
 /// Input for [`Lun::create_pr`].
@@ -435,6 +455,15 @@ impl Lun {
                             CHECK (status IN ('open', 'merged')),
                 created_at    TEXT NOT NULL,
                 merged_at     TEXT
+             );
+             CREATE TABLE note_diffs (
+                id          INTEGER PRIMARY KEY,
+                task_id     INTEGER NOT NULL REFERENCES tasks(id),
+                version     INTEGER NOT NULL,
+                diff        TEXT NOT NULL,
+                old_text    TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                user        TEXT NOT NULL
              );
              INSERT INTO projects (project_key, name, status, created_at, updated_at)
              VALUES ('P-000', 'Unassigned', 'active',
@@ -804,6 +833,10 @@ impl Lun {
             if version < 9 {
                 Self::migrate_v9_obsidian_stages(conn)?;
             }
+
+            if version < 10 {
+                Self::migrate_v10_note_diffs(conn)?;
+            }
         }
 
         let version: i64 = conn.query_row(
@@ -887,6 +920,27 @@ impl Lun {
         result
     }
 
+    /// v10: `note_diffs` table — incremental diffs of note edits for
+    /// recoverable history. Each diff records the unified diff plus the old
+    /// notes text so any previous version can be recovered without replaying
+    /// the full diff chain.
+    fn migrate_v10_note_diffs(conn: &mut Connection) -> Result<()> {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS note_diffs (
+                id          INTEGER PRIMARY KEY,
+                task_id     INTEGER NOT NULL REFERENCES tasks(id),
+                version     INTEGER NOT NULL,
+                diff        TEXT NOT NULL,
+                old_text    TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                user        TEXT NOT NULL
+             );
+             INSERT INTO migrations (version, applied_at)
+                 VALUES (10, (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')));",
+        )?;
+        Ok(())
+    }
+
     pub fn now() -> String {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -900,6 +954,74 @@ impl Lun {
             .replace('"', "\\\"")
             .replace('\n', "\\n")
             .replace('\t', "\\t")
+    }
+
+    /// Generate a unified diff between two notes texts.
+    ///
+    /// Returns `None` if the texts are identical. Uses the `similar` crate
+    /// (Myers diff) to produce a compact, human-readable diff that only
+    /// includes changed regions plus a few context lines.
+    fn compute_diff(old: &str, new: &str) -> Option<String> {
+        if old == new {
+            return None;
+        }
+        let diff = similar::TextDiff::from_lines(old, new);
+        let mut unified = diff.unified_diff();
+        unified.context_radius(3).header("notes", "notes");
+        let output = unified.to_string();
+        if output.is_empty() { None } else { Some(output) }
+    }
+
+    /// Save a note diff record when notes change on a task.
+    ///
+    /// `old_text` is the notes before the change.  `new_notes` is the notes
+    /// after.  A unified diff is computed and stored alongside `old_text`
+    /// so any previous version can be recovered without replaying the chain.
+    fn save_note_diff(&self, task_id: i64, old_text: &str, new_notes: &str, user: &str) -> Result<()> {
+        let diff = match Self::compute_diff(old_text, new_notes) {
+            Some(d) => d,
+            None => return Ok(()), // no change, skip
+        };
+
+        // Next version number for this task
+        let version: i64 = self
+            .conn
+            .query_row(
+                "SELECT COALESCE(MAX(version), 0) + 1 FROM note_diffs WHERE task_id = ?1",
+                [task_id],
+                |r| r.get(0),
+            )
+            .unwrap_or(1);
+
+        let now = Self::now();
+        self.conn.execute(
+            "INSERT INTO note_diffs (task_id, version, diff, old_text, timestamp, user)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![task_id, version, diff, old_text, now, user],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve all note diffs for a task, oldest first.
+    pub fn get_note_diffs(&self, task_id: i64) -> Result<Vec<NoteDiff>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, task_id, version, diff, old_text, timestamp, user
+             FROM note_diffs WHERE task_id = ?1 ORDER BY version ASC",
+        )?;
+        let mut rows = stmt.query([task_id])?;
+        let mut diffs = Vec::new();
+        while let Some(row) = rows.next()? {
+            diffs.push(NoteDiff {
+                id: row.get(0)?,
+                task_id: row.get(1)?,
+                version: row.get(2)?,
+                diff: row.get(3)?,
+                old_text: row.get(4)?,
+                timestamp: row.get(5)?,
+                user: row.get(6)?,
+            });
+        }
+        Ok(diffs)
     }
 
     // ------------------------------------------------------------------
@@ -1328,10 +1450,15 @@ impl Lun {
             )
             .map_err(|e| DbError::new("not-found", format!("task {task_id}: {e}")))?;
 
+        let old_notes = task.notes.clone();
+
         self.conn.execute(
             "UPDATE tasks SET notes = ?1, updated_at = ?2 WHERE id = ?3",
             params![notes, now, task_id],
         )?;
+
+        // Record diff for recoverable history
+        self.save_note_diff(task_id, &old_notes, notes, user)?;
 
         let describe = |t: &str| {
             let n = t.lines().count();
@@ -1341,7 +1468,7 @@ impl Lun {
                 format!("{n} line{}", if n == 1 { "" } else { "s" })
             }
         };
-        let changes = format!("notes: {} -> {}", describe(&task.notes), describe(notes));
+        let changes = format!("notes: {} -> {}", describe(&old_notes), describe(notes));
         let message = message
             .map(|m| m.to_string())
             .unwrap_or_else(|| format!("update notes for {}", task.task_key));
@@ -1452,7 +1579,9 @@ impl Lun {
                     describe(&task.notes),
                     describe(&notes)
                 ));
-                task.notes = notes;
+                // Record diff for recoverable history
+                let old_notes = std::mem::replace(&mut task.notes, notes.clone());
+                self.save_note_diff(task_id, &old_notes, &notes, user)?;
             }
         }
 
