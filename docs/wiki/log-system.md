@@ -50,6 +50,35 @@ $ lun log T-001 -m "Fixed the bug"
 Log #12 committed to T-001: Fixed the bug
 ```
 
+### Show Last N Logs (`-N`)
+```sh
+lun log -1              # Last log
+lun log -3              # Last 3 logs
+lun log -5 --oneline    # Last 5, one per line
+```
+
+### Show Nth Most Recent (`HEAD~N`)
+Like git: HEAD is the latest, HEAD~1 is 2nd, HEAD~2 is 3rd, etc.
+
+```sh
+lun log HEAD~0          # Latest (same as HEAD)
+lun log HEAD~1          # 2nd most recent
+lun log HEAD~2          # 3rd most recent
+lun log HEAD~2 --oneline
+```
+
+### One-Line Format (`--oneline`)
+```sh
+lun log T-001 --oneline
+lun log -3 --oneline
+lun log HEAD~2 --oneline
+```
+
+```
+2026-11-22 02:08  me  COMMIT | status: todo -> doing
+2026-11-22 01:35  me  UPDATE | status: doing -> todo
+```
+
 ### Math Support
 ```sh
 lun log T-001 -m "Physics: $F=ma$"

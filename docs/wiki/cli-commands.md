@@ -108,6 +108,24 @@ View commit-style history.
 ```sh
 lun log P-001                   # Project logs
 lun log T-001                   # Task logs
+lun log T-001 --oneline         # One-line format
+```
+
+### `lun log -N`
+Show last N logs across all entities.
+```sh
+lun log -1                      # Last log
+lun log -3                      # Last 3 logs
+lun log -5 --oneline
+```
+
+### `lun log HEAD~N`
+Show Nth most recent (HEAD is latest).
+```sh
+lun log HEAD~0                  # Latest
+lun log HEAD~1                  # 2nd most recent
+lun log HEAD~2                  # 3rd most recent
+lun log HEAD~2 --oneline
 ```
 
 ### `lun log <project|task> -m "message"`
