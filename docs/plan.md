@@ -7,6 +7,13 @@ tags:
 ---
 # Lun Project Spec and Phase Plan
 
+> **Status vocabulary changed in schema v9.** This plan predates it and uses
+> the original task statuses (`todo`, `doing`, `follow-up`, `blocked`,
+> `done`). lun now uses the Obsidian kanban stages `planning`, `review`,
+> `waiting-on`, `backlog`, `closed`; the old names are still accepted as
+> input. Current reference: [schema.md](schema.md), [wiki/](wiki/README.md),
+> and [wiki/agents.md](wiki/agents.md) for agent usage.
+
 ## 0. Overview
 
 **Goal:**  

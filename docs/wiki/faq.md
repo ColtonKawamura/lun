@@ -23,6 +23,16 @@ Currently macOS only. Windows/Linux support planned.
 lun add task "My task" proj "My project"
 ```
 
+### What are the task statuses?
+`planning` → `review` → `waiting-on` → `backlog` → `closed` (the board's
+columns, left to right). New tasks start in `planning`; `lun task complete`
+and `lun pr merge` move a task to `closed`. The old names (`todo`, `doing`,
+`follow-up`, `blocked`, `done`) are still accepted as input.
+
+### How do agents use lun without flooding their context?
+They query history in slices: `lun log T-001 -3 --oneline` shows only the
+three newest entries of one task. See [Using lun from agents](agents.md).
+
 ### How do I update a task?
 ```sh
 lun task edit T-001 --title "New title" --priority high

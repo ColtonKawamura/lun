@@ -46,7 +46,7 @@ status P-001 --board        # Kanban board
 ### Tasks
 ```sh
 task T-001                  # View task
-task T-001 --status doing   # Update status
+task T-001 --status review  # Update status (planning|review|waiting-on|backlog|closed)
 task edit T-001 --title "New title"
 task complete T-001
 task reopen T-001

@@ -4,9 +4,38 @@ A low-dependency, CLI-first, markdown-formatted task and project version-control
 tracker for macOS, mixing git-style commits/logs, GitHub-style PRs/merges/issues,
 and kanban boards.
 
+lun is built for two kinds of users at once:
+
+- **Agents drive it from the CLI.** Every operation is a plain command with
+  plain-text output, so an AI agent (or a script) can file, move and annotate
+  tasks with ordinary shell calls.
+- **Every change is a commit.** Each task carries a git-style history, newest
+  first, so an agent can look up just the slice it needs
+  (`lun log T-014 -3 --oneline`) instead of loading a whole task into its
+  context.
+- **The person gets a UI.** The same database backs a web kanban board / phone
+  PWA (`lun serve`) and a full-screen TUI, so the human sees and edits exactly
+  what the agents wrote.
+
 The canonical store is a SQLite database (`.lun/lun.db`) — tasks, projects,
 attachments, and commit logs are never plain-text files. Markdown-style output
 is a human-facing view rendered from the DB.
+
+## Task statuses
+
+Tasks move through five board columns, left to right:
+
+| Status | Meaning |
+|---|---|
+| `planning` | Scope still being worked out. New tasks start here. |
+| `review` | Back with results, a decision to make, or a PR to review. |
+| `waiting-on` | Out with other people or an external process (email, referee, CI, cluster jobs). |
+| `backlog` | Parked for later. |
+| `closed` | Finished (`lun task complete`, `lun pr merge`). |
+
+These are the stages of the Obsidian kanban lun replaced (schema v9). The
+older names are still accepted as input: `todo`/`doing` → `planning`,
+`follow-up` → `review`, `blocked` → `waiting-on`, `done` → `closed`.
 
 ## Status
 
@@ -43,7 +72,7 @@ Examples:
 ```sh
 lun add proj "my new project"
 lun add task "task3" proj "my new project"
-lun task "task3" --status done
+lun task "task3" --status review
 lun proj "my new project" --status inactive
 lun status "my new project" --board
 lun attach project P-001 ./roadmap.md
@@ -51,6 +80,22 @@ lun attach open task T-003 mock.png
 ```
 
 `lun --help` lists all CLI commands.
+
+## For agents
+
+```sh
+cd ~/repos                                  # the dir holding .lun/ (lun reads $CWD/.lun only; never `lun init` elsewhere)
+lun status --json                           # projects + per-status counts
+lun task ls --project "soft pack" --status review
+lun log T-014 -3 --oneline                  # just the 3 newest history entries
+lun task T-014 --status review --message "PR #12 open"   # --message = the commit line
+lun link task T-014 "PR #12" "<url>" </dev/null           # close stdin: no prompt
+```
+
+Changes prompt for a commit message on stdin unless `--message` is given;
+close stdin (`</dev/null`) to accept defaults. The full agent cheat sheet,
+including history lookups and known gaps, is
+[docs/wiki/agents.md](docs/wiki/agents.md).
 
 Inside the TUI, press `/` or `:` and type the same commands you would run in
 the shell, but without the leading `lun`. Examples:
@@ -131,6 +176,7 @@ bind 'TAB:menu-complete'
 
 - **[docs/wiki/](docs/wiki/)** — Full documentation wiki
   - [Overview](docs/wiki/overview.md)
+  - [Using lun from agents](docs/wiki/agents.md)
   - [Installation](docs/wiki/installation.md)
   - [CLI Commands](docs/wiki/cli-commands.md)
   - [Web UI](docs/wiki/web-ui.md)
@@ -145,7 +191,7 @@ bind 'TAB:menu-complete'
   - [FAQ](docs/wiki/faq.md)
 - [docs/plan.md](docs/plan.md) — the phase-by-phase plan
 - [docs/architecture.md](docs/architecture.md) — design notes
-- [docs/schema.md](docs/schema.md) — SQLite schema (v1→v5) reference
+- [docs/schema.md](docs/schema.md) — SQLite schema (v1→v9) reference
 - [docs/tui.md](docs/tui.md) — TUI views & keybindings
 - [docs/nvim.md](docs/nvim.md) — the nvim plugin
 

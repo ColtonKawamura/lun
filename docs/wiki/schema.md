@@ -1,6 +1,6 @@
 # Schema
 
-Database schema version 8 (SQLite).
+Database schema version 9 (SQLite).
 
 ## Tables
 
@@ -23,7 +23,8 @@ CREATE TABLE tasks (
   key TEXT UNIQUE NOT NULL,    -- 'T-001'
   project_id INTEGER NOT NULL,
   title TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'todo',
+  status TEXT NOT NULL DEFAULT 'planning'
+    CHECK (status IN ('planning', 'review', 'waiting-on', 'backlog', 'closed')),
   priority TEXT NOT NULL DEFAULT 'medium',
   scope TEXT,
   assignee TEXT,
@@ -98,11 +99,15 @@ CREATE TABLE pulls (
 - `inactive`
 
 ### Task Status
-- `todo`
-- `doing`
-- `follow-up`
-- `blocked`
-- `done`
+Board columns, left to right (schema v9):
+- `planning` — scope still being worked out; default for new tasks
+- `review` — back with results, a decision, or a PR to review
+- `waiting-on` — out with other people or an external process
+- `backlog` — parked for later
+- `closed` — finished (`task complete`, `pr merge`)
+
+Input aliases (CLI, API, TUI): `todo`/`doing` → `planning`, `follow-up` →
+`review`, `blocked` → `waiting-on`, `done` → `closed`.
 
 ### Task Priority
 - `low`
@@ -136,4 +141,12 @@ CREATE INDEX idx_pulls_task ON pulls(task_id);
 
 ## Migrations
 
-Schema version is stored in `schema_version` table. Run `lun init` to upgrade.
+Applied versions are recorded in the `migrations` table; every open runs any
+pending migrations (`lun init` in the board's directory does the same).
+
+v9 rebuilt `tasks` with the new status CHECK and mapped existing rows:
+`todo`/`doing` → `planning`, `follow-up` → `review`, `blocked` →
+`waiting-on`, `done` → `closed`. Ids, notes, positions and every child row
+(logs, links, attachments, PRs) are kept. A pre-v9 binary refuses to open a
+v9 database (version mismatch), so upgrade every `lun` that touches a board
+together.

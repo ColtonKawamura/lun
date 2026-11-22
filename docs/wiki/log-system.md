@@ -37,7 +37,7 @@ $ lun log T-001
     Commit: Testing log write functionality
 
 - 2026-11-21 14:17  web  UPDATE
-    status: todo -> doing
+    status: planning -> review
 ```
 
 ### Write Logs
@@ -75,8 +75,8 @@ lun log HEAD~2 --oneline
 ```
 
 ```
-2026-11-22 02:08  me  COMMIT | status: todo -> doing
-2026-11-22 01:35  me  UPDATE | status: doing -> todo
+2026-11-22 02:08  me  UPDATE  PR #12 open | status: planning -> review
+2026-11-22 01:35  me  COMMIT  Testing log write functionality
 ```
 
 ### Math Support
@@ -177,12 +177,20 @@ l
 ```
 (Shows current task logs)
 
-## JSON Output
+## Reading history selectively
 
-Add `--json` flag to get machine-readable output:
+The log is meant to be queried in slices, so an agent can answer "what
+happened on this task lately?" without reading the whole history:
+
 ```sh
-lun log T-001 --json
+lun log T-001 -3 --oneline   # 3 newest entries of one task, one line each
+lun log P-001 -10            # 10 newest entries for a project (incl. its tasks)
+lun log -5 --oneline         # 5 newest entries anywhere
+lun log HEAD~1               # the 2nd-newest entry anywhere
 ```
+
+`lun log` has no `--json` output yet; `--oneline` is the compact,
+script-friendly form: `timestamp  user  ACTION  commit message | details`.
 
 ## Schema
 
@@ -225,7 +233,7 @@ lun log P-001 | head -n 10
 - Use quotes for messages with spaces: `lun log T-001 -m "Message with spaces"`
 - Math equations need dollar signs: `$F=ma$` or `$$E=mc^2$$`
 - Logs are permanent and cannot be deleted
-- Use `--json` for scripting
+- Use `-N --oneline` for scripting and agents
 - Math renders in web UI and TUI, not CLI (CLI shows raw text)
 
 ## Edge Cases
@@ -236,6 +244,8 @@ lun log P-001 | head -n 10
 |---------|----------|
 | `lun log -0` | Shows "No logs found" |
 | `lun log -100` | Shows all available logs (no error) |
+| `lun log T-001 -2` | Only the 2 newest entries of T-001 |
+| `lun log T-001 -0` | Shows "No logs found." |
 | `lun log HEAD~0` | Same as latest log |
 | `lun log HEAD~999` | Error: "HEAD~999 is beyond the log history" |
 | `lun log HEAD~` | Error: "'HEAD~' is not valid HEAD~N" |

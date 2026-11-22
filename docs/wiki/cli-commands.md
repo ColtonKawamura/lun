@@ -4,7 +4,14 @@ All commands can be run from the shell or inside the TUI (with `/` or `:`).
 
 ## Global Flags
 
-- `--json`: Output in JSON format (read commands only)
+- `--json`: JSON output — `lun status` and `lun status <query>` only (other commands reject it)
+- `--message "<msg>"`: commit message for `add proj`, `proj`, `move`, `task --status`, `task edit` (skips the stdin prompt)
+
+Every change records a commit and asks for its message on stdin when
+`--message` is absent (`add task` also asks for status, priority, assignee).
+Scripts and agents should pass `--message` or close stdin (`</dev/null`).
+lun reads the board from `$CWD/.lun/lun.db` only — run commands from the
+board's directory. See [Using lun from agents](agents.md).
 - `--help`: Print help text
 - `--version`: Print version
 
@@ -63,17 +70,19 @@ lun task T-001
 lun task "Fix login bug"
 ```
 
-### `lun task <task> --status <todo|doing|follow-up|blocked|done>`
-Update task status.
+### `lun task <task> --status <planning|review|waiting-on|backlog|closed>`
+Update task status. The old names still work (`todo`/`doing` → `planning`,
+`follow-up` → `review`, `blocked` → `waiting-on`, `done` → `closed`).
 ```sh
-lun task T-001 --status doing
+lun task T-001 --status review --message "PR #12 open"
+lun task T-001 --status waiting-on --message "waiting on referee"
 ```
 
 ### `lun task ls [filters]`
 List tasks with optional filters.
 ```sh
 lun task ls --project P-001
-lun task ls --status doing
+lun task ls --status review
 lun task ls --priority high
 lun task ls --assignee alice
 lun task ls --sort created_at
@@ -90,8 +99,8 @@ lun task edit T-001 --priority high
 ### `lun task complete|reopen|archive <task>`
 Task lifecycle commands.
 ```sh
-lun task complete T-001         # Mark as done
-lun task reopen T-001           # Mark as todo
+lun task complete T-001         # -> closed
+lun task reopen T-001           # -> planning (or --status <status>)
 lun task archive T-001          # Archive (hide from default views)
 ```
 
@@ -103,16 +112,19 @@ lun move T-001 "Website"
 
 ## Log System
 
-### `lun log <project|task>`
-View commit-style history.
+### `lun log <project|task> [-N] [--oneline]`
+View commit-style history, newest first. `-N` keeps only the N newest
+entries, so you can look at the recent past of one task without reading all
+of it.
 ```sh
-lun log P-001                   # Project logs
+lun log P-001                   # Project logs (includes its tasks' entries)
 lun log T-001                   # Task logs
 lun log T-001 --oneline         # One-line format
+lun log T-001 -3 --oneline      # Only the 3 newest entries of T-001
 ```
 
 ### `lun log -N`
-Show last N logs across all entities.
+Show last N logs across all entities (`lun log -N <entity>` limits to one entity, same as `lun log <entity> -N`).
 ```sh
 lun log -1                      # Last log
 lun log -3                      # Last 3 logs

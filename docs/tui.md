@@ -56,7 +56,7 @@ their context-relative behavior.
 | view          | how to get there                     | what it shows |
 | ------------- | ------------------------------------ | ------------- |
 | Status        | launch                               | projects + status counts + summary |
-| Board         | `/board`                             | kanban columns (todo / doing / follow-up / blocked / done) for the current project |
+| Board         | `/board`                             | kanban columns (planning / review / waiting-on / backlog / closed) for the current project |
 | Project       | `/project`                           | project list; `enter` sets the current project |
 | Task          | `t` (current task) / `/task <q>`     | task detail: fields, description, attachments, links, log history, **PRs** |
 | New Task      | `/new-task`                          | form to create a task (title, project, status, priority, assignee, branch, labels) |

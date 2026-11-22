@@ -26,14 +26,27 @@ lun serve 127.0.0.1:8080         # Local only
 - Task count
 - Search/filter buttons
 
-### Task List
-- Cards showing task key, title, status, priority
-- Click card to open details modal
-- Drag-and-drop reordering
+### Board
+Five columns, left to right — the task statuses:
+
+| Column | Color | Meaning |
+|---|---|---|
+| Planning | blue | scope still being worked out; new cards start here |
+| Review | magenta | back with results, a decision, or a PR to review |
+| Waiting-On | amber | out with other people or an external process |
+| Backlog | slate | parked for later |
+| Closed | green | finished |
+
+- Cards show task key, title, priority, scope, assignee and project
+- Click a card (or focus it and press `Enter`) to open the details modal
+- Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
+  shift the focused card one column right/left; `x` closes it
+- The filter bar (`f`) filters by project, status, priority, scope and text
 
 ### Task Details Modal
 Fields:
-- Status (dropdown)
+- Status (dropdown: Planning, Review, Waiting-On, Backlog, Closed; the
+  **Close** button sets Closed)
 - Priority (dropdown)
 - Project (dropdown)
 - Scope (text)

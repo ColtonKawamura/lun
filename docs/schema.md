@@ -85,6 +85,19 @@ Version 6 normalizes statuses:
 - existing task values are migrated (`in-progress`→`doing`, `review`→`follow-up`);
 - existing project values are migrated (`done`→`inactive`, everything else→`active`).
 
+Version 7 adds `tasks.scope` (nullable workstream tag); version 8 adds
+`tasks.position` (explicit within-column order).
+
+Version 9 makes the task statuses the stages of Colton's Obsidian kanban,
+in board order: `planning` / `review` / `waiting-on` / `backlog` / `closed`
+(default `planning`). SQLite cannot alter a CHECK, so `tasks` is rebuilt
+(foreign keys off → copy into `tasks_v9` with the new CHECK → drop → rename →
+`pragma_foreign_key_check` → foreign keys on), mapping
+`todo`/`doing`→`planning`, `follow-up`→`review`, `blocked`→`waiting-on`,
+`done`→`closed`. Ids, notes, positions, logs, links, attachments and PRs are
+kept. The old names stay valid *input* everywhere (CLI, API, TUI) and are
+normalized before validation; a pre-v9 binary refuses a v9 database.
+
 ## projects
 
 | column        | type    | notes |
@@ -106,7 +119,7 @@ Seed row: `P-000 / "Unassigned" / active`.
 | task_key   | TEXT    | UNIQUE, e.g. `T-008` |
 | project_id | INTEGER | FK → `projects.id`, nullable; tasks without a project are written with an explicit reference to P-000 |
 | title      | TEXT    | |
-| status     | TEXT    | `todo` \| `doing` \| `follow-up` \| `blocked` \| `done` (CHECK) |
+| status     | TEXT    | `planning` \| `review` \| `waiting-on` \| `backlog` \| `closed` (CHECK, v9; default `planning`) |
 | priority   | TEXT    | `low` \| `med` \| `high` (CHECK) |
 | assignee   | TEXT    | nullable |
 | branch     | TEXT    | nullable (git branch name) |
@@ -216,8 +229,8 @@ CHECK-constrained to `project`/`task`.
   numbering never reuses, even after merges). Logs `UPDATE` on the task
   with `details` = `{"pr", "source", "target"}`.
 - `Lun::merge_pr(pr_id, message, user)` — flips an open PR to `merged`,
-  stamps `merged_at`, moves the task to `done` (a merged PR means the
-  task is done), and logs `MERGE` on the task with `details` =
+  stamps `merged_at`, moves the task to `closed` (a merged PR means the
+  task is finished), and logs `MERGE` on the task with `details` =
   `{"changes", "pr", "source", "target"}`. Merging a non-open PR is a
   `usage` error (`already merged`); an unknown id is `not-found`.
 - `list_prs` / `list_open_prs` / `pr_by_key` / `prs_for_task` /

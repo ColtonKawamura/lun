@@ -63,12 +63,11 @@ lun serve 100.71.78.78:9120
 ```
 
 ### Database Location
-Default: `.lun/lun.db`
-
-Override with `LUN_DB` env var:
-```sh
-LUN_DB=/path/to/lun.db lun status
-```
+`.lun/lun.db` under the **current working directory**. There is no override
+variable and no parent-directory search: run `lun` (and `lun serve`) from the
+directory that holds `.lun/`. Running it anywhere else fails with
+`not-initialized ... run lun init first` — that means "wrong directory", not
+"initialize here".
 
 ## Uninstall
 

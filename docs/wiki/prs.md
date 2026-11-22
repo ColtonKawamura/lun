@@ -94,4 +94,4 @@ lun does not require git, but integrates when present:
 - Use `lun pr ls` to see all open PRs
 - `lun pr show T-001` shows PR for task
 - PRs are linked to tasks, not projects
-- Merge updates task status to `done`
+- Merge moves the task to `closed`
