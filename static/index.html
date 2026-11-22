@@ -157,8 +157,8 @@ body {
   min-height: calc(100dvh - 140px);
 }
 .column {
-  flex: 0 0 280px;
-  min-width: 260px;
+  flex: 0 0 320px;
+  min-width: 300px;
   background: var(--bg-secondary);
   border-radius: var(--radius);
   display: flex;
@@ -246,6 +246,14 @@ body {
   font-weight: 500;
   font-size: 14px;
   margin-bottom: 6px;
+  word-break: break-word;
+}
+.commit-preview {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  font-style: italic;
+  opacity: 0.75;
   word-break: break-word;
 }
 .card-meta {
@@ -1012,6 +1020,7 @@ function renderBoard() {
     container.innerHTML = colTasks.map(t => cardHtml(t)).join('');
   });
   setActiveCard();
+  populateCommitPreviews();
 }
 
 function projectName(id) {
@@ -1052,6 +1061,7 @@ function cardHtml(t) {
   const priClass = t.priority === 'high' ? 'priority-high' : t.priority === 'med' ? 'priority-med' : '';
   return `<div class="card" data-key="${t.task_key}" tabindex="0">
     <div class="card-title">${escapeHtml(t.title)}</div>
+    <div class="commit-preview" data-commit-for="${t.task_key}"></div>
     <div class="card-meta">
       <span>${t.task_key}</span>
       <span class="badge ${priClass}">${t.priority}</span>
@@ -1060,6 +1070,35 @@ function cardHtml(t) {
       <span class="badge project" style="background:${projectColor(t.project_id)}">${escapeHtml(projectName(t.project_id))}</span>
     </div>
   </div>`;
+}
+
+// Populate commit previews on each card
+async function populateCommitPreviews() {
+  const previews = document.querySelectorAll('.commit-preview');
+  const cached = {};
+  for (const el of previews) {
+    const key = el.dataset.commitFor;
+    if (!key || cached[key] !== undefined) {
+      if (cached[key] !== undefined) {
+        el.textContent = cached[key];
+      }
+      continue;
+    }
+    try {
+      const resp = await fetch(`/api/tasks/${encodeURIComponent(key)}/last_commit`);
+      if (resp.ok) {
+        const data = await resp.json();
+        cached[key] = data.message || '';
+        el.textContent = cached[key];
+      } else {
+        cached[key] = '';
+        el.textContent = '';
+      }
+    } catch {
+      cached[key] = '';
+      el.textContent = '';
+    }
+  }
 }
 
 function setActiveCard() {

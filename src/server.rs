@@ -38,6 +38,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks", post(create_task))
         .route("/api/tasks/search", get(search_tasks))
+        .route("/api/tasks/{key}/last_commit", get(task_last_commit))
         .route("/api/tasks/{key}", get(task_by_key))
         .route("/api/tasks/{key}", post(update_task))
         .route("/api/tasks/{key}/reorder", post(reorder_task))
@@ -435,6 +436,28 @@ async fn task_prs(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Re
     };
     prs.sort_by(|a, b| b.id.cmp(&a.id));
     Json(prs).into_response()
+}
+
+async fn task_last_commit(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    // Look up task to get its id
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t,
+        Err(_) => return api_err(StatusCode::NOT_FOUND, "task not found"),
+    };
+    // Return the most recent log entry for the task
+    let msg = match lun.task_logs(task.id) {
+        Ok(logs) => {
+            if let Some(first) = logs.first() {
+                Some(first.message.clone())
+            } else {
+                None
+            }
+        }
+        Err(_) => None,
+    };
+    let json = serde_json::json!({"message": msg});
+    Json(json).into_response()
 }
 
 async fn list_scopes(state: State<Arc<ServerState>>) -> Response {
