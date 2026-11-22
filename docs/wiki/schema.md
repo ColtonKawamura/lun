@@ -1,6 +1,6 @@
 # Schema
 
-Database schema version 10 (SQLite).
+Database schema version 11 (SQLite).
 
 ## Tables
 
@@ -47,9 +47,16 @@ CREATE TABLE logs (
   user TEXT NOT NULL DEFAULT 'me',
   action TEXT NOT NULL,
   message TEXT NOT NULL,
-  details TEXT
+  details TEXT,
+  hash TEXT NOT NULL DEFAULT ''  -- SHA-256 hex, chained to the previous entry of the same entity (v11)
 );
 ```
+
+`hash` works like a git commit hash. It covers the entry's fields plus the hash of the
+previous entry of the same project/task (the first entry chains to 64 zeros), so no two
+entries share one, even with the same message in the same second. The first 7 characters
+are shown after every commit message: `edit T-013; update note (a1b2c3d)`. Look one up with
+`lun log a1b2c3d`.
 
 ### attachments
 ```sql
@@ -102,6 +109,7 @@ CREATE TABLE note_diffs (
   old_text TEXT NOT NULL,
   timestamp TEXT NOT NULL,
   user TEXT NOT NULL,
+  log_id INTEGER REFERENCES logs(id),  -- the log entry that recorded this edit (v11)
   FOREIGN KEY (task_id) REFERENCES tasks(id)
 );
 ```
@@ -152,6 +160,7 @@ CREATE INDEX idx_attachments_task ON attachments(task_id);
 CREATE INDEX idx_links_task ON links(task_id);
 CREATE INDEX idx_pulls_task ON pulls(task_id);
 CREATE INDEX idx_note_diffs_task ON note_diffs(task_id);
+CREATE INDEX idx_logs_hash ON logs(hash);
 ```
 
 ## Migrations
@@ -169,3 +178,9 @@ together.
 v10 added the `note_diffs` table: on every notes change, a unified diff and
 the full old text are saved so any previous version can be recovered without
 replaying the diff chain.
+
+v11 added `logs.hash` and `note_diffs.log_id`. Existing log entries are hashed in id order
+(each chained to the previous entry of its entity), and each v10 diff is linked to its log
+entry by pairing the task's diffs with its `notes:` UPDATE entries from the newest end
+(older notes edits predate v10, so they have an entry but no diff). A diff that cannot be
+paired keeps `log_id` NULL. Everything runs in one transaction.

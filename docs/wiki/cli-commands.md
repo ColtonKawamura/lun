@@ -147,6 +147,21 @@ lun log T-001 --oneline         # One-line format
 lun log T-001 -3 --oneline      # Only the 3 newest entries of T-001
 ```
 
+### `lun log <hash> [--old-notes]`
+Every commit message in a log view ends with a short hash, e.g. `edit T-013; update note (a1b2c3d)`.
+Give that hash (4+ hex characters, any prefix of the full 64) to see exactly that entry. If it edited a
+task's notes, the notes diff it recorded is shown too, along with the command to put the old notes back.
+`--old-notes` prints only the notes as they were *before* that edit, raw, so they can be piped back in.
+```sh
+lun log a1b2c3d                 # The entry plus its notes diff
+lun log a1b2c3d --old-notes     # Notes as they were before that edit
+lun task edit T-013 --notes "$(lun log a1b2c3d --old-notes)" --message "revert notes to before a1b2c3d"
+```
+An ambiguous prefix is an error (use more characters). `lun log --json` includes the full `hash`.
+
+A task edit with no `--message` is logged with what it changed: `edit T-013; update note`,
+`edit T-013; update status to Review`, several joined with `; `. The same wording is used by the web UI.
+
 ### `lun log -N`
 Show last N logs across all entities (`lun log -N <entity>` limits to one entity, same as `lun log <entity> -N`).
 ```sh

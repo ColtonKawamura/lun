@@ -112,7 +112,9 @@ Fields:
 ### Note Diffs
 - `GET /api/tasks/{key}/diffs` — Note-edit diff history (oldest first).
   Each entry has `id`, `task_id`, `version`, `diff` (unified diff),
-  `old_text` (full previous notes), `timestamp`, `user`.
+  `old_text` (full previous notes), `timestamp`, `user`, `log_id` and `log_hash` (the log entry that recorded
+  the edit; `lun log <log_hash>` shows it). Log entries from `GET /api/tasks/{key}/logs` carry a `hash` too;
+  the card back shows its first 7 characters after each message.
 
 ### Attachments
 - `GET /api/tasks/{key}/attachments` — List attachments

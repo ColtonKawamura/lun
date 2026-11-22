@@ -442,6 +442,7 @@ textarea.notes-input {
 }
 .log-entry:last-child { border-bottom: none; }
 .log-time { color: var(--text-muted); font-size: 12px; }
+.log-hash { color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .log-action { font-weight: 600; }
 .log-action.CREATE { color: var(--success); }
 .log-action.UPDATE { color: var(--accent-light); }
@@ -1442,6 +1443,15 @@ async function loadTaskDetails(key) {
       // Render markdown+math for log messages
       const tempDiv = document.createElement('div');
       tempDiv.textContent = l.message;
+      if (l.hash) {
+        // short hash after the message, like a git SHA: `lun log <hash>` shows the diff
+        const h = document.createElement('code');
+        h.className = 'log-hash';
+        h.title = l.hash;
+        h.textContent = '(' + l.hash.slice(0, 7) + ')';
+        tempDiv.appendChild(document.createTextNode(' '));
+        tempDiv.appendChild(h);
+      }
       msgSpan.appendChild(tempDiv);
       return msgEl.outerHTML;
     }).join('');

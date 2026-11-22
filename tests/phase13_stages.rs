@@ -133,7 +133,7 @@ fn status_set_is_the_obsidian_stages_in_board_order() {
         TASK_STATUSES,
         ["planning", "review", "waiting-on", "backlog", "closed"]
     );
-    assert_eq!(lun::db::CURRENT_VERSION, 9);
+    assert!(lun::db::CURRENT_VERSION >= 9);
 }
 
 #[test]
@@ -142,7 +142,7 @@ fn v8_database_upgrades_to_v9_mapping_statuses_and_keeping_children() {
     make_v8_db(&root);
 
     let lun = Lun::init(&root).unwrap();
-    assert_eq!(lun.schema_version().unwrap(), 9);
+    assert_eq!(lun.schema_version().unwrap(), lun::db::CURRENT_VERSION);
 
     let conn = raw(&root);
     let statuses: Vec<(String, String)> = conn
@@ -222,7 +222,7 @@ fn v8_database_upgrades_to_v9_mapping_statuses_and_keeping_children() {
     // Re-opening is a no-op (idempotent migrations).
     drop(lun);
     let lun = Lun::open(&root).unwrap();
-    assert_eq!(lun.schema_version().unwrap(), 9);
+    assert_eq!(lun.schema_version().unwrap(), lun::db::CURRENT_VERSION);
     let v9_rows: i64 = raw(&root)
         .query_row("SELECT COUNT(*) FROM migrations WHERE version = 9", [], |r| r.get(0))
         .unwrap();

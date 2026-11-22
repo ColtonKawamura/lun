@@ -176,6 +176,7 @@ fn log_json(e: &LogEntry, keys: &HashMap<(String, i64), String>) -> Value {
     let details: Value = serde_json::from_str(&e.details).unwrap_or(json!(e.details));
     json!({
         "id": e.id,
+        "hash": e.hash,
         "entity": keys.get(&(e.entity_type.clone(), e.entity_id)),
         "entity_type": e.entity_type,
         "timestamp": e.timestamp,
@@ -186,8 +187,9 @@ fn log_json(e: &LogEntry, keys: &HashMap<(String, i64), String>) -> Value {
     })
 }
 
-const LOG_FIELDS: [&str; 8] = [
+const LOG_FIELDS: [&str; 9] = [
     "id",
+    "hash",
     "entity",
     "entity_type",
     "timestamp",

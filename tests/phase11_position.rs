@@ -234,7 +234,7 @@ fn v7_database_upgrades_to_v8_seeding_position() {
         .unwrap()
         .query_row("SELECT MAX(version) FROM migrations", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 9);
+    assert_eq!(version, lun::db::CURRENT_VERSION);
 
     let _ = std::fs::remove_dir_all(&root);
 }

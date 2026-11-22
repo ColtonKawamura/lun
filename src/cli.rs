@@ -447,6 +447,7 @@ Usage:
   lun task complete|reopen|archive <task>   Update task lifecycle
   lun log <project|task> [-N] [--oneline] [--json] [--since ID]   History of one project/task, newest first (-N: only the N newest)
   lun log -N | HEAD~N [--oneline]   N newest entries / the Nth-newest entry across everything
+  lun log <hash> [--old-notes]   One entry by the (a1b2c3d) after its message; shows the notes diff it recorded, or with --old-notes just the notes as they were before it
   lun log <project|task> -m \"<message>\"   Write a commit-style entry
   lun grep \"<text>\"         Search project/task fields and commit text
   lun attach <task|project> <key|title> /path/to/file   Attach a file
@@ -680,6 +681,25 @@ pub fn display_ts(ts: &str) -> String {
     t.chars().take(16).collect()
 }
 
+/// First 7 characters of a log hash (like a short git SHA); `None` for
+/// entries that have no hash.
+pub fn short_hash(hash: &str) -> Option<&str> {
+    if hash.is_empty() {
+        None
+    } else {
+        Some(&hash[..hash.len().min(7)])
+    }
+}
+
+/// ` (a1b2c3d)`: appended to a log entry's commit message in every log view,
+/// so any line can be handed to `lun log <hash>`. Empty when there is no hash.
+pub fn hash_tag(entry: &LogEntry) -> String {
+    match short_hash(&entry.hash) {
+        Some(h) => format!(" ({h})"),
+        None => String::new(),
+    }
+}
+
 /// Pull a string value out of a small flat JSON object stored as TEXT
 /// (e.g. `{"status": "planning", "priority": "med"}`). Details are written by
 /// lun itself with string values only; this avoids a JSON dependency.
@@ -811,7 +831,7 @@ pub fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
         lines.push(format!("    {d}"));
     }
     if let Some(note) = json_str(&entry.details, "note") {
-        lines.push(format!("    Note: \"{note}\""));
+        lines.push(format!("    Note: \"{note}\"{}", hash_tag(entry)));
     }
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
@@ -822,7 +842,7 @@ pub fn task_view_entry_lines(entry: &LogEntry) -> Vec<String> {
         }
     }
     if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
-        lines.push(format!("    Commit: {}", entry.message));
+        lines.push(format!("    Commit: {}{}", entry.message, hash_tag(entry)));
     }
     lines
 }
@@ -860,7 +880,7 @@ pub fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
         }
     }
     if let Some(note) = json_str(&entry.details, "note") {
-        lines.push(format!("    Note: \"{note}\""));
+        lines.push(format!("    Note: \"{note}\"{}", hash_tag(entry)));
     }
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
@@ -871,7 +891,7 @@ pub fn task_log_entry_lines(entry: &LogEntry) -> Vec<String> {
         }
     }
     if entry.action != "COMMENT" && json_str(&entry.details, "note").is_none() {
-        lines.push(format!("    Commit: {}", entry.message));
+        lines.push(format!("    Commit: {}{}", entry.message, hash_tag(entry)));
     }
     lines
 }
@@ -885,7 +905,7 @@ pub fn log_oneline_line(entry: &LogEntry) -> String {
     let message = if message.is_empty() {
         String::new()
     } else {
-        format!("  {message}")
+        format!("  {message}{}", hash_tag(entry))
     };
     let detail = entry_inline_details(entry);
     let extra = match detail {
@@ -910,13 +930,13 @@ pub fn project_log_entry_lines(entry: &LogEntry) -> Vec<String> {
         "{}  {}  {}",
         display_ts(&entry.timestamp),
         entry.user,
-        entry.message
+        format!("{}{}", entry.message, hash_tag(entry))
     )];
     if let Some(d) = entry_inline_details(entry) {
         lines.push(format!("    {d}"));
     }
     if let Some(note) = json_str(&entry.details, "note") {
-        lines.push(format!("    Note: \"{note}\""));
+        lines.push(format!("    Note: \"{note}\"{}", hash_tag(entry)));
     }
     if let Some(filename) = json_str(&entry.details, "filename") {
         lines.push(format!("    File: {filename}"));
@@ -1458,13 +1478,24 @@ pub fn task_view_diffs(app: &App, query: &str) -> Result<String> {
         out.push_str("  (no diffs recorded yet)\n");
     } else {
         out.push_str(&format!("  {} version(s) recorded\n", diffs.len()));
-        for d in &diffs {
-            let old_lines = if d.old_text.is_empty() { 0 } else { d.old_text.lines().count() };
-            let ts = display_ts(&d.timestamp);
+        for (i, d) in diffs.iter().enumerate() {
+            // Each edit's "after" is the next edit's "before" (or the notes today).
+            let after = diffs
+                .get(i + 1)
+                .map(|n| n.old_text.as_str())
+                .unwrap_or(&task.notes);
+            let tag = match d.log_hash.as_deref().and_then(short_hash) {
+                Some(h) => format!("  ({h})"),
+                None => String::new(),
+            };
             out.push_str(&format!(
-                "\n  v{}  {}  {}  ({} -> {} lines)\n",
-                d.version, ts, d.user, old_lines,
-                task.notes.lines().count() // current line count as reference
+                "\n  v{}  {}  {}  ({} -> {} lines){}\n",
+                d.version,
+                display_ts(&d.timestamp),
+                d.user,
+                d.old_text.lines().count(),
+                after.lines().count(),
+                tag
             ));
             for line in d.diff.lines() {
                 out.push_str(&format!("  {line}\n"));
@@ -1486,11 +1517,14 @@ pub fn log_command(app: &App, args: &[String]) -> Result<String> {
     }
 
     let mut oneline = false;
+    let mut old_notes = false;
     let mut positional: Vec<&String> = Vec::new();
 
     for arg in args {
         if arg == "--oneline" {
             oneline = true;
+        } else if arg == "--old-notes" {
+            old_notes = true;
         } else if arg == "-m" {
             // Write mode: entity is the arg before -m, message is the arg after
             let pos = args
@@ -1521,6 +1555,23 @@ pub fn log_command(app: &App, args: &[String]) -> Result<String> {
     }
 
     let first = positional[0];
+
+    // `lun log <hash>`: one entry by (a prefix of) its hash, with the notes
+    // diff it recorded. A hex-looking word that matches no hash may still be
+    // a project name, so "not found" falls through to the entity lookup.
+    if first.len() >= 4 && first.chars().all(|c| c.is_ascii_hexdigit()) {
+        match app.lun.log_by_hash(first) {
+            Ok(entry) => return log_show_entry(app, &entry, old_notes),
+            Err(e) if e.kind() == "not-found" => {}
+            Err(e) => return Err(e),
+        }
+    }
+    if old_notes {
+        return Err(DbError::new(
+            "usage",
+            "--old-notes needs a log hash: lun log <hash> --old-notes",
+        ));
+    }
 
     // Per-entity limit: `lun log <entity> -N` (or `lun log -N <entity>`) shows
     // only that entity's N newest entries, so an agent can pull just the
@@ -1565,6 +1616,44 @@ pub fn log_command(app: &App, args: &[String]) -> Result<String> {
 
     // Regular entity query
     log_view(app, first, oneline)
+}
+
+/// `lun log <hash>`: the entry in full, plus the notes diff it recorded (if
+/// it edited notes). With `old_notes`, only the notes as they were *before*
+/// that edit, raw, so they can be piped straight back:
+/// `lun task edit T-013 --notes "$(lun log a1b2c3d --old-notes)"`.
+fn log_show_entry(app: &App, entry: &LogEntry, old_notes: bool) -> Result<String> {
+    let diff = app.lun.note_diff_for_log(entry.id)?;
+    let short = short_hash(&entry.hash).unwrap_or("");
+    if old_notes {
+        return match diff {
+            Some(d) => Ok(d.old_text),
+            None => Err(DbError::new(
+                "not-found",
+                format!("log entry {short} did not edit notes"),
+            )),
+        };
+    }
+    let key = app
+        .lun
+        .entity_key(&entry.entity_type, entry.entity_id)
+        .unwrap_or_else(|_| "?".to_string());
+    let mut out = format!("commit {}\nEntity: {key}\n", entry.hash);
+    for line in task_log_entry_lines(entry) {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    if let Some(d) = diff {
+        out.push_str("\n    Notes diff (before -> after):\n");
+        for line in d.diff.lines() {
+            out.push_str(&format!("      {line}\n"));
+        }
+        out.push_str(&format!(
+            "\n    Notes before this edit:  lun log {short} --old-notes\n    \
+             Put them back:           lun task edit {key} --notes \"$(lun log {short} --old-notes)\" --message \"revert notes to before {short}\"\n"
+        ));
+    }
+    Ok(out.trim_end().to_string())
 }
 
 /// Show last N log entries across all entities.
@@ -2333,7 +2422,7 @@ pub fn task_edit(
             format!("{}\n\n{}", task.notes.trim_end(), extra)
         });
     }
-    let default_message = format!("edit {}", task.task_key);
+    let default_message = Lun::default_edit_message(&task, &spec);
     spec.message = Some(read_commit_message_with_optional_override(
         stdin,
         explicit_message,
