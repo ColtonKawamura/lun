@@ -24,15 +24,22 @@ static WEB_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/static");
 pub struct ServerState {
     pub lun: Arc<Mutex<Lun>>,
     pub data_dir: PathBuf,
+    /// The board directory (parent of `.lun/`), full path and `~`-form.
+    pub board_root: String,
+    pub board_display: String,
 }
 
 pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()> {
+    let board_root = data_dir.parent().map(PathBuf::from).unwrap_or_else(|| data_dir.clone());
     let state = Arc::new(ServerState {
         lun: Arc::new(Mutex::new(lun)),
+        board_display: crate::root::display_path(&board_root, crate::root::home_dir().as_deref()),
+        board_root: board_root.display().to_string(),
         data_dir,
     });
 
     let app = Router::new()
+        .route("/api/board", get(board_info))
         .route("/api/projects", get(list_projects))
         .route("/api/projects", post(create_project))
         .route("/api/tasks", get(list_tasks))
@@ -470,6 +477,15 @@ async fn task_last_commit(state: State<Arc<ServerState>>, Path(key): Path<String
     };
     let json = serde_json::json!({"message": msg});
     Json(json).into_response()
+}
+
+/// Which board this server is serving (shown next to the logo).
+async fn board_info(state: State<Arc<ServerState>>) -> Response {
+    Json(serde_json::json!({
+        "root": state.board_root,
+        "display": state.board_display,
+    }))
+    .into_response()
 }
 
 async fn list_scopes(state: State<Arc<ServerState>>) -> Response {

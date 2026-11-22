@@ -36,9 +36,10 @@ pub fn find_root(start: &Path, ceiling: Option<&Path>) -> Option<PathBuf> {
     None
 }
 
-/// `$HOME` as the search ceiling. Canonicalized, because `current_dir()` is
-/// the physical path and a symlinked `$HOME` would otherwise never match.
-fn home_ceiling() -> Option<PathBuf> {
+/// `$HOME` (absolute, canonicalized), the search ceiling. Canonicalized
+/// because `current_dir()` is the physical path and a symlinked `$HOME`
+/// would otherwise never match.
+pub fn home_dir() -> Option<PathBuf> {
     let home = PathBuf::from(env::var_os("HOME")?);
     if !home.is_absolute() {
         return None;
@@ -63,6 +64,25 @@ pub fn not_found_error(start: &Path) -> DbError {
 pub fn from_cwd() -> Result<(PathBuf, PathBuf), DbError> {
     let cwd = env::current_dir()
         .map_err(|e| DbError::new("io", format!("resolving CWD: {e}")))?;
-    let root = find_root(&cwd, home_ceiling().as_deref()).ok_or_else(|| not_found_error(&cwd))?;
+    let root = find_root(&cwd, home_dir().as_deref()).ok_or_else(|| not_found_error(&cwd))?;
     Ok((root, cwd))
+}
+
+/// A board directory as shown to people: `~/repos/` for a board under
+/// `home`, the full path otherwise, always with a trailing slash.
+pub fn display_path(root: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home {
+        if root == home {
+            return "~/".to_string();
+        }
+        if let Ok(rel) = root.strip_prefix(home) {
+            return format!("~/{}/", rel.display());
+        }
+    }
+    let full = root.display().to_string();
+    if full.ends_with('/') {
+        full
+    } else {
+        format!("{full}/")
+    }
 }

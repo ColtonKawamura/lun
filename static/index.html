@@ -53,7 +53,8 @@ body {
   padding: 8px 16px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 4px 12px;
+  flex-wrap: wrap;
   position: sticky;
   top: 0;
   z-index: 100;
@@ -64,13 +65,34 @@ body {
   color: var(--accent-light);
   flex-shrink: 0;
 }
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 0;
+}
+.board-dir {
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: min(60vw, 480px);
+}
 .header-controls {
   display: flex;
   gap: 8px;
   align-items: center;
-  flex: 1;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  min-width: 0;
 }
+.header-controls select { max-width: 100%; }
 .project-title-bar {
   text-align: center;
   padding: 20px;
@@ -622,6 +644,14 @@ textarea.notes-input {
     min-width: 220px;
   }
   .hint-bar { display: none; }
+  /* narrow screens: board directory sits under the logo */
+  .brand { flex-direction: column; align-items: flex-start; gap: 0; }
+  .board-dir { font-size: 10px; line-height: 1.1; max-width: 70vw; }
+}
+
+@media (max-width: 480px) {
+  /* phones: controls take their own full-width row, left-aligned */
+  .header-controls { flex-basis: 100%; justify-content: flex-start; }
 }
 
 /* Katex */
@@ -648,7 +678,10 @@ textarea.notes-input {
 
 <!-- Header -->
 <div class="header">
-  <h1>lun</h1>
+  <div class="brand">
+    <h1>lun</h1>
+    <span class="board-dir" id="boardDir" hidden></span>
+  </div>
   <div class="header-controls">
     <select id="projectFilter" title="Project">
       <option value="">All Projects</option>
@@ -891,7 +924,20 @@ let modalInsertMode = false;
 const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'linksSection', 'editNotes', 'logMessageInput'];
 
 // Initialize
+async function loadBoardDir() {
+  try {
+    const res = await fetch('/api/board');
+    if (!res.ok) return;
+    const b = await res.json();
+    const el = document.getElementById('boardDir');
+    el.textContent = b.display;
+    el.title = b.root;
+    el.hidden = false;
+  } catch (e) { /* header label is optional */ }
+}
+
 (async function init() {
+  loadBoardDir();
   populateStaticFilters();
   await loadProjects();
   await loadTasks();

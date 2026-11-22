@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use lun::root::{find_root, is_board};
+use lun::root::{display_path, find_root, is_board};
 
 static N: AtomicUsize = AtomicUsize::new(0);
 
@@ -300,4 +300,106 @@ fn attach_from_subdirectory_stores_in_board_attachments() {
     assert!(!deep.join(".lun").exists(), "no stray .lun in the subdirectory");
     let copied = fs::read_dir(board.join(".lun/attachments")).unwrap().count();
     assert_eq!(copied, 1);
+}
+
+// ---- board directory shown in the web UI ----
+
+#[test]
+fn display_path_uses_tilde_under_home() {
+    let home = Path::new("/home/colton");
+    assert_eq!(display_path(Path::new("/home/colton/repos"), Some(home)), "~/repos/");
+    assert_eq!(
+        display_path(Path::new("/home/colton/personal-board"), Some(home)),
+        "~/personal-board/"
+    );
+    assert_eq!(display_path(Path::new("/home/colton/a/b"), Some(home)), "~/a/b/");
+    assert_eq!(display_path(home, Some(home)), "~/");
+}
+
+#[test]
+fn display_path_keeps_full_path_outside_home() {
+    let home = Path::new("/home/colton");
+    assert_eq!(display_path(Path::new("/srv/boards/work"), Some(home)), "/srv/boards/work/");
+    // a sibling that merely shares a name prefix is not under home
+    assert_eq!(display_path(Path::new("/home/colton2/x"), Some(home)), "/home/colton2/x/");
+    assert_eq!(display_path(Path::new("/srv/boards/work"), None), "/srv/boards/work/");
+    assert_eq!(display_path(Path::new("/"), None), "/");
+}
+
+/// Minimal HTTP/1.0 GET returning (status, body).
+fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
+    use std::io::{Read, Write};
+    let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    s.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    write!(s, "GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").ok()?;
+    let mut raw = String::new();
+    s.read_to_string(&mut raw).ok()?;
+    let status = raw.split_whitespace().nth(1)?.parse().ok()?;
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    Some((status, body))
+}
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port()
+}
+
+/// Run `lun serve` from `cwd`, fetch `/api/board`, then stop it.
+fn board_api(cwd: &Path, home: &Path) -> serde_json::Value {
+    let port = free_port();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lun"))
+        .args(["serve", &format!("127.0.0.1:{port}")])
+        .current_dir(cwd)
+        .env("HOME", home)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut got = None;
+    for _ in 0..100 {
+        if let Some(r) = http_get(port, "/api/board") {
+            got = Some(r);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let (status, body) = got.expect("server never answered");
+    assert_eq!(status, 200, "{body}");
+    serde_json::from_str(&body).unwrap()
+}
+
+#[test]
+fn serve_reports_its_board_directory_with_tilde() {
+    let home = tmp("api-board");
+    let work = sub(&home, "repos");
+    let personal = sub(&home, "personal-board");
+    init(&work, &home);
+    init(&personal, &home);
+
+    let w = board_api(&work, &home);
+    assert_eq!(w["display"], "~/repos/");
+    assert_eq!(w["root"], work.to_str().unwrap());
+
+    // started from a subdirectory: reports the board root, not the cwd
+    let p = board_api(&sub(&personal, "deep/er"), &home);
+    assert_eq!(p["display"], "~/personal-board/");
+    assert_eq!(p["root"], personal.to_str().unwrap());
+}
+
+#[test]
+fn serve_outside_home_shows_full_path() {
+    let home = tmp("api-board-out-home");
+    let elsewhere = tmp("api-board-out-board"); // not under `home`
+    init(&elsewhere, &home);
+    let v = board_api(&elsewhere, &home);
+    assert_eq!(v["display"], format!("{}/", elsewhere.display()));
+}
+
+#[test]
+fn index_page_has_the_board_label_slot() {
+    // the static page must carry the element the script fills in
+    let html = include_str!("../static/index.html");
+    assert!(html.contains(r#"id="boardDir""#));
+    assert!(html.contains("fetch('/api/board')"));
 }
