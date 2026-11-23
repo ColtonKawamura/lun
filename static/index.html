@@ -522,12 +522,10 @@ textarea.notes-input {
 .btn-danger { background: var(--danger); }
 .btn-danger:hover { background: #dc2626; }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-/* The delete button gets its own row under the title, so a long project
-   name can never run underneath it (it used to be absolutely positioned). */
-.project-title-bar { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+/* Delete project lives in the header next to + New / + Project; it only
+   shows while one real project (not All Projects, not P-000) is selected. */
 .project-title-bar h2 { max-width: 100%; overflow-wrap: anywhere; }
-.project-title-bar .project-delete-btn { display: none; font-size: 12px; padding: 4px 10px; }
-.project-title-bar.has-project .project-delete-btn { display: inline-block; }
+#deleteProjectBtn[hidden] { display: none; }
 .dp-box { padding: 20px; width: 460px; }
 .dp-box h3 { margin: 0 0 8px; font-size: 18px; }
 .dp-box p { margin: 6px 0; color: var(--text-muted); font-size: 14px; }
@@ -714,13 +712,13 @@ textarea.notes-input {
     </div>
     <button class="btn" id="newCardBtn" title="New card (a)">+ New</button>
     <button class="btn" id="newProjectBtn" title="New project (p)">+ Project</button>
+    <button class="btn btn-danger" id="deleteProjectBtn" title="Delete this project (g d)" hidden>Delete project</button>
   </div>
 </div>
 
 <!-- Project Title Bar -->
 <div class="project-title-bar" id="projectTitleBar">
   <h2 id="projectTitleText">All Projects</h2>
-  <button class="btn btn-secondary project-delete-btn" id="deleteProjectBtn" title="Delete this project (g d)">Delete project</button>
 </div>
 
 <!-- Filter bar -->
@@ -1131,8 +1129,7 @@ function updateProjectTitle(projectId) {
   document.getElementById('projectTitleText').textContent = name;
   // The delete button needs a concrete project; P-000 Unassigned can't be deleted.
   const proj = isNaN(pid) ? null : projects.find(p => p.id === pid);
-  document.getElementById('projectTitleBar')
-    .classList.toggle('has-project', !!proj && proj.project_key !== 'P-000');
+  document.getElementById('deleteProjectBtn').hidden = !(proj && proj.project_key !== 'P-000');
 }
 
 
