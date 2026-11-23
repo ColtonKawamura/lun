@@ -19,6 +19,8 @@
 //!   absolute path without copying.
 //! - `lun link <task|project> <key|title> "<label>" "<uri>"` — record a
 //!   link (file path, URL, or custom URI such as `obsidian://...`).
+//! - `lun unlink <task|project> <key|title> <label|uri> [--all]` — remove a
+//!   link by its label or uri (logs UNLINK, undo with `lun link restore`).
 //! - `lun open-link <task|project> <key|title> <label>` — look up a link
 //!   and open it with macOS `open`.
 //!
@@ -49,7 +51,7 @@ use crate::db::{
 };
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 19] = [
+const TOP_LEVEL_COMMANDS: [&str; 20] = [
     "brief",
     "rm",
     "init",
@@ -64,6 +66,7 @@ const TOP_LEVEL_COMMANDS: [&str; 19] = [
     "grep",
     "status",
     "link",
+    "unlink",
     "open-link",
     "open-uri",
     "pr",
@@ -224,7 +227,7 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
             "task"
                 if matches!(
                     tokens.first().map(String::as_str),
-                    Some("link" | "open-link" | "attach")
+                    Some("link" | "unlink" | "open-link" | "attach")
                 ) || (tokens.first().map(String::as_str) == Some("open-uri")
                     && matches!(
                         tokens
@@ -306,13 +309,13 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                 {
                     out.extend(project_candidates(app))
                 }
-                Some("link" | "open-link" | "attach")
+                Some("link" | "unlink" | "open-link" | "attach")
                     if matches!(tokens.get(1).map(String::as_str), Some("task"))
                         && tokens.len() == 2 =>
                 {
                     out.extend(task_candidates(app));
                 }
-                Some("link" | "open-link" | "attach")
+                Some("link" | "unlink" | "open-link" | "attach")
                     if matches!(tokens.get(1).map(String::as_str), Some("project"))
                         && tokens.len() == 2 =>
                 {
@@ -481,6 +484,7 @@ Usage:
   lun attach ls <task|project> <key|title>   List attachments
   lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments
   lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link
+  lun unlink <task|project> <key|title> <label|uri> [--all]   Remove a link by label or uri (--all if several match; `lun link restore` undoes it)
   lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`
   lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI
   lun pr new <T-00N|title> [--from <branch>] [--to <branch>]   Open a PR
@@ -2069,6 +2073,57 @@ pub fn restore_link_command(app: &App, kind: &str, query: &str) -> Result<String
     match app.lun.restore_last_link(target, None)? {
         Some(link) => Ok(format!("Restored link \"{}\" ({})", link.label, link.uri)),
         None => Err(DbError::new("not-found", "no deleted link to restore")),
+    }
+}
+
+/// `lun unlink <task|project> <key|title> <label|uri> [--all]`: remove the link(s)
+/// whose label or uri is exactly `needle`. Undo with `lun link restore`.
+pub fn unlink_command(app: &App, args: &[String]) -> Result<String> {
+    let usage = "expected: lun unlink <task|project> <key|title> <label|uri> [--all]";
+    let mut all = false;
+    let mut positional: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--all" => all = true,
+            other if other.starts_with('-') => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected flag '{other}' for lun unlink"),
+                ))
+            }
+            other => positional.push(other.to_string()),
+        }
+    }
+    let [kind, query, needle] = positional.as_slice() else {
+        return Err(DbError::new("usage", usage));
+    };
+    let (target, key) = match kind.as_str() {
+        "task" => {
+            let t = resolve_task(&app.lun, query)?;
+            (LinkTarget::Task(t.id), t.task_key)
+        }
+        "project" => {
+            let p = resolve_project(&app.lun, query)?;
+            (LinkTarget::Project(p.id), p.project_key)
+        }
+        _ => return Err(DbError::new("usage", "unlink: kind must be 'task' or 'project'")),
+    };
+    let removed = app.lun.delete_links_matching(target, needle, all, None)?;
+    let undo = format!("undo: lun link restore {kind} {key} (newest removed comes back first)");
+    match removed.as_slice() {
+        [one] => Ok(format!(
+            "Unlinked \"{}\" ({}) from {key}\n{undo}",
+            one.label, one.uri
+        )),
+        many => {
+            let mut out = format!("Unlinked {} links from {key}:", many.len());
+            for l in many {
+                out.push_str(&format!("\n  \"{}\" ({})", l.label, l.uri));
+            }
+            out.push('\n');
+            out.push_str(&undo);
+            Ok(out)
+        }
     }
 }
 
@@ -3911,6 +3966,7 @@ pub fn run_result_in_reader(
                 "expected: lun attach <task|project> <key|title> /path/to/file | attach ls | attach rm | attach open",
             )),
         },
+        Some("unlink") => unlink_command(app, &filtered_args[1..]),
         Some("link") => {
             match args.get(1).map(|s| s.as_str()) {
                 Some("delete") => {

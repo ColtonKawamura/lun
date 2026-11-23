@@ -259,6 +259,14 @@ Record a link.
 lun link task T-001 "Design" "https://figma.com/..."
 ```
 
+### `lun unlink <task|project> <key|title> <label|uri> [--all]`
+Remove a link. The argument matches a link's label or uri exactly. One match is removed. If several match (a handover leaves one `chat session` link per session), it refuses and lists them; pass the uri to pick one, or `--all` to remove them all. Each removal logs `UNLINK`, so `lun link restore <task|project> <key|title>` brings the newest one back.
+```sh
+lun unlink task T-001 "Design"
+lun unlink task T-001 "https://figma.com/..."
+lun unlink task T-001 "chat session" --all
+```
+
 ### `lun open-link <task|project> <key|title> <label>`
 Open a link via macOS `open`.
 ```sh

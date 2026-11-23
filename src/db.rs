@@ -2819,6 +2819,52 @@ impl Lun {
         Ok(None)
     }
 
+    /// Delete the link(s) on a task/project whose label or uri is exactly
+    /// `needle`. One match is removed. Several matches (a handover leaves one
+    /// `chat session` link per session) are refused unless `all` is set, so a
+    /// link is never dropped by accident. Each removal writes its own UNLINK
+    /// entry, so `restore_last_link` can bring them back.
+    pub fn delete_links_matching(
+        &self,
+        target: LinkTarget,
+        needle: &str,
+        all: bool,
+        user: Option<&str>,
+    ) -> Result<Vec<Link>> {
+        let links = match target {
+            LinkTarget::Task(t) => self.links_for_task(t)?,
+            LinkTarget::Project(p) => self.links_for_project(p)?,
+        };
+        let matches: Vec<Link> = links
+            .into_iter()
+            .filter(|l| l.label == needle || l.uri == needle)
+            .collect();
+        if matches.is_empty() {
+            return Err(DbError::new(
+                "not-found",
+                format!("no link with label or uri '{needle}'"),
+            ));
+        }
+        if matches.len() > 1 && !all {
+            let list = matches
+                .iter()
+                .map(|l| format!("  \"{}\" ({})", l.label, l.uri))
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Err(DbError::new(
+                "ambiguous",
+                format!(
+                    "{} links match '{needle}'; pass the uri to pick one, or --all to remove all of them:\n{list}",
+                    matches.len()
+                ),
+            ));
+        }
+        matches
+            .into_iter()
+            .map(|l| self.delete_link(l.id, user))
+            .collect()
+    }
+
     /// List attachments recorded for a task, oldest first.
     pub fn attachments_for_task(&self, task_id: i64) -> Result<Vec<Attachment>> {
         let mut stmt = self.conn.prepare(

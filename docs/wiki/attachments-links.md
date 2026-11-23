@@ -134,6 +134,18 @@ lun link task T-001 "Design" "https://figma.com/file/abc"
 lun link project P-001 "Spec" "https://docs.google.com/..."
 ```
 
+#### Remove Link
+```sh
+lun unlink <task|project> <key|title> <label|uri> [--all]
+```
+
+Matches the label or uri exactly. Several matches are refused unless you pass `--all` or the uri. Undo with `lun link restore`.
+
+```sh
+lun unlink task T-001 "Design"
+lun unlink task T-001 "chat session" --all
+```
+
 #### Open Link
 ```sh
 lun open-link <task|project> <key|title> <label>
