@@ -17,7 +17,7 @@ The log system provides git-style commit history for projects and tasks.
 - `ATTACH`: File attached
 - `LINK`: URL linked
 - `ARCHIVE`: Archived
-- `UNARCHIVE`: Unarchived
+- `UNARCHIVE`: Unarchived (`lun task unarchive`, or Undo in the web UI)
 - `DELETE`: A project was deleted (written on `P-000`, since the project's own history is deleted with it)
 
 ### Users

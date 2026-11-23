@@ -518,6 +518,17 @@ textarea.notes-input {
 }
 
 
+/* Undo toast (task archived from the modal) */
+.undo-toast {
+  position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+  background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 14px; z-index: 950;
+  display: none; align-items: center; gap: 12px; font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5); max-width: 90vw;
+}
+.undo-toast.active { display: flex; }
+.undo-toast button { background: none; border: none; color: var(--accent-light); font-weight: 700; cursor: pointer; font-size: 14px; padding: 0; }
+
 /* Delete project dialog */
 .btn-danger { background: var(--danger); }
 .btn-danger:hover { background: #dc2626; }
@@ -853,10 +864,13 @@ textarea.notes-input {
       <div style="display:flex;gap:8px;margin-top:16px;">
         <button class="btn" id="saveBtn">Save</button>
         <button class="btn btn-secondary" id="doneBtn" title="Close task (x)">Close</button>
+        <button class="btn btn-danger" id="deleteTaskBtn" title="Delete task (archives it; Undo appears for a few seconds, or lun task unarchive)" style="margin-left:auto;">Delete task</button>
       </div>
     </div>
   </div>
 </div>
+
+<div class="undo-toast" id="undoToast" role="status"><span id="undoToastText"></span><button id="undoToastBtn">Undo</button></div>
 
 <!-- Command palette -->
 <div class="palette-overlay" id="paletteOverlay">
@@ -2215,6 +2229,53 @@ function openPalette() {
 function closePalette() {
   document.getElementById('paletteOverlay').classList.remove('active');
 }
+
+// Delete task = archive (restorable). Undo toast for a few seconds.
+let undoTimer = null;
+let undoKey = null;
+function hideUndoToast() {
+  clearTimeout(undoTimer); undoTimer = null; undoKey = null;
+  document.getElementById('undoToast').classList.remove('active');
+}
+function showUndoToast(text, key) {
+  clearTimeout(undoTimer);
+  undoKey = key;
+  document.getElementById('undoToastText').textContent = text;
+  document.getElementById('undoToast').classList.add('active');
+  undoTimer = setTimeout(hideUndoToast, 10000);
+}
+async function deleteTask() {
+  if (!editingTask) return;
+  const key = editingTask;
+  const title = (document.getElementById('editTitle').value || '').trim();
+  try {
+    const res = await fetch('/api/tasks/' + encodeURIComponent(key) + '/archive', { method: 'POST' });
+    if (!res.ok) {
+      let msg = res.status;
+      try { msg = (await res.json()).error || msg; } catch (_) {}
+      alert('Could not delete ' + key + ': ' + msg);
+      return;
+    }
+  } catch (e) { alert('Could not delete ' + key + ': ' + e); return; }
+  closeModal();
+  activeCard = null;
+  await loadTasks();
+  render();
+  showUndoToast('Deleted ' + key + (title ? ' — ' + title : ''), key);
+}
+async function undoDeleteTask() {
+  const key = undoKey;
+  if (!key) return;
+  hideUndoToast();
+  try {
+    const res = await fetch('/api/tasks/' + encodeURIComponent(key) + '/unarchive', { method: 'POST' });
+    if (!res.ok) { alert('Could not restore ' + key); return; }
+  } catch (e) { alert('Could not restore ' + key + ': ' + e); return; }
+  await loadTasks();
+  render();
+}
+document.getElementById('deleteTaskBtn').addEventListener('click', deleteTask);
+document.getElementById('undoToastBtn').addEventListener('click', undoDeleteTask);
 
 // Delete project dialog
 let deletingProject = null;

@@ -140,13 +140,17 @@ lun task edit T-001 --title "New title"
 lun task edit T-001 --priority high
 ```
 
-### `lun task complete|reopen|archive <task>`
+### `lun task complete|reopen|archive|unarchive <task>`
 Task lifecycle commands.
 ```sh
 lun task complete T-001         # -> closed
 lun task reopen T-001           # -> planning (or --status <status>)
-lun task archive T-001          # Archive (hide from default views)
+lun task archive T-001          # Archive (hide from default views; this is what "Delete task" does in the web UI)
+lun task unarchive T-001 [--message "..."]   # Bring an archived task back
+lun task ls --all               # Include archived tasks (find the key to unarchive)
 ```
+
+Archiving keeps everything on the task (notes, links, attachments, history); nothing is deleted. A task that is archived still counts as a task when you `rm proj` its project.
 
 ### `lun move "<task>" "<project>"`
 Move task to another project.

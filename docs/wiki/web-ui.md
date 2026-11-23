@@ -55,6 +55,7 @@ Five columns, left to right — the task statuses:
 - Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
   shift the focused card one column right/left; `x` closes it
 - The filter bar (`f`) filters by project, status, priority, scope and text
+- **Deleting a task:** open a card and press **Delete task** (red, at the bottom of the task window next to Save and Close). The task is *archived*, not erased: it leaves the board and an **Undo** toast stays for 10 seconds. After that, restore it with `lun task unarchive <key>` (`lun task ls --all` lists archived tasks). A second delete replaces the toast, so Undo only restores the latest one.
 - **Deleting a project:** pick a project, then press `g d` or click **Delete project** in the project title bar. A dialog shows how many tasks it has and asks what to do: move them to another project (the default) or delete them too. `Esc`, **Cancel** or a click outside closes it without changing anything. The button is hidden on "All Projects" and on `P-000 Unassigned`.
 
 ### Task Details Modal

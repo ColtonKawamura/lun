@@ -2315,6 +2315,16 @@ impl Lun {
 
     /// Restore a previously archived (deleted) task.
     pub fn unarchive_task(&self, task_id: i64, user: Option<&str>) -> Result<Task> {
+        self.unarchive_task_with_message(task_id, None, user)
+    }
+
+    /// Like [`Lun::unarchive_task`] with a caller-supplied commit message.
+    pub fn unarchive_task_with_message(
+        &self,
+        task_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<Task> {
         let task = self.task_by_id(task_id)?;
         if task.archived_at.is_none() {
             return Ok(task);
@@ -2328,7 +2338,9 @@ impl Lun {
             "task",
             task_id,
             "UNARCHIVE",
-            &format!("unarchive {}", task.task_key),
+            &message
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("unarchive {}", task.task_key)),
             "{}",
             Some(user.unwrap_or(DEFAULT_USER)),
         )?;

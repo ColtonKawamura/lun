@@ -243,7 +243,7 @@ pub(super) fn try_dispatch(
             "edit" if args.get(2).is_some_and(|q| q.contains(',')) => {
                 Some(bulk_edit(app, &args[2], &args[3..], stdin))
             }
-            "ls" | "edit" | "complete" | "reopen" | "archive" | "delete" => None,
+            "ls" | "edit" | "complete" | "reopen" | "archive" | "unarchive" | "delete" => None,
             q if q.contains(',') && has("--status") => Some(bulk_status(app, q, &args[2..], stdin)),
             q if !has("--status") && agent_flag => Some(task_view_ext(app, q, &args[2..])),
             _ => None,

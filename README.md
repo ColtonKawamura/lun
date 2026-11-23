@@ -42,7 +42,7 @@ older names are still accepted as input: `todo`/`doing` → `planning`,
 All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 
 - DB layer + core CLI (`status`, `add proj`, `add task`, `task`, `move`, `log`)
-- Task workflows (`task ls|edit|complete|reopen|archive`) and project/task attachments
+- Task workflows (`task ls|edit|complete|reopen|archive|unarchive`) and project/task attachments
 - Project deletion from the CLI (`rm proj`), the TUI command line, and the web UI (`g d`)
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project

@@ -673,3 +673,87 @@ fn web_assets_have_delete_ui_and_script_is_embedded() {
         assert!(html.contains(needle), "missing {needle}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Task delete (= archive) from the web UI, and `lun task unarchive`
+// ---------------------------------------------------------------------------
+
+#[test]
+fn cli_task_unarchive_round_trip_and_errors() {
+    let (root, cli, lun) = cli_fixture("cli-unarchive");
+    let p = mk_proj(&lun, "home");
+    let t = mk_task(&lun, "paint fence", Some(p.id));
+    let run = |args: &[&str], input: &[&str]| {
+        let argv: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        run_result_in_reader(&cli, &argv, &mut reader(input), Some(&root))
+    };
+
+    // Not archived yet: says so, changes nothing, no commit prompt needed.
+    let out = run(&["task", "unarchive", &t.task_key], &[]).unwrap();
+    assert!(out.contains("is not archived"), "{out}");
+
+    run(&["task", "archive", &t.task_key], &[""]).unwrap();
+    assert!(lun.task_by_id(t.id).unwrap().archived_at.is_some());
+    // Hidden from the default list, shown with --all.
+    let hidden = run(&["task", "ls"], &[]).unwrap();
+    assert!(!hidden.contains("paint fence"), "{hidden}");
+    let all = run(&["task", "ls", "--all"], &[]).unwrap();
+    assert!(all.contains("paint fence"), "{all}");
+
+    let out = run(&["task", "unarchive", &t.task_key], &["bring it back"]).unwrap();
+    assert!(out.contains("Unarchived") && out.contains("Committed: bring it back"), "{out}");
+    assert!(lun.task_by_id(t.id).unwrap().archived_at.is_none());
+    let log = &lun.logs_for("task", t.id).unwrap()[0];
+    assert_eq!((log.action.as_str(), log.message.as_str()), ("UNARCHIVE", "bring it back"));
+    assert!(run(&["task", "ls"], &[]).unwrap().contains("paint fence"));
+
+    // --message is honoured (no stdin prompt), junk arguments are refused.
+    run(&["task", "archive", &t.task_key], &[""]).unwrap();
+    let out = run(&["task", "unarchive", &t.task_key, "--message", "via flag"], &[]).unwrap();
+    assert!(out.contains("Committed: via flag"), "{out}");
+    assert_eq!(run(&["task", "unarchive", &t.task_key, "bogus"], &[]).unwrap_err().kind(), "usage");
+
+    // Errors.
+    assert_eq!(run(&["task", "unarchive"], &[]).unwrap_err().kind(), "usage");
+    assert_eq!(run(&["task", "unarchive", "T-nope"], &[]).unwrap_err().kind(), "not-found");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn archived_task_keeps_its_data_and_counts_for_project_delete() {
+    let root = temp_root("archived-keeps");
+    let lun = Lun::init(&root).unwrap();
+    let p = mk_proj(&lun, "keepme");
+    let t = mk_task(&lun, "keep my links", Some(p.id));
+    lun.add_link(LinkTarget::Task(t.id), "doc", "https://x", None, None).unwrap();
+    lun.update_task(t.id, TaskUpdateSpec { notes: Some("important".into()), ..Default::default() }).unwrap();
+    lun.archive_task(t.id, None, Some("web")).unwrap();
+    lun.unarchive_task(t.id, Some("web")).unwrap();
+    let back = lun.task_by_id(t.id).unwrap();
+    assert_eq!(back.notes, "important");
+    assert_eq!(back.status, "planning");
+    assert_eq!(lun.links_for_task(t.id).unwrap().len(), 1);
+    // Archive twice / unarchive twice are harmless.
+    lun.archive_task(t.id, None, None).unwrap();
+    lun.archive_task(t.id, None, None).unwrap();
+    lun.unarchive_task(t.id, None).unwrap();
+    lun.unarchive_task(t.id, None).unwrap();
+    let actions: Vec<String> = lun.logs_for("task", t.id).unwrap().into_iter().map(|l| l.action).collect();
+    assert_eq!(actions.iter().filter(|a| *a == "ARCHIVE").count(), 2);
+    assert_eq!(actions.iter().filter(|a| *a == "UNARCHIVE").count(), 2);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn web_assets_have_task_delete_and_undo() {
+    let html = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html")).unwrap();
+    for needle in [
+        "id=\"deleteTaskBtn\"",
+        "id=\"undoToast\"",
+        "/archive'",
+        "/unarchive'",
+        "function undoDeleteTask",
+    ] {
+        assert!(html.contains(needle), "missing {needle}");
+    }
+}

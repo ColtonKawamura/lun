@@ -71,7 +71,7 @@ const TOP_LEVEL_COMMANDS: [&str; 19] = [
     "help",
 ];
 const PR_SUBCOMMANDS: [&str; 4] = ["new", "show", "ls", "merge"];
-const TASK_SUBCOMMANDS: [&str; 6] = ["ls", "edit", "complete", "reopen", "archive", "delete"];
+const TASK_SUBCOMMANDS: [&str; 7] = ["ls", "edit", "complete", "reopen", "archive", "unarchive", "delete"];
 
 fn push_unique(out: &mut Vec<String>, value: impl Into<String>) {
     let value = value.into();
@@ -261,7 +261,7 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                 Some("task")
                     if matches!(
                         tokens.get(1).map(String::as_str),
-                        Some("edit" | "complete" | "reopen" | "archive")
+                        Some("edit" | "complete" | "reopen" | "archive" | "unarchive")
                     ) && tokens.len() == 2 =>
                 {
                     out.extend(task_candidates(app));
@@ -464,7 +464,7 @@ Usage:
   lun task edit <task|T-1,T-2,...> [--field value]   Edit task fields (--append-notes TEXT, --scope S; comma list = bulk)
   lun proj <project> --status <active|inactive>   Update project status
   lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message M]   Delete a project (refuses one with tasks unless --move-to/--cascade; never P-000)
-  lun task complete|reopen|archive <task>   Update task lifecycle
+  lun task complete|reopen|archive|unarchive <task>   Update task lifecycle (archive hides a task; unarchive restores it; `task ls --all` lists archived)
   lun log <project|task> [-N] [--oneline] [--json] [--since ID]   History of one project/task, newest first (-N: only the N newest)
   lun log -N | HEAD~N [--oneline]   N newest entries / the Nth-newest entry across everything
   lun log <hash> [--old-notes]   One entry by the (a1b2c3d) after its message; shows the notes diff it recorded, or with --old-notes just the notes as they were before it
@@ -2520,6 +2520,36 @@ pub fn task_archive(app: &App, query: &str, stdin: &mut dyn BufRead) -> Result<S
     ))
 }
 
+/// `lun task unarchive <task>`: bring an archived task back onto the board
+/// (the counterpart of `task archive`; `task ls --all` lists archived tasks).
+pub fn task_unarchive(
+    app: &App,
+    query: &str,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+) -> Result<String> {
+    let (rest, explicit) = parse_message_flag(args)?;
+    if let Some(extra) = rest.first() {
+        return Err(DbError::new(
+            "usage",
+            format!("unexpected argument '{extra}' for task unarchive"),
+        ));
+    }
+    let task = resolve_task(&app.lun, query)?;
+    if task.archived_at.is_none() {
+        return Ok(format!("{} is not archived", task.task_key));
+    }
+    let default = format!("unarchive {}", task.task_key);
+    let message = read_commit_message_with_optional_override(stdin, explicit, &default)?;
+    let updated = app
+        .lun
+        .unarchive_task_with_message(task.id, Some(&message), None)?;
+    Ok(format!(
+        "Unarchived {} ({})\nCommitted: {}",
+        updated.task_key, updated.title, message
+    ))
+}
+
 pub fn task_set_status(
     app: &App,
     query: &str,
@@ -3693,6 +3723,10 @@ pub fn run_result_in_reader(
             Some(sub) if sub == "reopen" => match args.get(2) {
                 Some(q) => task_reopen(app, q, &args[3..], stdin),
                 None => Err(DbError::new("usage", "expected: lun task reopen <key|title>")),
+            },
+            Some(sub) if sub == "unarchive" => match args.get(2) {
+                Some(q) => task_unarchive(app, q, &args[3..], stdin),
+                None => Err(DbError::new("usage", "expected: lun task unarchive <key|title>")),
             },
             Some(sub) if sub == "archive" || sub == "delete" => match args.get(2) {
                 Some(q) => task_archive(app, q, stdin),

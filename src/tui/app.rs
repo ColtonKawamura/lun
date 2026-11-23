@@ -993,6 +993,9 @@ impl App {
                 Some("edit") if !args.iter().any(|a| a == "--message") => {
                     prompts.push("Commit Message: ".to_string());
                 }
+                Some("unarchive") if !args.iter().any(|a| a == "--message") => {
+                    prompts.push("Commit Message: ".to_string());
+                }
                 Some("complete") | Some("archive") | Some("delete") => {
                     prompts.push("Commit Message: ".to_string());
                 }
@@ -1041,7 +1044,7 @@ impl App {
         match args.first().map(String::as_str) {
             Some("task") => {
                 let query = match args.get(1).map(String::as_str) {
-                    Some("ls" | "edit" | "complete" | "reopen" | "archive" | "delete") => {
+                    Some("ls" | "edit" | "complete" | "reopen" | "archive" | "unarchive" | "delete") => {
                         args.get(2).map(String::as_str)
                     }
                     other => other,
