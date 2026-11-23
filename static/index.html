@@ -522,11 +522,11 @@ textarea.notes-input {
 .btn-danger { background: var(--danger); }
 .btn-danger:hover { background: #dc2626; }
 .btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
-.project-title-bar { position: relative; }
-.project-title-bar .project-delete-btn {
-  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
-  display: none;
-}
+/* The delete button gets its own row under the title, so a long project
+   name can never run underneath it (it used to be absolutely positioned). */
+.project-title-bar { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.project-title-bar h2 { max-width: 100%; overflow-wrap: anywhere; }
+.project-title-bar .project-delete-btn { display: none; font-size: 12px; padding: 4px 10px; }
 .project-title-bar.has-project .project-delete-btn { display: inline-block; }
 .dp-box { padding: 20px; width: 460px; }
 .dp-box h3 { margin: 0 0 8px; font-size: 18px; }
