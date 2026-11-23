@@ -1021,3 +1021,49 @@ fn binary_rm_task_exit_codes() {
     assert!(help.contains("lun rm task"), "{help}");
     let _ = std::fs::remove_dir_all(&home);
 }
+
+// ---------------------------------------------------------------------------
+// Cascade guard in the web dialog, and the docs staying true
+// ---------------------------------------------------------------------------
+
+#[test]
+fn web_project_dialog_requires_a_ticked_box_for_cascade() {
+    let html = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html")).unwrap();
+    for needle in [
+        "id=\"dpCascadeOk\"",
+        "id=\"dpCascadeRow\"",
+        "function syncDeleteProjectUi",
+        "cascade && !ok.checked", // the button stays disabled until ticked
+    ] {
+        assert!(html.contains(needle), "missing {needle}");
+    }
+    // The request path re-checks the tick before ever sending cascade.
+    let confirm = html.split("async function confirmDeleteProject").nth(1).unwrap();
+    let cascade_at = confirm.find("body.cascade = true").expect("sends cascade");
+    let guard_at = confirm.find("dpCascadeOk').checked").expect("checks the tick");
+    assert!(guard_at < cascade_at, "the tick must be checked before cascade is sent");
+    // Move stays the default.
+    assert!(html.contains("value=\"move\" checked"), "move should be the default option");
+}
+
+#[test]
+fn docs_match_the_shipped_behavior() {
+    let read = |p: &str| std::fs::read_to_string(format!("{}/{p}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let web = read("docs/wiki/web-ui.md");
+    // x archives; nothing may still say it closes.
+    assert!(!web.contains("`x` closes it"), "web-ui.md still says x closes a task");
+    assert!(web.contains("`x` archives it"), "web-ui.md should say x archives");
+    assert!(web.contains("I understand"), "web-ui.md should describe the cascade checkbox");
+    assert!(web.contains("/api/tasks/{key}/delete") && web.contains("/api/projects/{key}/delete"));
+    let cli = read("docs/wiki/cli-commands.md");
+    for needle in ["lun rm task", "lun rm proj", "lun task unarchive", "--cascade", "--move-to"] {
+        assert!(cli.contains(needle), "cli-commands.md missing {needle}");
+    }
+    let tui = read("docs/wiki/tui.md");
+    assert!(tui.contains("rm task") && tui.contains("rm proj"), "tui.md missing rm docs");
+    // The help text the binary prints names both commands.
+    let help = lun::cli::help_text("x");
+    assert!(help.contains("lun rm task") && help.contains("lun rm proj"), "{help}");
+    // Every user-facing command the docs promise is a real top-level command.
+    assert!(read("docs/wiki/shell-completion.md").contains("lun rm task <TAB>"));
+}

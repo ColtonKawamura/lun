@@ -541,8 +541,11 @@ textarea.notes-input {
 .dp-box h3 { margin: 0 0 8px; font-size: 18px; }
 .dp-box p { margin: 6px 0; color: var(--text-muted); font-size: 14px; }
 .dp-box label.dp-opt { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-size: 14px; cursor: pointer; color: var(--text); }
-.dp-box input[type=radio] { width: auto; padding: 0; margin: 0; flex: none; accent-color: var(--accent-light); }
-.dp-box label.dp-opt span { flex: none; }
+.dp-box input[type=radio], .dp-box input[type=checkbox] { width: auto; padding: 0; margin: 0; flex: none; accent-color: var(--accent-light); }
+.dp-box label.dp-confirm { margin: 4px 0 0 0; color: var(--danger); flex-wrap: nowrap; align-items: flex-start; }
+.dp-box label.dp-confirm span { flex: 1 1 auto; min-width: 0; line-height: 1.35; }
+.dp-box label.dp-confirm input { margin-top: 3px; }
+.dp-box label.dp-opt:not(.dp-confirm) span { flex: none; }
 .dp-box select { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 6px; max-width: 220px; }
 .dp-box .dp-warn { color: var(--danger); }
 .dp-box .dp-err { color: var(--danger); min-height: 18px; }
@@ -914,6 +917,9 @@ textarea.notes-input {
         <span>Move the tasks to</span> <select id="dpMoveTo"></select></label>
       <label class="dp-opt"><input type="radio" name="dpMode" value="cascade">
         <span class="dp-warn">Delete the tasks too (permanent)</span></label>
+      <label class="dp-opt dp-confirm" id="dpCascadeRow" style="display:none">
+        <input type="checkbox" id="dpCascadeOk">
+        <span>I understand <b id="dpCascadeN"></b> will be permanently deleted, with their history, links and attachments.</span></label>
     </div>
     <p class="dp-err" id="dpError"></p>
     <div class="dp-actions">
@@ -2341,6 +2347,19 @@ document.getElementById('deleteTaskOverlay').addEventListener('click', (e) => {
 
 // Delete project dialog
 let deletingProject = null;
+// "Delete the tasks too" must be armed by ticking the box: until then the
+// Delete button stays disabled. Switching back to "Move" clears the tick.
+function syncDeleteProjectUi() {
+  const count = deletingProject ? deletingProject.count : 0;
+  const mode = count > 0 ? document.querySelector('input[name="dpMode"]:checked').value : 'move';
+  const cascade = mode === 'cascade';
+  const ok = document.getElementById('dpCascadeOk');
+  if (!cascade) ok.checked = false;
+  document.getElementById('dpCascadeRow').style.display = cascade ? 'flex' : 'none';
+  document.getElementById('dpCascadeN').textContent = count + ' task' + (count === 1 ? '' : 's');
+  document.getElementById('dpConfirm').disabled = cascade && !ok.checked;
+  document.getElementById('dpConfirm').textContent = cascade ? 'Delete project and ' + count + ' task' + (count === 1 ? '' : 's') : 'Delete';
+}
 async function openDeleteProject() {
   const pid = parseInt(document.getElementById('projectFilter').value);
   const proj = isNaN(pid) ? null : projects.find(p => p.id === pid);
@@ -2363,8 +2382,9 @@ async function openDeleteProject() {
   const sel = document.getElementById('dpMoveTo');
   sel.innerHTML = others.map(p => `<option value="${p.project_key}">${p.project_key} — ${escapeHtml(p.name)}</option>`).join('');
   document.querySelector('input[name="dpMode"][value="move"]').checked = true;
+  document.getElementById('dpCascadeOk').checked = false;
   document.getElementById('dpError').textContent = '';
-  document.getElementById('dpConfirm').disabled = false;
+  syncDeleteProjectUi();
   document.getElementById('deleteProjectOverlay').classList.add('active');
   document.getElementById('dpCancel').focus();
 }
@@ -2379,7 +2399,14 @@ async function confirmDeleteProject() {
   const body = {};
   if (count > 0) {
     const mode = document.querySelector('input[name="dpMode"]:checked').value;
-    if (mode === 'cascade') body.cascade = true; else body.move_to = document.getElementById('dpMoveTo').value;
+    if (mode === 'cascade') {
+      // Belt and braces: the button is disabled until ticked, but never send
+      // cascade without the tick (Enter key, scripted click, stale state).
+      if (!document.getElementById('dpCascadeOk').checked) { syncDeleteProjectUi(); return; }
+      body.cascade = true;
+    } else {
+      body.move_to = document.getElementById('dpMoveTo').value;
+    }
   }
   document.getElementById('dpConfirm').disabled = true;
   try {
@@ -2391,7 +2418,7 @@ async function confirmDeleteProject() {
     const data = await res.json();
     if (!res.ok) {
       document.getElementById('dpError').textContent = data.error || ('HTTP ' + res.status);
-      document.getElementById('dpConfirm').disabled = false;
+      syncDeleteProjectUi();
       return;
     }
     closeDeleteProject();
@@ -2403,9 +2430,11 @@ async function confirmDeleteProject() {
     render();
   } catch (e) {
     document.getElementById('dpError').textContent = 'Failed: ' + e;
-    document.getElementById('dpConfirm').disabled = false;
+    syncDeleteProjectUi();
   }
 }
+document.querySelectorAll('input[name="dpMode"]').forEach(r => r.addEventListener('change', syncDeleteProjectUi));
+document.getElementById('dpCascadeOk').addEventListener('change', syncDeleteProjectUi);
 document.getElementById('deleteProjectBtn').addEventListener('click', openDeleteProject);
 document.getElementById('dpCancel').addEventListener('click', closeDeleteProject);
 document.getElementById('dpConfirm').addEventListener('click', confirmDeleteProject);

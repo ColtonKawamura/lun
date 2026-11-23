@@ -53,11 +53,12 @@ Five columns, left to right — the task statuses:
 - Cards show task key, title, priority, scope, assignee and project
 - Click a card (or focus it and press `Enter`) to open the details modal
 - Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
-  shift the focused card one column right/left; `x` closes it
+  shift the focused card one column right/left; `x` archives it (Undo toast);
+  to set a card to Closed use the **Close** button in its window, or `d`
 - The filter bar (`f`) filters by project, status, priority, scope and text
 - **Deleting a task (permanent):** open a card and press **Delete task** (red, at the bottom of the task window next to Save and Close). A dialog asks you to confirm, then removes the task and its history, links, attachments and PRs for good. `Esc`, **Cancel** or a click outside keeps it. Same as `lun rm task`.
 - **Archiving a task (`x`):** select a card and press `x`. The task leaves the board and an **Undo** toast stays for 10 seconds. After that, restore it with `lun task unarchive <key>` (`lun task ls --all` lists archived tasks). A second archive replaces the toast, so Undo only restores the latest one. (`x` used to mark the task closed; it now archives. Set a task to *closed* from the task window or with `d`/`u` on the board.)
-- **Deleting a project:** pick a project, then press `g d` or click **Delete project** in the project title bar. A dialog shows how many tasks it has and asks what to do: move them to another project (the default) or delete them too. `Esc`, **Cancel** or a click outside closes it without changing anything. The button is hidden on "All Projects" and on `P-000 Unassigned`.
+- **Deleting a project:** pick a project, then press `g d` or click **Delete project** in the project title bar. A dialog shows how many tasks it has and asks what to do: move them to another project (the default), or delete them too. Choosing "delete the tasks too" shows a checkbox ("I understand N tasks will be permanently deleted...") and keeps the red button disabled, labelled "Delete project and N tasks", until you tick it; switching back to "Move" clears the tick. A project with no tasks needs no choice. `Esc`, **Cancel** or a click outside closes it without changing anything. The button is hidden on "All Projects" and on `P-000 Unassigned`.
 
 ### Task Details Modal
 Fields:
@@ -107,7 +108,7 @@ Fields:
 - `?`: Toggle help
 - `g p`: Project picker
 - `g d`: Delete the selected project (opens a confirm dialog; `Esc` cancels)
-- `x`: Archive the selected card (Undo toast for 10 seconds)
+- `x`: Archive the selected card (Undo toast for 10 seconds). It no longer closes the task
 - `q`: Quit (close modal)
 - `/`: Search (if available)
 
