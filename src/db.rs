@@ -231,6 +231,19 @@ pub struct LogEntry {
     pub hash: String,
 }
 
+/// Result of `delete_task`.
+#[derive(Debug, Clone)]
+pub struct TaskDeleted {
+    pub task: Task,
+    pub log_entries: usize,
+    pub links: usize,
+    pub attachments: usize,
+    pub prs: usize,
+    /// Stored paths of the removed attachment rows (the caller may delete
+    /// managed copies from disk).
+    pub attachment_paths: Vec<String>,
+}
+
 /// What `delete_project` does with a project's tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProjectDeleteMode {
@@ -1446,6 +1459,100 @@ impl Lun {
         project.status = target;
         project.updated_at = now;
         Ok(project)
+    }
+
+    /// Permanently delete a task: the row, its log history, note diffs,
+    /// links, attachment rows and PRs, in one transaction. This is not
+    /// `archive_task` (which hides it and can be undone). The deletion is
+    /// recorded as a `DELETE` entry on the task's project (or on P-000 when
+    /// it has none), since the task's own history goes with it.
+    pub fn delete_task(
+        &self,
+        task_id: i64,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<TaskDeleted> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let task = self.task_by_id(task_id)?;
+        let project = match task.project_id {
+            Some(pid) => self
+                .conn
+                .query_row(
+                    "SELECT id, project_key, name, status, created_at, updated_at
+                     FROM projects WHERE id = ?1",
+                    [pid],
+                    Self::project_from_row,
+                )
+                .ok(),
+            None => None,
+        };
+        let log_target = match &project {
+            Some(p) => p.id,
+            None => self.unassigned_project_id()?,
+        };
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut attachment_paths: Vec<String> = Vec::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT stored_path FROM attachments WHERE task_id = ?1")?;
+            let rows = stmt.query_map([task_id], |r| r.get::<_, String>(0))?;
+            for r in rows {
+                attachment_paths.push(r?);
+            }
+        }
+        let count = |sql: &str| -> Result<usize> {
+            let n: i64 = self.conn.query_row(sql, [task_id], |r| r.get(0))?;
+            Ok(n as usize)
+        };
+        let links = count("SELECT COUNT(*) FROM links WHERE task_id = ?1")?;
+        let prs = count("SELECT COUNT(*) FROM prs WHERE task_id = ?1")?;
+        let log_entries = count(
+            "SELECT COUNT(*) FROM logs WHERE entity_type = 'task' AND entity_id = ?1",
+        )?;
+
+        self.conn.execute("DELETE FROM attachments WHERE task_id = ?1", [task_id])?;
+        self.conn.execute("DELETE FROM links WHERE task_id = ?1", [task_id])?;
+        self.conn.execute("DELETE FROM prs WHERE task_id = ?1", [task_id])?;
+        // note_diffs.log_id points at logs, so diffs go before the logs.
+        self.conn.execute("DELETE FROM note_diffs WHERE task_id = ?1", [task_id])?;
+        self.conn.execute(
+            "DELETE FROM logs WHERE entity_type = 'task' AND entity_id = ?1",
+            [task_id],
+        )?;
+        self.conn.execute("DELETE FROM tasks WHERE id = ?1", [task_id])?;
+
+        let message = message
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("delete task {} \"{}\"", task.task_key, task.title));
+        self.log(
+            "project",
+            log_target,
+            "DELETE",
+            &message,
+            &serde_json::json!({
+                "task_key": task.task_key,
+                "title": task.title,
+                "status": task.status,
+                "project_key": project.as_ref().map(|p| p.project_key.clone()),
+                "log_entries": log_entries,
+                "links": links,
+                "attachments": attachment_paths.len(),
+                "prs": prs,
+            })
+            .to_string(),
+            Some(user),
+        )?;
+        tx.commit()?;
+        Ok(TaskDeleted {
+            task,
+            log_entries,
+            links,
+            attachments: attachment_paths.len(),
+            prs,
+            attachment_paths,
+        })
     }
 
     /// Number of tasks (archived included) that belong to a project.

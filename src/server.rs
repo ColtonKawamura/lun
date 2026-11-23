@@ -51,6 +51,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}", get(task_by_key))
         .route("/api/tasks/{key}", post(update_task))
         .route("/api/tasks/{key}/reorder", post(reorder_task))
+        .route("/api/tasks/{key}/delete", post(delete_task))
         .route("/api/tasks/{key}/archive", post(archive_task))
         .route("/api/tasks/{key}/unarchive", post(unarchive_task))
         .route("/api/tasks/{key}/logs", get(task_logs))
@@ -339,6 +340,41 @@ async fn reorder_task(
     };
     match lun.reorder_task(task.id, if body.dir >= 0 { 1 } else { -1 }) {
         Ok(t) => Json(t).into_response(),
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+/// Permanently delete a task (`lun rm task`). The web UI's Delete task
+/// button; Archive stays on `/archive` (the `x` shortcut).
+async fn delete_task(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t,
+        Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    match lun.delete_task(task.id, None, Some("web")) {
+        Ok(done) => {
+            let managed = state.data_dir.join("attachments");
+            for p in &done.attachment_paths {
+                let path = std::path::Path::new(p);
+                let abs = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    state.data_dir.parent().map(|b| b.join(path)).unwrap_or_else(|| path.to_path_buf())
+                };
+                if abs.starts_with(&managed) {
+                    let _ = std::fs::remove_file(&abs);
+                }
+            }
+            Json(serde_json::json!({
+                "deleted": done.task,
+                "log_entries": done.log_entries,
+                "links": done.links,
+                "attachments": done.attachments,
+                "prs": done.prs,
+            }))
+            .into_response()
+        }
         Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
     }
 }

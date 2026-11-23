@@ -745,15 +745,279 @@ fn archived_task_keeps_its_data_and_counts_for_project_delete() {
 }
 
 #[test]
-fn web_assets_have_task_delete_and_undo() {
+fn web_assets_have_task_delete_archive_and_undo() {
     let html = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/static/index.html")).unwrap();
     for needle in [
         "id=\"deleteTaskBtn\"",
+        "id=\"deleteTaskOverlay\"",
         "id=\"undoToast\"",
-        "/archive'",
-        "/unarchive'",
+        "'/delete'",            // permanent delete from the button
+        "'/archive'",           // archive from the x shortcut
+        "'/unarchive'",
+        "function archiveTask",
+        "function confirmDeleteTask",
         "function undoDeleteTask",
     ] {
         assert!(html.contains(needle), "missing {needle}");
     }
+    // x archives (it used to close the task).
+    assert!(html.contains("archiveTask(activeCard.key"), "x should call archiveTask");
+    assert!(!html.contains("markDone"), "markDone is gone");
+}
+
+// ---------------------------------------------------------------------------
+// `lun rm task`: permanent delete
+// ---------------------------------------------------------------------------
+
+fn rm_task(cli: &CliApp, root: &std::path::Path, args: &[&str], input: &[&str]) -> lun::db::Result<String> {
+    let mut argv: Vec<String> = vec!["rm".into(), "task".into()];
+    argv.extend(args.iter().map(|s| s.to_string()));
+    run_result_in_reader(cli, &argv, &mut reader(input), Some(root))
+}
+
+#[test]
+fn db_delete_task_removes_every_trace_and_nothing_else() {
+    let root = temp_root("db-deltask");
+    let lun = Lun::init(&root).unwrap();
+    let p = mk_proj(&lun, "home");
+    let doomed = mk_task(&lun, "doomed", Some(p.id));
+    let safe = mk_task(&lun, "safe", Some(p.id));
+    for t in [&doomed, &safe] {
+        lun.add_link(LinkTarget::Task(t.id), "l", "https://x", None, None).unwrap();
+        lun.add_attachment_to(AttachmentTarget::Task(t.id), "f.txt", &format!("/tmp/nope-{}", t.task_key), None, None).unwrap();
+        lun.update_task(t.id, TaskUpdateSpec { notes: Some("one".into()), ..Default::default() }).unwrap();
+        lun.update_task(t.id, TaskUpdateSpec { notes: Some("two".into()), ..Default::default() }).unwrap();
+    }
+    lun.create_pr(PrSpec {
+        task_id: doomed.id,
+        source_branch: Some("feat".into()),
+        target_branch: Some("main".into()),
+        message: None,
+        user: None,
+    })
+    .unwrap();
+    let safe_logs = count(&root, &format!("SELECT COUNT(*) FROM logs WHERE entity_type='task' AND entity_id={}", safe.id));
+    let safe_diffs = count(&root, &format!("SELECT COUNT(*) FROM note_diffs WHERE task_id={}", safe.id));
+    assert!(safe_diffs >= 1);
+
+    let done = lun.delete_task(doomed.id, Some("gone"), Some("t")).unwrap();
+    assert_eq!(done.task.task_key, doomed.task_key);
+    assert_eq!((done.links, done.attachments, done.prs), (1, 1, 1));
+    assert!(done.log_entries >= 4, "{}", done.log_entries);
+    assert_eq!(done.attachment_paths, vec![format!("/tmp/nope-{}", doomed.task_key)]);
+
+    assert!(lun.task_by_id(doomed.id).is_err());
+    assert!(lun.task_by_key(&doomed.task_key).is_err());
+    for (table, col) in [("links", "task_id"), ("attachments", "task_id"), ("prs", "task_id"), ("note_diffs", "task_id")] {
+        assert_eq!(count(&root, &format!("SELECT COUNT(*) FROM {table} WHERE {col}={}", doomed.id)), 0, "{table}");
+    }
+    assert_eq!(count(&root, &format!("SELECT COUNT(*) FROM logs WHERE entity_type='task' AND entity_id={}", doomed.id)), 0);
+    // The other task is untouched, down to its history and diffs.
+    assert!(lun.task_by_id(safe.id).is_ok());
+    assert_eq!(lun.links_for_task(safe.id).unwrap().len(), 1);
+    assert_eq!(count(&root, &format!("SELECT COUNT(*) FROM logs WHERE entity_type='task' AND entity_id={}", safe.id)), safe_logs);
+    assert_eq!(count(&root, &format!("SELECT COUNT(*) FROM note_diffs WHERE task_id={}", safe.id)), safe_diffs);
+    // A trace is left on the project: its own history is gone.
+    let last = &lun.logs_for("project", p.id).unwrap()[0];
+    assert_eq!((last.action.as_str(), last.message.as_str()), ("DELETE", "gone"));
+    assert!(last.details.contains(&doomed.task_key) && last.details.contains("doomed"), "{}", last.details);
+    {
+        let conn = rusqlite::Connection::open(root.join(".lun/lun.db")).unwrap();
+        let mut stmt = conn.prepare("PRAGMA foreign_key_check").unwrap();
+        assert_eq!(stmt.query_map([], |_| Ok(())).unwrap().count(), 0, "dangling foreign keys");
+    }
+    // Gone means gone: a second delete is a clean not-found.
+    assert_eq!(lun.delete_task(doomed.id, None, None).unwrap_err().kind(), "not-found");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn db_delete_task_works_for_archived_and_unassigned_tasks() {
+    let root = temp_root("db-deltask-edge");
+    let lun = Lun::init(&root).unwrap();
+    // Archived task.
+    let p = mk_proj(&lun, "x");
+    let a = mk_task(&lun, "was archived", Some(p.id));
+    lun.archive_task(a.id, None, None).unwrap();
+    lun.delete_task(a.id, None, None).unwrap();
+    assert!(lun.task_by_id(a.id).is_err());
+    // A task with no project: the trace goes on P-000.
+    let n = mk_task(&lun, "orphan", None);
+    let p0 = lun.unassigned_project_id().unwrap();
+    lun.delete_task(n.id, None, None).unwrap();
+    let last = &lun.logs_for("project", p0).unwrap()[0];
+    assert_eq!(last.action, "DELETE");
+    assert!(last.message.contains("orphan"), "{}", last.message);
+    // Deleting the project afterwards still works (trace entry cascades with it).
+    lun.delete_project(p.id, ProjectDeleteMode::RefuseIfNotEmpty, None, None).unwrap();
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cli_rm_task_by_key_title_confirm_and_flags() {
+    let (root, cli, lun) = cli_fixture("cli-rmtask");
+    let p = mk_proj(&lun, "proj");
+    let a = mk_task(&lun, "write the intro", Some(p.id));
+    let b = mk_task(&lun, "dup title", Some(p.id));
+    let c = mk_task(&lun, "dup title", Some(p.id));
+    let d = mk_task(&lun, "by title", Some(p.id));
+    lun.add_link(LinkTarget::Task(a.id), "l", "https://x", None, None).unwrap();
+
+    // Declined: empty, "n", closed stdin. Nothing changes.
+    for input in [vec![""], vec!["n"], vec![]] {
+        let e = rm_task(&cli, &root, &[&a.task_key], &input).unwrap_err();
+        assert_eq!(e.kind(), "declined", "{input:?}");
+        assert!(e.to_string().contains("task archive"), "{e}");
+    }
+    assert!(lun.task_by_id(a.id).is_ok());
+
+    // y, then a blank commit message takes the default; summary lists what went.
+    let out = rm_task(&cli, &root, &[&a.task_key], &["y", ""]).unwrap();
+    assert!(out.contains(&format!("Deleted task {}", a.task_key)), "{out}");
+    assert!(out.contains("Also removed:") && out.contains("1 links"), "{out}");
+    assert!(out.contains("Committed: delete task"), "{out}");
+    assert!(lun.task_by_id(a.id).is_err());
+
+    // By exact title with --yes --message, no prompts at all.
+    let out = rm_task(&cli, &root, &["by title", "--yes", "--message", "bye"], &[]).unwrap();
+    assert!(out.contains("Committed: bye"), "{out}");
+    assert!(lun.task_by_id(d.id).is_err());
+
+    // Ambiguous title is refused and deletes neither.
+    let e = rm_task(&cli, &root, &["dup title", "--yes"], &[]).unwrap_err();
+    assert_eq!(e.kind(), "ambiguous");
+    assert!(lun.task_by_id(b.id).is_ok() && lun.task_by_id(c.id).is_ok());
+    // ...but the key picks one.
+    rm_task(&cli, &root, &[&b.task_key, "-y"], &[""]).unwrap();
+    assert!(lun.task_by_id(b.id).is_err() && lun.task_by_id(c.id).is_ok());
+
+    // Errors.
+    assert_eq!(rm_task(&cli, &root, &[], &[]).unwrap_err().kind(), "usage");
+    assert_eq!(rm_task(&cli, &root, &["T-nope", "--yes"], &[]).unwrap_err().kind(), "not-found");
+    assert_eq!(rm_task(&cli, &root, &["a", "b"], &[]).unwrap_err().kind(), "usage");
+    assert_eq!(rm_task(&cli, &root, &[&c.task_key, "--bogus"], &[]).unwrap_err().kind(), "usage");
+    assert_eq!(rm_task(&cli, &root, &[&c.task_key, "--message"], &[]).unwrap_err().kind(), "usage");
+    // A project key is not a task.
+    assert_eq!(rm_task(&cli, &root, &[&p.project_key, "--yes"], &[]).unwrap_err().kind(), "not-found");
+    assert!(lun.task_by_id(c.id).is_ok());
+    assert!(lun.project_by_key(&p.project_key).is_ok());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cli_rm_task_removes_managed_attachment_copies_only() {
+    let (root, cli, lun) = cli_fixture("cli-rmtask-files");
+    let p = mk_proj(&lun, "files");
+    let t = mk_task(&lun, "has files", Some(p.id));
+    let dir = root.join(".lun/attachments");
+    std::fs::create_dir_all(&dir).unwrap();
+    let managed = dir.join("copy.txt");
+    let outside = root.join("by-path.txt");
+    std::fs::write(&managed, "x").unwrap();
+    std::fs::write(&outside, "y").unwrap();
+    lun.add_attachment_to(AttachmentTarget::Task(t.id), "copy.txt", &managed.display().to_string(), None, None).unwrap();
+    lun.add_attachment_to(AttachmentTarget::Task(t.id), "by-path.txt", &outside.display().to_string(), None, None).unwrap();
+    rm_task(&cli, &root, &[&t.task_key, "--yes"], &[""]).unwrap();
+    assert!(!managed.exists(), "managed copy removed");
+    assert!(outside.exists(), "a path-linked file is never deleted");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cli_task_archive_is_not_rm() {
+    // Archive keeps the row; rm removes it. The two must not be confused.
+    let (root, cli, lun) = cli_fixture("cli-arch-vs-rm");
+    let p = mk_proj(&lun, "p");
+    let t = mk_task(&lun, "keep me", Some(p.id));
+    let argv: Vec<String> = vec!["task".into(), "archive".into(), t.task_key.clone()];
+    run_result_in_reader(&cli, &argv, &mut reader(&[""]), Some(&root)).unwrap();
+    assert!(lun.task_by_id(t.id).unwrap().archived_at.is_some());
+    // rm works on an archived task and really removes it.
+    rm_task(&cli, &root, &[&t.task_key, "--yes"], &[""]).unwrap();
+    assert!(lun.task_by_id(t.id).is_err());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn cli_completion_knows_rm_task() {
+    let (root, cli, lun) = cli_fixture("cli-complete-task");
+    let p = mk_proj(&lun, "p");
+    let t = mk_task(&lun, "completable title", Some(p.id));
+    let c = |words: &[&str]| {
+        let w: Vec<String> = words.iter().map(|s| s.to_string()).collect();
+        lun::cli::complete_output(Some(&cli), &w)
+    };
+    let subs = c(&["lun", "rm", ""]);
+    assert!(subs.lines().any(|l| l == "proj") && subs.lines().any(|l| l == "task"), "{subs}");
+    let tasks = c(&["lun", "rm", "task", ""]);
+    assert!(tasks.lines().any(|l| l == t.task_key) && tasks.lines().any(|l| l == "completable title"), "{tasks}");
+    let flags = c(&["lun", "rm", "task", "x", "--"]);
+    assert!(flags.contains("--yes") && flags.contains("--message") && !flags.contains("--cascade"), "{flags}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn tui_rm_task_prompts_in_cli_order_and_deletes() {
+    let (root, mut app, projs) = tui_fixture("tui-rmtask");
+    let task_key = app.data.tasks[0].task_key.clone();
+    // Default: y/N, then commit message.
+    app.open_palette();
+    type_line(&mut app, &format!("rm task {task_key}"));
+    let labels = app.prompt_session.as_ref().unwrap().prompts.clone();
+    assert_eq!(labels.len(), 2, "{labels:?}");
+    assert!(labels[0].contains("Permanently delete task") && labels[0].contains("[y/N]"), "{labels:?}");
+    assert!(labels[1].contains("Commit Message"), "{labels:?}");
+    // A "no" ends it without asking for a commit message, and keeps the task.
+    type_line(&mut app, "n");
+    assert!(app.prompt_session.is_none());
+    let out = app.output.as_ref().unwrap();
+    assert!(out.is_error && out.text.contains("not deleted"), "{}", out.text);
+    assert!(app.data.tasks.iter().any(|t| t.task_key == task_key));
+    // y + message deletes it.
+    app.close_command_prompt();
+    app.open_palette();
+    type_line(&mut app, &format!("rm task {task_key}"));
+    type_line(&mut app, "y");
+    type_line(&mut app, "tui removal");
+    let out = app.output.as_ref().unwrap();
+    assert!(!out.is_error && out.text.contains("Deleted task") && out.text.contains("Committed: tui removal"), "{}", out.text);
+    assert!(!app.data.tasks.iter().any(|t| t.task_key == task_key));
+    assert!(app.task_selected <= app.data.tasks.len());
+    // Unknown task is an error up front, no prompt.
+    app.close_command_prompt();
+    app.open_palette();
+    type_line(&mut app, "rm task T-nope");
+    assert!(app.prompt_session.is_none());
+    let _ = projs;
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn binary_rm_task_exit_codes() {
+    let home = std::fs::canonicalize(temp_root("bin-rmtask")).unwrap();
+    let root = home.join("board");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = env!("CARGO_BIN_EXE_lun");
+    let run = |args: &[&str]| {
+        let out = Command::new(bin).args(args).current_dir(&root).env("HOME", &home)
+            .stdin(std::process::Stdio::null()).output().unwrap();
+        (out.status.code().unwrap(), String::from_utf8_lossy(&out.stdout).to_string(), String::from_utf8_lossy(&out.stderr).to_string())
+    };
+    assert_eq!(run(&["init"]).0, 0);
+    let (_, out, _) = run(&["add", "task", "to remove", "--message", "m"]);
+    let key = out.split("Created task ").nth(1).unwrap().split_whitespace().next().unwrap().to_string();
+    // Closed stdin and no --yes: declined, exit 2, still there.
+    let (code, _, err) = run(&["rm", "task", &key]);
+    assert_eq!(code, 2, "{err}");
+    assert_eq!(run(&["task", &key]).0, 0);
+    // --yes: gone, exit 0.
+    let (code, out, err) = run(&["rm", "task", &key, "--yes", "--message", "bin"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains(&format!("Deleted task {key}")), "{out}");
+    assert_eq!(run(&["task", &key]).0, 2);
+    // Already gone: not-found, exit 2.
+    assert_eq!(run(&["rm", "task", &key, "--yes"]).0, 2);
+    let (_, help, _) = run(&["--help"]);
+    assert!(help.contains("lun rm task"), "{help}");
+    let _ = std::fs::remove_dir_all(&home);
 }

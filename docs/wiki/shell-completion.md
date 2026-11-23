@@ -17,7 +17,9 @@ eval "$(lun completion zsh)"
 
 ```sh
 lun <TAB>                    # add, attach, link, log, move, pr, rm, serve, status, task
+lun rm <TAB>                 # proj, task
 lun rm proj <TAB>            # project names and keys; then --move-to, --cascade, --yes
+lun rm task <TAB>            # task keys and titles; then --yes, --message
 lun task <TAB>               # complete, edit, ls, reopen, archive, unarchive
 lun task edit T-001 --<TAB>  # title, status, priority, project, scope, assignee, branch
 ```

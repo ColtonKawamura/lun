@@ -65,6 +65,7 @@ lun/
 - `POST /api/tasks/{key}/logs` — Add log
 - `GET /api/projects/{key}` — One project (+ `task_count`)
 - `POST /api/projects/{key}/delete` — Delete a project (`move_to` / `cascade`)
+- `POST /api/tasks/{key}/delete` — Permanently delete a task
 - `POST /api/tasks/{key}/archive` — Archive
 - `POST /api/tasks/{key}/unarchive` — Unarchive
 

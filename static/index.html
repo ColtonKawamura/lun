@@ -863,8 +863,8 @@ textarea.notes-input {
       
       <div style="display:flex;gap:8px;margin-top:16px;">
         <button class="btn" id="saveBtn">Save</button>
-        <button class="btn btn-secondary" id="doneBtn" title="Close task (x)">Close</button>
-        <button class="btn btn-danger" id="deleteTaskBtn" title="Delete task (archives it; Undo appears for a few seconds, or lun task unarchive)" style="margin-left:auto;">Delete task</button>
+        <button class="btn btn-secondary" id="doneBtn" title="Set the task to closed (the x key archives instead)">Close</button>
+        <button class="btn btn-danger" id="deleteTaskBtn" title="Delete task permanently (lun rm task). Press x on a card to archive instead." style="margin-left:auto;">Delete task</button>
       </div>
     </div>
   </div>
@@ -886,6 +886,21 @@ textarea.notes-input {
     <h3>Switch Project</h3>
     <input type="text" id="projectPickerInput" placeholder="Type to filter projects...">
     <div class="palette-results" id="projectPickerResults"></div>
+  </div>
+</div>
+
+<!-- Delete task dialog (permanent) -->
+<div class="palette-overlay" id="deleteTaskOverlay">
+  <div class="palette dp-box" role="dialog" aria-labelledby="dtTitle">
+    <h3 id="dtTitle">Delete task</h3>
+    <p id="dtSummary"></p>
+    <p class="dp-warn">This permanently removes the task and its history, links, attachments and PRs. It cannot be undone.</p>
+    <p>To just hide it instead, press <b>x</b> on the card (archive, with Undo).</p>
+    <p class="dp-err" id="dtError"></p>
+    <div class="dp-actions">
+      <button class="btn btn-secondary" id="dtCancel">Cancel</button>
+      <button class="btn btn-danger" id="dtConfirm">Delete forever</button>
+    </div>
   </div>
 </div>
 
@@ -922,7 +937,7 @@ textarea.notes-input {
       <tr><td>Enter</td><td>Open card detail</td></tr>
       <tr><td>Ctrl+L</td><td>Open first link on selected card</td></tr>
       <tr><td>a</td><td>New card in column</td></tr>
-      <tr><td>x</td><td>Close task</td></tr>
+      <tr><td>x</td><td>Archive task (Undo toast)</td></tr>
       <tr><td>f</td><td>Toggle filters</td></tr>
       <tr><td>g p</td><td>Cycle projects</td></tr>
       <tr><td>g d</td><td>Delete the selected project</td></tr>
@@ -944,7 +959,7 @@ textarea.notes-input {
   <span><kbd>d/u</kbd> status</span>
   <span><kbd>Enter</kbd> detail</span>
   <span><kbd>a</kbd> new</span>
-  <span><kbd>x</kbd> close</span>
+  <span><kbd>x</kbd> archive</span>
   <span><kbd>f</kbd> filter</span>
   <span><kbd>/</kbd> palette</span>
   <span><kbd>?</kbd> help</span>
@@ -1742,6 +1757,10 @@ function handleKeyboard(e) {
     const palette = document.getElementById('paletteOverlay');
     const filterBar = document.getElementById('filterBar');
     const projectPicker = document.getElementById('projectPickerOverlay');
+    if (document.getElementById('deleteTaskOverlay').classList.contains('active')) {
+      closeDeleteTask();
+      return;
+    }
     if (document.getElementById('deleteProjectOverlay').classList.contains('active')) {
       closeDeleteProject();
       return;
@@ -1790,6 +1809,7 @@ function handleKeyboard(e) {
 
   // While the delete-project dialog is open, board keys must not fire behind it.
   if (document.getElementById('deleteProjectOverlay').classList.contains('active')) return;
+  if (document.getElementById('deleteTaskOverlay').classList.contains('active')) return;
 
   // Ctrl+L on the board: open the first link of the selected card
   if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L') && !modal.classList.contains('active') && activeCard?.key) {
@@ -1983,9 +2003,10 @@ function handleKeyboard(e) {
     return;
   }
 
-  // Close task
+  // Archive task (restorable: Undo toast, then `lun task unarchive`)
   if (e.key === 'x' && activeCard?.key) {
-    markDone(activeCard.key);
+    const card = tasks.find(t => t.task_key === activeCard.key);
+    archiveTask(activeCard.key, card ? card.title : '');
     return;
   }
 
@@ -2156,13 +2177,6 @@ async function openActiveCardLink() {
   }
 }
 
-function markDone(key) {
-  updateTaskOnServer(key, {status: 'closed'}).then(() => {
-    activeCard = null;
-    loadTasks().then(render);
-  });
-}
-
 // Project cycling
 function cycleProject() {
   const sel = document.getElementById('projectFilter');
@@ -2230,7 +2244,8 @@ function closePalette() {
   document.getElementById('paletteOverlay').classList.remove('active');
 }
 
-// Delete task = archive (restorable). Undo toast for a few seconds.
+// Archive (the `x` shortcut) is restorable: Undo toast for 10 seconds, then
+// `lun task unarchive <key>`. Delete task (the red button) is permanent.
 let undoTimer = null;
 let undoKey = null;
 function hideUndoToast() {
@@ -2244,24 +2259,21 @@ function showUndoToast(text, key) {
   document.getElementById('undoToast').classList.add('active');
   undoTimer = setTimeout(hideUndoToast, 10000);
 }
-async function deleteTask() {
-  if (!editingTask) return;
-  const key = editingTask;
-  const title = (document.getElementById('editTitle').value || '').trim();
+async function archiveTask(key, title) {
   try {
     const res = await fetch('/api/tasks/' + encodeURIComponent(key) + '/archive', { method: 'POST' });
     if (!res.ok) {
       let msg = res.status;
       try { msg = (await res.json()).error || msg; } catch (_) {}
-      alert('Could not delete ' + key + ': ' + msg);
-      return;
+      alert('Could not archive ' + key + ': ' + msg);
+      return false;
     }
-  } catch (e) { alert('Could not delete ' + key + ': ' + e); return; }
-  closeModal();
+  } catch (e) { alert('Could not archive ' + key + ': ' + e); return false; }
   activeCard = null;
   await loadTasks();
   render();
-  showUndoToast('Deleted ' + key + (title ? ' — ' + title : ''), key);
+  showUndoToast('Archived ' + key + (title ? ' — ' + title : ''), key);
+  return true;
 }
 async function undoDeleteTask() {
   const key = undoKey;
@@ -2274,8 +2286,58 @@ async function undoDeleteTask() {
   await loadTasks();
   render();
 }
-document.getElementById('deleteTaskBtn').addEventListener('click', deleteTask);
 document.getElementById('undoToastBtn').addEventListener('click', undoDeleteTask);
+
+// Delete task (permanent) confirm dialog
+let deletingTask = null;
+function openDeleteTask() {
+  if (!editingTask) return;
+  const key = editingTask;
+  const title = (document.getElementById('editTitle').value || '').trim();
+  deletingTask = { key, title };
+  document.getElementById('dtTitle').textContent = 'Delete ' + key + '?';
+  document.getElementById('dtSummary').textContent = title || key;
+  document.getElementById('dtError').textContent = '';
+  document.getElementById('dtConfirm').disabled = false;
+  document.getElementById('deleteTaskOverlay').classList.add('active');
+  document.getElementById('dtCancel').focus();
+}
+function closeDeleteTask() {
+  document.getElementById('deleteTaskOverlay').classList.remove('active');
+  deletingTask = null;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+async function confirmDeleteTask() {
+  if (!deletingTask) return;
+  const { key } = deletingTask;
+  document.getElementById('dtConfirm').disabled = true;
+  try {
+    const res = await fetch('/api/tasks/' + encodeURIComponent(key) + '/delete', { method: 'POST' });
+    if (!res.ok) {
+      let msg = res.status;
+      try { msg = (await res.json()).error || msg; } catch (_) {}
+      document.getElementById('dtError').textContent = msg;
+      document.getElementById('dtConfirm').disabled = false;
+      return;
+    }
+  } catch (e) {
+    document.getElementById('dtError').textContent = 'Failed: ' + e;
+    document.getElementById('dtConfirm').disabled = false;
+    return;
+  }
+  closeDeleteTask();
+  closeModal();
+  activeCard = null;
+  hideUndoToast();
+  await loadTasks();
+  render();
+}
+document.getElementById('deleteTaskBtn').addEventListener('click', openDeleteTask);
+document.getElementById('dtCancel').addEventListener('click', closeDeleteTask);
+document.getElementById('dtConfirm').addEventListener('click', confirmDeleteTask);
+document.getElementById('deleteTaskOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeDeleteTask();
+});
 
 // Delete project dialog
 let deletingProject = null;

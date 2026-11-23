@@ -18,7 +18,7 @@ pub mod server;
 pub mod tui;
 
 pub use db::{
-    AttachmentTarget, LinkTarget, LogEntry, Lun, Pr, Project, ProjectDeleteMode, ProjectDeleted,
+    AttachmentTarget, LinkTarget, LogEntry, Lun, Pr, Project, ProjectDeleteMode, ProjectDeleted, TaskDeleted,
     ProjectSpec, Task, TaskListSpec,
     TaskSort, TaskSpec, TaskUpdateSpec,
 };

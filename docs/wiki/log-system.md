@@ -18,7 +18,7 @@ The log system provides git-style commit history for projects and tasks.
 - `LINK`: URL linked
 - `ARCHIVE`: Archived
 - `UNARCHIVE`: Unarchived (`lun task unarchive`, or Undo in the web UI)
-- `DELETE`: A project was deleted (written on `P-000`, since the project's own history is deleted with it)
+- `DELETE`: A project or a task was permanently deleted. A project's trace goes on `P-000`; a task's trace goes on its project (or `P-000`), since their own history is deleted with them
 
 ### Users
 - `cli`: Command line interface

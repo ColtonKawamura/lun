@@ -5,7 +5,7 @@ All commands can be run from the shell or inside the TUI (with `/` or `:`).
 ## Global Flags
 
 - `--json`: JSON output — `lun status` and `lun status <query>` only (other commands reject it)
-- `--message "<msg>"`: commit message for `add proj`, `proj`, `rm proj`, `move`, `task --status`, `task edit` (skips the stdin prompt)
+- `--message "<msg>"`: commit message for `add proj`, `proj`, `rm proj`, `rm task`, `move`, `task --status`, `task edit` (skips the stdin prompt)
 
 Every change records a commit and asks for its message on stdin when
 `--message` is absent (`add task` also asks for status, priority, assignee).
@@ -54,6 +54,22 @@ lun add proj "Test" --status inactive
 Update project status.
 ```sh
 lun proj P-001 --status inactive
+```
+
+### `lun rm task <key|title> [--yes] [--message "<msg>"]`
+**Permanently** delete a task: the task, its whole log history, note diffs, links, attachment rows and PRs, in one step. This cannot be undone. To hide a task instead, use `lun task archive` (restorable with `lun task unarchive`).
+
+- Takes a task key (`T-7dqs`) or an exact title. A title shared by several tasks is refused as ambiguous; use the key.
+- Asks `[y/N]` first. Closed or empty stdin counts as "no", so scripts must pass `--yes` (or `-y`).
+- Archived tasks can be removed too.
+- Attachment copies stored under `.lun/attachments/` are removed from disk; files that were only linked by path are never touched.
+- The deletion is recorded as a `DELETE` entry on the task's project (or `P-000` if it has none), because the task's own history goes with it: `lun log <project>`.
+- Exit code 2 for a refusal, "no" or an unknown task; 0 on success.
+
+```sh
+lun rm task T-7dqs                          # asks y/N, then a commit message
+lun rm task "write the intro" --yes         # exact title, no prompt
+lun rm task T-7dqs -y --message "duplicate" # fully scripted
 ```
 
 ### `lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message "<msg>"]`
@@ -145,7 +161,7 @@ Task lifecycle commands.
 ```sh
 lun task complete T-001         # -> closed
 lun task reopen T-001           # -> planning (or --status <status>)
-lun task archive T-001          # Archive (hide from default views; this is what "Delete task" does in the web UI)
+lun task archive T-001          # Archive (hide from default views; the `x` key in the web UI). `lun rm task` deletes for good
 lun task unarchive T-001 [--message "..."]   # Bring an archived task back
 lun task ls --all               # Include archived tasks (find the key to unarchive)
 ```

@@ -952,6 +952,24 @@ impl App {
             Some("move") if !args.iter().any(|a| a == "--message") => {
                 prompts.push("Commit Message: ".to_string());
             }
+            Some("rm") if args.get(1).map(String::as_str) == Some("task") => {
+                // Same order as `cli::rm_task_command` reads stdin.
+                if let (Some(lun), Some(query)) = (self.lun.as_ref(), args.get(2)) {
+                    if !query.starts_with('-') {
+                        let task = crate::cli::resolve_task(lun, query)
+                            .map_err(|e| e.to_string())?;
+                        if !args.iter().any(|a| a == "--yes" || a == "-y") {
+                            prompts.push(format!(
+                                "Permanently delete task {} ({})? [y/N] ",
+                                task.task_key, task.title
+                            ));
+                        }
+                    }
+                }
+                if !args.iter().any(|a| a == "--message") {
+                    prompts.push("Commit Message: ".to_string());
+                }
+            }
             Some("rm") if matches!(args.get(1).map(String::as_str), Some("proj" | "project")) => {
                 // Same order as `cli::rm_project_command` reads stdin: the
                 // [y/N] confirm first, then the commit message.

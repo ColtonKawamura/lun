@@ -65,6 +65,13 @@ add task "My task" proj "My project"
 add proj "My project"
 ```
 
+### Delete a task
+```sh
+rm task T-7dqs            # asks  Permanently delete task ... [y/N]  then a commit message
+rm task "my title" --yes  # exact title, skip the y/N
+```
+Permanent, same code as `lun rm task`. Answering anything but `y` cancels without asking for a commit message. `task archive` hides a task instead.
+
 ### Delete a project
 ```sh
 rm proj "My project"                       # asks  Delete project ... [y/N]  then a commit message

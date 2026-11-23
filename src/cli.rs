@@ -44,7 +44,7 @@ mod agent;
 use crate::db::Result;
 use crate::db::{
     task_status_list, Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr,
-    PrSpec, Project, ProjectDeleteMode, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec, DEFAULT_TASK_STATUS,
+    PrSpec, Project, ProjectDeleteMode, TaskDeleted, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec, DEFAULT_TASK_STATUS,
     TASK_STATUSES,
 };
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
@@ -130,6 +130,9 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
             extend_unique(&mut out, ["--status", "--message"]);
         }
         "proj" | "project" => {}
+        "rm" if tokens.get(1).map(String::as_str) == Some("task") => {
+            extend_unique(&mut out, ["--yes", "--message"]);
+        }
         "rm" if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project")) => {
             extend_unique(&mut out, ["--move-to", "--cascade", "--yes", "--message"]);
         }
@@ -287,7 +290,10 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                 Some("proj" | "project") if tokens.len() == 1 => {
                     out.extend(project_candidates(app))
                 }
-                Some("rm") if tokens.len() == 1 => extend_unique(&mut out, ["proj"]),
+                Some("rm") if tokens.len() == 1 => extend_unique(&mut out, ["proj", "task"]),
+                Some("rm") if tokens.get(1).map(String::as_str) == Some("task") && tokens.len() == 2 => {
+                    out.extend(task_candidates(app))
+                }
                 Some("rm")
                     if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
                         && tokens.len() == 2 =>
@@ -463,6 +469,7 @@ Usage:
   lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--scope/--sort/--all; --json, --fields a,b, --oneline)
   lun task edit <task|T-1,T-2,...> [--field value]   Edit task fields (--append-notes TEXT, --scope S; comma list = bulk)
   lun proj <project> --status <active|inactive>   Update project status
+  lun rm task <key|title> [--yes] [--message M]   Permanently delete a task and its history/links/attachments/PRs (`task archive` only hides it)
   lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message M]   Delete a project (refuses one with tasks unless --move-to/--cascade; never P-000)
   lun task complete|reopen|archive|unarchive <task>   Update task lifecycle (archive hides a task; unarchive restores it; `task ls --all` lists archived)
   lun log <project|task> [-N] [--oneline] [--json] [--since ID]   History of one project/task, newest first (-N: only the N newest)
@@ -2640,6 +2647,100 @@ pub fn project_set_status(
     ))
 }
 
+/// Remove attachment copies the board manages (under `<board>/.lun/attachments/`)
+/// from disk after their rows were deleted. A file that was only linked by
+/// path is never touched.
+fn remove_managed_attachments(root: Option<&Path>, paths: &[String]) {
+    let base = root
+        .map(Path::to_path_buf)
+        .or_else(|| crate::root::from_cwd().ok().map(|(r, _)| r));
+    let Some(base) = base else { return };
+    let managed = attachments_root(&base);
+    for p in paths {
+        let path = Path::new(p);
+        let abs = if path.is_absolute() { path.to_path_buf() } else { base.join(path) };
+        if abs.starts_with(&managed) {
+            let _ = std::fs::remove_file(&abs);
+        }
+    }
+}
+
+/// `lun rm task <key|title> [--yes] [--message M]`: permanently delete a
+/// task and everything attached to it (history, links, attachments, PRs).
+/// Not the same as `lun task archive`, which only hides it.
+pub fn rm_task_command(
+    app: &App,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+    root: Option<&Path>,
+) -> Result<String> {
+    let usage = "expected: lun rm task <key|title> [--yes] [--message \"...\"]";
+    let (rest, message) = parse_message_flag(args)?;
+    let mut query: Option<String> = None;
+    let mut yes = false;
+    for a in &rest {
+        match a.as_str() {
+            "--yes" | "-y" => yes = true,
+            other if other.starts_with('-') => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected flag '{other}' for lun rm task"),
+                ))
+            }
+            other => {
+                if query.is_some() {
+                    return Err(DbError::new(
+                        "usage",
+                        format!("unexpected argument '{other}' (quote titles with spaces)"),
+                    ));
+                }
+                query = Some(other.to_string());
+            }
+        }
+    }
+    let query = query.ok_or_else(|| DbError::new("usage", usage))?;
+    let task = resolve_task(&app.lun, &query)?;
+    if !yes {
+        let answer = read_prompt(
+            stdin,
+            &format!(
+                "Permanently delete task {} ({})? This cannot be undone. [y/N] ",
+                task.task_key, task.title
+            ),
+        )?;
+        if !matches!(answer.to_lowercase().as_str(), "y" | "yes") {
+            return Err(DbError::new(
+                "declined",
+                format!(
+                    "not deleted: {} (pass --yes to skip the prompt; `lun task archive` hides it instead)",
+                    task.task_key
+                ),
+            ));
+        }
+    }
+    let default_message = format!("delete task {} \"{}\"", task.task_key, task.title);
+    let commit = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    let done: TaskDeleted = app.lun.delete_task(task.id, Some(&commit), None)?;
+    remove_managed_attachments(root, &done.attachment_paths);
+    let mut out = format!("Deleted task {} ({})", done.task.task_key, done.task.title);
+    let mut extra: Vec<String> = Vec::new();
+    for (n, what) in [
+        (done.log_entries, "log entries"),
+        (done.links, "links"),
+        (done.attachments, "attachments"),
+        (done.prs, "PRs"),
+    ] {
+        if n > 0 {
+            extra.push(format!("{n} {what}"));
+        }
+    }
+    if !extra.is_empty() {
+        out.push_str(&format!("\nAlso removed: {}", extra.join(", ")));
+    }
+    out.push_str(&format!("\nCommitted: {commit}"));
+    Ok(out)
+}
+
 /// `lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message M]`.
 ///
 /// A project with tasks is refused unless `--move-to` or `--cascade` says
@@ -2760,18 +2861,7 @@ pub fn rm_project_command(
     let done = app
         .lun
         .delete_project(project.id, mode, Some(&commit), None)?;
-    // Remove managed attachment copies from disk (never files linked by path).
-    let base = root.map(Path::to_path_buf).or_else(|| crate::root::from_cwd().ok().map(|(r, _)| r));
-    if let Some(base) = base {
-        let managed = attachments_root(&base);
-        for p in &done.attachment_paths {
-            let path = Path::new(p);
-            let abs = if path.is_absolute() { path.to_path_buf() } else { base.join(path) };
-            if abs.starts_with(&managed) {
-                let _ = std::fs::remove_file(&abs);
-            }
-        }
-    }
+    remove_managed_attachments(root, &done.attachment_paths);
     let mut out = format!(
         "Deleted project {} [{}]",
         done.project.name, done.project.project_key
@@ -3695,9 +3785,10 @@ pub fn run_result_in_reader(
         },
         Some("rm") => match args.get(1).map(String::as_str) {
             Some("proj") | Some("project") => rm_project_command(app, &args[2..], stdin, root_override),
+            Some("task") => rm_task_command(app, &args[2..], stdin, root_override),
             _ => Err(DbError::new(
                 "usage",
-                "expected: lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes]",
+                "expected: lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] | lun rm task <key|title> [--yes]",
             )),
         },
         Some("move") => {
