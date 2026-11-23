@@ -106,11 +106,12 @@ Fields:
 
 ### Global
 - `?`: Toggle help
+- `a`: New card in the selected column. The title box opens empty, and the `a` is not typed into it
+- `f`: Toggle the filter bar. The `f` is not typed into the search box
 - `g p`: Project picker
 - `g d`: Delete the selected project (opens a confirm dialog; `Esc` cancels)
 - `x`: Archive the selected card (Undo toast for 10 seconds). It no longer closes the task
-- `q`: Quit (close modal)
-- `/`: Search (if available)
+- `/`: Command palette. The `/` is not typed into the palette input
 
 ## API Endpoints
 
