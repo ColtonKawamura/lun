@@ -55,6 +55,7 @@ Five columns, left to right — the task statuses:
 - Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
   shift the focused card one column right/left; `x` closes it
 - The filter bar (`f`) filters by project, status, priority, scope and text
+- **Deleting a project:** pick a project, then press `g d` or click **Delete project** in the project title bar. A dialog shows how many tasks it has and asks what to do: move them to another project (the default) or delete them too. `Esc`, **Cancel** or a click outside closes it without changing anything. The button is hidden on "All Projects" and on `P-000 Unassigned`.
 
 ### Task Details Modal
 Fields:
@@ -102,6 +103,8 @@ Fields:
 
 ### Global
 - `?`: Toggle help
+- `g p`: Project picker
+- `g d`: Delete the selected project (opens a confirm dialog; `Esc` cancels)
 - `q`: Quit (close modal)
 - `/`: Search (if available)
 
@@ -115,6 +118,14 @@ Fields:
 - `GET /api/tasks/{key}/diffs` — Get note-edit diff history
 - `POST /api/tasks/{key}/archive` — Archive task
 - `POST /api/tasks/{key}/unarchive` — Unarchive task
+
+### Projects
+- `GET /api/projects` — List projects
+- `POST /api/projects` — Create a project (`{"name": "...", "status": "active"}`)
+- `GET /api/projects/{key}` — One project, with `task_count` (archived tasks included)
+- `POST /api/projects/{key}/delete` — Delete a project. Body (optional): `{"move_to": "P-xxxx"}` or `{"cascade": true}`, plus an optional `"message"`. Returns `{"deleted", "tasks_moved", "tasks_deleted", "moved_to"}`.
+  - `409` when the project still has tasks and neither option is given, when it is `P-000`, or when `move_to` is the project itself.
+  - `404` for an unknown project or `move_to`; `400` when both options are given.
 
 ### Logs
 - `GET /api/tasks/{key}/logs` — Get task logs

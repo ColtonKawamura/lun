@@ -145,6 +145,7 @@ Input aliases (CLI, API, TUI): `todo`/`doing` → `planning`, `follow-up` →
 - `LINK`
 - `ARCHIVE`
 - `UNARCHIVE`
+- `DELETE`
 
 ### Log Users
 - `cli`

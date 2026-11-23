@@ -517,6 +517,28 @@ textarea.notes-input {
   color: var(--text);
 }
 
+
+/* Delete project dialog */
+.btn-danger { background: var(--danger); }
+.btn-danger:hover { background: #dc2626; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+.project-title-bar { position: relative; }
+.project-title-bar .project-delete-btn {
+  position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
+  display: none;
+}
+.project-title-bar.has-project .project-delete-btn { display: inline-block; }
+.dp-box { padding: 20px; width: 460px; }
+.dp-box h3 { margin: 0 0 8px; font-size: 18px; }
+.dp-box p { margin: 6px 0; color: var(--text-muted); font-size: 14px; }
+.dp-box label.dp-opt { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; font-size: 14px; cursor: pointer; color: var(--text); }
+.dp-box input[type=radio] { width: auto; padding: 0; margin: 0; flex: none; accent-color: var(--accent-light); }
+.dp-box label.dp-opt span { flex: none; }
+.dp-box select { background: var(--bg-card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 4px 6px; max-width: 220px; }
+.dp-box .dp-warn { color: var(--danger); }
+.dp-box .dp-err { color: var(--danger); min-height: 18px; }
+.dp-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
 /* Command palette */
 .palette-overlay {
   position: fixed;
@@ -696,8 +718,9 @@ textarea.notes-input {
 </div>
 
 <!-- Project Title Bar -->
-<div class="project-title-bar">
+<div class="project-title-bar" id="projectTitleBar">
   <h2 id="projectTitleText">All Projects</h2>
+  <button class="btn btn-secondary project-delete-btn" id="deleteProjectBtn" title="Delete this project (g d)">Delete project</button>
 </div>
 
 <!-- Filter bar -->
@@ -854,6 +877,25 @@ textarea.notes-input {
   </div>
 </div>
 
+<!-- Delete project dialog -->
+<div class="palette-overlay" id="deleteProjectOverlay">
+  <div class="palette dp-box" role="dialog" aria-labelledby="dpTitle">
+    <h3 id="dpTitle">Delete project</h3>
+    <p id="dpSummary"></p>
+    <div id="dpTaskChoices" style="display:none">
+      <label class="dp-opt"><input type="radio" name="dpMode" value="move" checked>
+        <span>Move the tasks to</span> <select id="dpMoveTo"></select></label>
+      <label class="dp-opt"><input type="radio" name="dpMode" value="cascade">
+        <span class="dp-warn">Delete the tasks too (permanent)</span></label>
+    </div>
+    <p class="dp-err" id="dpError"></p>
+    <div class="dp-actions">
+      <button class="btn btn-secondary" id="dpCancel">Cancel</button>
+      <button class="btn btn-danger" id="dpConfirm">Delete</button>
+    </div>
+  </div>
+</div>
+
 <!-- Help overlay -->
 <div class="help-overlay" id="helpOverlay">
   <div class="help-panel">
@@ -871,6 +913,7 @@ textarea.notes-input {
       <tr><td>x</td><td>Close task</td></tr>
       <tr><td>f</td><td>Toggle filters</td></tr>
       <tr><td>g p</td><td>Cycle projects</td></tr>
+      <tr><td>g d</td><td>Delete the selected project</td></tr>
       <tr><td>g b</td><td>Board view</td></tr>
       <tr><td>g l</td><td>List view</td></tr>
       <tr><td>gg</td><td>First card</td></tr>
@@ -1086,6 +1129,10 @@ function updateProjectTitle(projectId) {
   const pid = parseInt(projectId);
   const name = isNaN(pid) ? 'All Projects' : projectName(pid);
   document.getElementById('projectTitleText').textContent = name;
+  // The delete button needs a concrete project; P-000 Unassigned can't be deleted.
+  const proj = isNaN(pid) ? null : projects.find(p => p.id === pid);
+  document.getElementById('projectTitleBar')
+    .classList.toggle('has-project', !!proj && proj.project_key !== 'P-000');
 }
 
 
@@ -1684,6 +1731,10 @@ function handleKeyboard(e) {
     const palette = document.getElementById('paletteOverlay');
     const filterBar = document.getElementById('filterBar');
     const projectPicker = document.getElementById('projectPickerOverlay');
+    if (document.getElementById('deleteProjectOverlay').classList.contains('active')) {
+      closeDeleteProject();
+      return;
+    }
     if (help.classList.contains('active')) {
       help.classList.remove('active');
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -1725,6 +1776,9 @@ function handleKeyboard(e) {
     }
     return;
   }
+
+  // While the delete-project dialog is open, board keys must not fire behind it.
+  if (document.getElementById('deleteProjectOverlay').classList.contains('active')) return;
 
   // Ctrl+L on the board: open the first link of the selected card
   if (e.ctrlKey && !e.metaKey && !e.altKey && (e.key === 'l' || e.key === 'L') && !modal.classList.contains('active') && activeCard?.key) {
@@ -1896,6 +1950,7 @@ function handleKeyboard(e) {
     if (e.key === 'b') { setView('board'); gBuffer = ''; return; }
     if (e.key === 'l') { setView('list'); gBuffer = ''; return; }
     if (e.key === 'p') { openProjectPicker(); gBuffer = ''; return; }
+    if (e.key === 'd') { e.preventDefault(); openDeleteProject(); gBuffer = ''; return; }
     gBuffer = '';
   }
 
@@ -2163,6 +2218,80 @@ function openPalette() {
 function closePalette() {
   document.getElementById('paletteOverlay').classList.remove('active');
 }
+
+// Delete project dialog
+let deletingProject = null;
+async function openDeleteProject() {
+  const pid = parseInt(document.getElementById('projectFilter').value);
+  const proj = isNaN(pid) ? null : projects.find(p => p.id === pid);
+  if (!proj) { alert('Pick a project first (g p), then delete it.'); return; }
+  if (proj.project_key === 'P-000') { alert('P-000 Unassigned is the default project and cannot be deleted.'); return; }
+  let count = 0;
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(proj.project_key));
+    if (!res.ok) { alert('Could not load project: ' + ((await res.json()).error || res.status)); return; }
+    count = (await res.json()).task_count || 0;
+  } catch (e) { alert('Could not load project: ' + e); return; }
+  deletingProject = { proj, count };
+  document.getElementById('dpTitle').textContent = 'Delete ' + proj.name + ' [' + proj.project_key + ']?';
+  document.getElementById('dpSummary').textContent = count === 0
+    ? 'This project has no tasks. Its history and links are deleted with it.'
+    : 'This project has ' + count + ' task' + (count === 1 ? '' : 's') + '. Choose what happens to ' + (count === 1 ? 'it' : 'them') + '.';
+  const choices = document.getElementById('dpTaskChoices');
+  choices.style.display = count === 0 ? 'none' : 'block';
+  const others = projects.filter(p => p.id !== proj.id);
+  const sel = document.getElementById('dpMoveTo');
+  sel.innerHTML = others.map(p => `<option value="${p.project_key}">${p.project_key} — ${escapeHtml(p.name)}</option>`).join('');
+  document.querySelector('input[name="dpMode"][value="move"]').checked = true;
+  document.getElementById('dpError').textContent = '';
+  document.getElementById('dpConfirm').disabled = false;
+  document.getElementById('deleteProjectOverlay').classList.add('active');
+  document.getElementById('dpCancel').focus();
+}
+function closeDeleteProject() {
+  document.getElementById('deleteProjectOverlay').classList.remove('active');
+  deletingProject = null;
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+}
+async function confirmDeleteProject() {
+  if (!deletingProject) return;
+  const { proj, count } = deletingProject;
+  const body = {};
+  if (count > 0) {
+    const mode = document.querySelector('input[name="dpMode"]:checked').value;
+    if (mode === 'cascade') body.cascade = true; else body.move_to = document.getElementById('dpMoveTo').value;
+  }
+  document.getElementById('dpConfirm').disabled = true;
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(proj.project_key) + '/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      document.getElementById('dpError').textContent = data.error || ('HTTP ' + res.status);
+      document.getElementById('dpConfirm').disabled = false;
+      return;
+    }
+    closeDeleteProject();
+    document.getElementById('projectFilter').value = '';
+    await loadProjects();
+    document.getElementById('projectFilter').value = '';
+    updateProjectTitle('');
+    await loadTasks();
+    render();
+  } catch (e) {
+    document.getElementById('dpError').textContent = 'Failed: ' + e;
+    document.getElementById('dpConfirm').disabled = false;
+  }
+}
+document.getElementById('deleteProjectBtn').addEventListener('click', openDeleteProject);
+document.getElementById('dpCancel').addEventListener('click', closeDeleteProject);
+document.getElementById('dpConfirm').addEventListener('click', confirmDeleteProject);
+document.getElementById('deleteProjectOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closeDeleteProject();
+});
 
 // Project picker
 let pickerHighlight = 0;

@@ -18,6 +18,7 @@ The log system provides git-style commit history for projects and tasks.
 - `LINK`: URL linked
 - `ARCHIVE`: Archived
 - `UNARCHIVE`: Unarchived
+- `DELETE`: A project was deleted (written on `P-000`, since the project's own history is deleted with it)
 
 ### Users
 - `cli`: Command line interface

@@ -231,6 +231,29 @@ pub struct LogEntry {
     pub hash: String,
 }
 
+/// What `delete_project` does with a project's tasks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectDeleteMode {
+    /// Refuse when the project still has tasks (the default).
+    RefuseIfNotEmpty,
+    /// Move every task to the project with this row id, then delete.
+    MoveTo(i64),
+    /// Delete the tasks (and their logs, links, attachments, PRs) too.
+    Cascade,
+}
+
+/// Result of `delete_project`.
+#[derive(Debug, Clone)]
+pub struct ProjectDeleted {
+    pub project: Project,
+    pub tasks_moved: usize,
+    pub tasks_deleted: usize,
+    pub moved_to: Option<Project>,
+    /// Stored paths of attachments whose rows were removed (the caller
+    /// may delete managed copies from disk).
+    pub attachment_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Project {
     pub id: i64,
@@ -1423,6 +1446,182 @@ impl Lun {
         project.status = target;
         project.updated_at = now;
         Ok(project)
+    }
+
+    /// Number of tasks (archived included) that belong to a project.
+    pub fn project_task_count(&self, project_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM tasks WHERE project_id = ?1",
+            [project_id],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Delete a project. Refuses P-000 "Unassigned". A project that still
+    /// has tasks is refused unless `how` says what to do with them: move
+    /// them to another project, or delete them too. Everything happens in
+    /// one transaction. The project's own history goes with it (row ids
+    /// can be reused, so orphaned log rows would attach to a future
+    /// project). Returns a summary of what was removed.
+    pub fn delete_project(
+        &self,
+        project_id: i64,
+        how: ProjectDeleteMode,
+        message: Option<&str>,
+        user: Option<&str>,
+    ) -> Result<ProjectDeleted> {
+        let user = user.unwrap_or(DEFAULT_USER);
+        let project = self
+            .conn
+            .query_row(
+                "SELECT id, project_key, name, status, created_at, updated_at
+                 FROM projects WHERE id = ?1",
+                [project_id],
+                Self::project_from_row,
+            )
+            .map_err(|e| DbError::new("not-found", format!("project {project_id}: {e}")))?;
+        if project.project_key == "P-000" {
+            return Err(DbError::new(
+                "invalid",
+                "P-000 Unassigned is the board's default project and cannot be deleted",
+            ));
+        }
+        let tasks = self.tasks_for_project(project_id)?;
+        let mut moved_to: Option<Project> = None;
+        match &how {
+            ProjectDeleteMode::RefuseIfNotEmpty if !tasks.is_empty() => {
+                return Err(DbError::new(
+                    "invalid",
+                    format!(
+                        "project {} [{}] still has {} task{}: pass --move-to <project> to move them, or --cascade to delete them too",
+                        project.name,
+                        project.project_key,
+                        tasks.len(),
+                        if tasks.len() == 1 { "" } else { "s" }
+                    ),
+                ));
+            }
+            ProjectDeleteMode::MoveTo(target_id) => {
+                if *target_id == project_id {
+                    return Err(DbError::new(
+                        "invalid",
+                        "--move-to must be a different project than the one being deleted",
+                    ));
+                }
+                moved_to = Some(
+                    self.conn
+                        .query_row(
+                            "SELECT id, project_key, name, status, created_at, updated_at
+                             FROM projects WHERE id = ?1",
+                            [target_id],
+                            Self::project_from_row,
+                        )
+                        .map_err(|e| {
+                            DbError::new("not-found", format!("project {target_id}: {e}"))
+                        })?,
+                );
+            }
+            _ => {}
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let now = Self::now();
+        let mut attachment_paths: Vec<String> = Vec::new();
+        let mut tasks_deleted = 0usize;
+        let mut tasks_moved = 0usize;
+
+        if let Some(target) = &moved_to {
+            for t in &tasks {
+                self.conn.execute(
+                    "UPDATE tasks SET project_id = ?1, updated_at = ?2 WHERE id = ?3",
+                    params![target.id, now, t.id],
+                )?;
+                self.log(
+                    "task",
+                    t.id,
+                    "UPDATE",
+                    &format!(
+                        "move {} to {} (project {} deleted)",
+                        t.task_key, target.name, project.project_key
+                    ),
+                    &serde_json::json!({
+                        "changes": format!("project: {} -> {}", project.name, target.name)
+                    })
+                    .to_string(),
+                    Some(user),
+                )?;
+                tasks_moved += 1;
+            }
+        } else {
+            for t in &tasks {
+                {
+                    let mut stmt = self
+                        .conn
+                        .prepare("SELECT stored_path FROM attachments WHERE task_id = ?1")?;
+                    let rows = stmt.query_map([t.id], |r| r.get::<_, String>(0))?;
+                    for r in rows {
+                        attachment_paths.push(r?);
+                    }
+                }
+                self.conn.execute("DELETE FROM attachments WHERE task_id = ?1", [t.id])?;
+                self.conn.execute("DELETE FROM links WHERE task_id = ?1", [t.id])?;
+                self.conn.execute("DELETE FROM prs WHERE task_id = ?1", [t.id])?;
+                self.conn.execute("DELETE FROM note_diffs WHERE task_id = ?1", [t.id])?;
+                self.conn.execute(
+                    "DELETE FROM logs WHERE entity_type = 'task' AND entity_id = ?1",
+                    [t.id],
+                )?;
+                self.conn.execute("DELETE FROM tasks WHERE id = ?1", [t.id])?;
+                tasks_deleted += 1;
+            }
+        }
+
+        {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT stored_path FROM attachments WHERE project_id = ?1")?;
+            let rows = stmt.query_map([project_id], |r| r.get::<_, String>(0))?;
+            for r in rows {
+                attachment_paths.push(r?);
+            }
+        }
+        self.conn.execute("DELETE FROM attachments WHERE project_id = ?1", [project_id])?;
+        self.conn.execute("DELETE FROM links WHERE project_id = ?1", [project_id])?;
+        self.conn.execute(
+            "DELETE FROM logs WHERE entity_type = 'project' AND entity_id = ?1",
+            [project_id],
+        )?;
+        self.conn.execute("DELETE FROM projects WHERE id = ?1", [project_id])?;
+
+        // Leave a trace on the board: the deletion is logged against the
+        // Unassigned project (P-000), which always exists.
+        let unassigned = self.unassigned_project_id()?;
+        let message = message.map(str::to_string).unwrap_or_else(|| {
+            format!("delete project \"{}\" ({})", project.name, project.project_key)
+        });
+        self.log(
+            "project",
+            unassigned,
+            "DELETE",
+            &message,
+            &serde_json::json!({
+                "project_key": project.project_key,
+                "name": project.name,
+                "tasks_moved": tasks_moved,
+                "tasks_deleted": tasks_deleted,
+                "moved_to": moved_to.as_ref().map(|p| p.project_key.clone()),
+            })
+            .to_string(),
+            Some(user),
+        )?;
+        tx.commit()?;
+        Ok(ProjectDeleted {
+            project,
+            tasks_moved,
+            tasks_deleted,
+            moved_to,
+            attachment_paths,
+        })
     }
 
     /// All projects ordered by key.

@@ -731,6 +731,11 @@ impl App {
         };
         let sel = self.task_selected;
         let proj = self.data.current_project;
+        let selected_key = self
+            .data
+            .projects
+            .get(self.project_selected)
+            .map(|p| p.project_key.clone());
         let fresh = super::data::load(
             lun,
             &self.data.version,
@@ -739,9 +744,21 @@ impl App {
             self.data.current().map(|p| p.project_key.as_str()),
         )
         .map_err(|e| e.to_string())?;
+        let current_key = self.data.current().map(|p| p.project_key.clone());
         self.data = fresh;
         self.task_selected = sel.min(self.data.tasks.len().saturating_sub(1));
-        self.data.current_project = proj.min(self.data.projects.len().saturating_sub(1));
+        // Keep the current/selected project by key, not by index, so deleting
+        // a project above it does not silently move the selection. A deleted
+        // project falls back to the old index, clamped.
+        let last = self.data.projects.len().saturating_sub(1);
+        let by_key = |k: &Option<String>, projects: &[crate::db::Project]| {
+            k.as_ref()
+                .and_then(|k| projects.iter().position(|p| &p.project_key == k))
+        };
+        self.data.current_project =
+            by_key(&current_key, &self.data.projects).unwrap_or_else(|| proj.min(last));
+        self.project_selected = by_key(&selected_key, &self.data.projects)
+            .unwrap_or_else(|| self.project_selected.min(last));
         Ok(())
     }
 
@@ -934,6 +951,43 @@ impl App {
             }
             Some("move") if !args.iter().any(|a| a == "--message") => {
                 prompts.push("Commit Message: ".to_string());
+            }
+            Some("rm") if matches!(args.get(1).map(String::as_str), Some("proj" | "project")) => {
+                // Same order as `cli::rm_project_command` reads stdin: the
+                // [y/N] confirm first, then the commit message.
+                if let (Some(lun), Some(query)) = (self.lun.as_ref(), args.get(2)) {
+                    if !query.starts_with('-') {
+                        let project = crate::cli::resolve_project(lun, query)
+                            .map_err(|e| e.to_string())?;
+                        if project.project_key == "P-000" {
+                            return Err(
+                                "P-000 Unassigned is the board's default project and cannot be deleted"
+                                    .to_string(),
+                            );
+                        }
+                        let has_flag = |f: &str| args.iter().any(|a| a == f);
+                        let n = lun.project_task_count(project.id).map_err(|e| e.to_string())?;
+                        if n > 0 && !has_flag("--move-to") && !has_flag("--cascade") {
+                            return Err(format!(
+                                "{} [{}] still has {n} task{}: rerun as `rm proj {} --move-to <project>` or `rm proj {} --cascade`",
+                                project.name,
+                                project.project_key,
+                                if n == 1 { "" } else { "s" },
+                                project.project_key,
+                                project.project_key,
+                            ));
+                        }
+                        if !has_flag("--yes") && !has_flag("-y") {
+                            prompts.push(format!(
+                                "Delete project {} [{}]? [y/N] ",
+                                project.name, project.project_key
+                            ));
+                        }
+                    }
+                }
+                if !args.iter().any(|a| a == "--message") {
+                    prompts.push("Commit Message: ".to_string());
+                }
             }
             Some("task") => match args.get(1).map(String::as_str) {
                 Some("edit") if !args.iter().any(|a| a == "--message") => {
@@ -1162,8 +1216,15 @@ impl App {
         let Some(session) = self.prompt_session.as_mut() else {
             return;
         };
+        // A "no" to a [y/N] confirm ends the prompts: the command reports
+        // "declined" instead of asking for a commit message first.
+        let declined = session
+            .prompts
+            .get(session.answers.len())
+            .is_some_and(|p| p.trim_end().ends_with("[y/N]"))
+            && !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes");
         session.answers.push(answer);
-        if session.answers.len() < session.prompts.len() {
+        if !declined && session.answers.len() < session.prompts.len() {
             self.palette_selected = 0;
             return;
         }
@@ -1485,6 +1546,25 @@ impl App {
             return;
         }
         self.palette_selected = (self.palette_selected + 1) % n;
+    }
+
+    /// `D` in the project view: open the command line pre-filled with
+    /// `rm proj <key>` for the highlighted project. Enter runs it through the
+    /// same CLI path (refuses a project with tasks, then asks y/N).
+    pub fn delete_selected_project(&mut self) {
+        let Some(p) = self.data.projects.get(self.project_selected) else {
+            return;
+        };
+        if p.project_key == "P-000" {
+            self.message = Some((
+                "P-000 Unassigned is the board's default project and cannot be deleted".to_string(),
+                true,
+            ));
+            return;
+        }
+        let line = format!("rm proj {}", p.project_key);
+        self.open_palette();
+        self.palette_query = line;
     }
 
     /// j/k navigation in the `/project` view; Enter selects.

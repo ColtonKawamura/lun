@@ -65,6 +65,14 @@ add task "My task" proj "My project"
 add proj "My project"
 ```
 
+### Delete a project
+```sh
+rm proj "My project"                       # asks  Delete project ... [y/N]  then a commit message
+rm proj P-7dqs --move-to "Other project"   # a project with tasks needs --move-to or --cascade
+rm proj P-7dqs --cascade --yes             # delete its tasks too; --yes skips the y/N
+```
+It runs the same code as `lun rm proj` (see the CLI reference). Answering anything but `y` cancels without asking for a commit message. A project with tasks is refused before any prompt, with the exact command to rerun. `P-000 Unassigned` cannot be deleted. In the project view (shown after you create a project in the form), `D` fills in `rm proj <key>` for the highlighted project.
+
 ### Attachments
 ```sh
 attach task T-001 ./file.png

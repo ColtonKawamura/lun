@@ -16,7 +16,8 @@ eval "$(lun completion zsh)"
 - Tab after flags: Shows values
 
 ```sh
-lun <TAB>                    # add, attach, link, log, move, pr, serve, status, task
+lun <TAB>                    # add, attach, link, log, move, pr, rm, serve, status, task
+lun rm proj <TAB>            # project names and keys; then --move-to, --cascade, --yes
 lun task <TAB>               # complete, edit, ls, reopen, archive
 lun task edit T-001 --<TAB>  # title, status, priority, project, scope, assignee, branch
 ```

@@ -63,6 +63,8 @@ lun/
 - `GET /api/tasks/{key}` — Get
 - `POST /api/tasks/{key}` — Update
 - `POST /api/tasks/{key}/logs` — Add log
+- `GET /api/projects/{key}` — One project (+ `task_count`)
+- `POST /api/projects/{key}/delete` — Delete a project (`move_to` / `cascade`)
 - `POST /api/tasks/{key}/archive` — Archive
 - `POST /api/tasks/{key}/unarchive` — Unarchive
 

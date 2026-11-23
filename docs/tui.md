@@ -82,6 +82,7 @@ their context-relative behavior.
 | `t`       | normal          | open the current task's detail view |
 | `o`       | task view       | open the focused note link / attachment / explicit link |
 | `c`       | normal          | toggle the current task complete / reopen |
+| `D`       | project view    | open the command line with `rm proj <key>` for the highlighted project (y/N confirm; refused if it has tasks) |
 | `i` / `e` | task view       | edit the current task's description |
 | `?`       | normal          | open help |
 | `tab`     | command prompt  | apply the selected completion suggestion |

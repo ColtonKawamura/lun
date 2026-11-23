@@ -44,13 +44,14 @@ mod agent;
 use crate::db::Result;
 use crate::db::{
     task_status_list, Attachment, AttachmentTarget, DbError, Link, LinkTarget, LogEntry, Lun, Pr,
-    PrSpec, Project, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec, DEFAULT_TASK_STATUS,
+    PrSpec, Project, ProjectDeleteMode, Task, TaskListSpec, TaskSort, TaskSpec, TaskUpdateSpec, DEFAULT_TASK_STATUS,
     TASK_STATUSES,
 };
 const PROJECT_STATUSES: [&str; 2] = ["active", "inactive"];
 const TASK_SORT_KEYS: [&str; 5] = ["key", "title", "status", "priority", "updated"];
-const TOP_LEVEL_COMMANDS: [&str; 18] = [
+const TOP_LEVEL_COMMANDS: [&str; 19] = [
     "brief",
+    "rm",
     "init",
     "root",
     "add",
@@ -129,6 +130,9 @@ fn completion_flags(tokens: &[String]) -> Vec<String> {
             extend_unique(&mut out, ["--status", "--message"]);
         }
         "proj" | "project" => {}
+        "rm" if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project")) => {
+            extend_unique(&mut out, ["--move-to", "--cascade", "--yes", "--message"]);
+        }
         "task" => match tokens.get(1).map(String::as_str) {
             Some("ls") => {
                 extend_unique(
@@ -281,6 +285,19 @@ fn completion_candidates(app: Option<&App>, words: &[String]) -> Vec<String> {
                     out.extend(task_candidates(app));
                 }
                 Some("proj" | "project") if tokens.len() == 1 => {
+                    out.extend(project_candidates(app))
+                }
+                Some("rm") if tokens.len() == 1 => extend_unique(&mut out, ["proj"]),
+                Some("rm")
+                    if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
+                        && tokens.len() == 2 =>
+                {
+                    out.extend(project_candidates(app))
+                }
+                Some("rm")
+                    if matches!(tokens.get(1).map(String::as_str), Some("proj" | "project"))
+                        && tokens.last().map(String::as_str) == Some("--move-to") =>
+                {
                     out.extend(project_candidates(app))
                 }
                 Some("link" | "open-link" | "attach")
@@ -446,6 +463,7 @@ Usage:
   lun task ls [filters]     List tasks (--project/--status/--priority/--assignee/--scope/--sort/--all; --json, --fields a,b, --oneline)
   lun task edit <task|T-1,T-2,...> [--field value]   Edit task fields (--append-notes TEXT, --scope S; comma list = bulk)
   lun proj <project> --status <active|inactive>   Update project status
+  lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message M]   Delete a project (refuses one with tasks unless --move-to/--cascade; never P-000)
   lun task complete|reopen|archive <task>   Update task lifecycle
   lun log <project|task> [-N] [--oneline] [--json] [--since ID]   History of one project/task, newest first (-N: only the N newest)
   lun log -N | HEAD~N [--oneline]   N newest entries / the Nth-newest entry across everything
@@ -2592,6 +2610,162 @@ pub fn project_set_status(
     ))
 }
 
+/// `lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message M]`.
+///
+/// A project with tasks is refused unless `--move-to` or `--cascade` says
+/// what to do with them. Without `--yes` the command asks `[y/N]` first.
+pub fn rm_project_command(
+    app: &App,
+    args: &[String],
+    stdin: &mut dyn BufRead,
+    root: Option<&Path>,
+) -> Result<String> {
+    let (rest, message) = parse_message_flag(args)?;
+    let mut query: Option<String> = None;
+    let mut move_to: Option<String> = None;
+    let mut cascade = false;
+    let mut yes = false;
+    let mut i = 0;
+    while i < rest.len() {
+        match rest[i].as_str() {
+            "--move-to" => {
+                move_to = Some(
+                    rest.get(i + 1)
+                        .ok_or_else(|| DbError::new("usage", "--move-to needs a project"))?
+                        .clone(),
+                );
+                i += 2;
+            }
+            "--cascade" => {
+                cascade = true;
+                i += 1;
+            }
+            "--yes" | "-y" => {
+                yes = true;
+                i += 1;
+            }
+            other if other.starts_with('-') => {
+                return Err(DbError::new(
+                    "usage",
+                    format!("unexpected flag '{other}' for lun rm proj"),
+                ))
+            }
+            other => {
+                if query.is_some() {
+                    return Err(DbError::new(
+                        "usage",
+                        format!("unexpected argument '{other}' (quote project names with spaces)"),
+                    ));
+                }
+                query = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let usage = "expected: lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message \"...\"]";
+    let query = query.ok_or_else(|| DbError::new("usage", usage))?;
+    if cascade && move_to.is_some() {
+        return Err(DbError::new(
+            "usage",
+            "--move-to and --cascade are mutually exclusive",
+        ));
+    }
+    let project = resolve_project(&app.lun, &query)?;
+    if project.project_key == "P-000" {
+        return Err(DbError::new(
+            "invalid",
+            "P-000 Unassigned is the board's default project and cannot be deleted",
+        ));
+    }
+    let n_tasks = app.lun.project_task_count(project.id)?;
+    let mode = if let Some(target_q) = &move_to {
+        let target = resolve_project(&app.lun, target_q)?;
+        if target.id == project.id {
+            return Err(DbError::new(
+                "invalid",
+                "--move-to must be a different project than the one being deleted",
+            ));
+        }
+        ProjectDeleteMode::MoveTo(target.id)
+    } else if cascade {
+        ProjectDeleteMode::Cascade
+    } else {
+        ProjectDeleteMode::RefuseIfNotEmpty
+    };
+    // Refuse before prompting, so the error is the first thing seen.
+    if n_tasks > 0 && mode == ProjectDeleteMode::RefuseIfNotEmpty {
+        return Err(DbError::new(
+            "invalid",
+            format!(
+                "project {} [{}] still has {} task{}: pass --move-to <project> to move them, or --cascade to delete them too",
+                project.name,
+                project.project_key,
+                n_tasks,
+                if n_tasks == 1 { "" } else { "s" }
+            ),
+        ));
+    }
+    if !yes {
+        let what = match &mode {
+            ProjectDeleteMode::Cascade => format!(" and its {n_tasks} task(s) (permanent)"),
+            ProjectDeleteMode::MoveTo(_) => format!(" (its {n_tasks} task(s) move to {})", move_to.as_deref().unwrap_or("")),
+            ProjectDeleteMode::RefuseIfNotEmpty => String::new(),
+        };
+        let answer = read_prompt(
+            stdin,
+            &format!(
+                "Delete project {} [{}]{what}? [y/N] ",
+                project.name, project.project_key
+            ),
+        )?;
+        if !matches!(answer.to_lowercase().as_str(), "y" | "yes") {
+            return Err(DbError::new(
+                "declined",
+                format!("not deleted: {} [{}] (pass --yes to skip the prompt)", project.name, project.project_key),
+            ));
+        }
+    }
+    let default_message = format!("delete project \"{}\" ({})", project.name, project.project_key);
+    let commit = read_commit_message_with_optional_override(stdin, message, &default_message)?;
+    let done = app
+        .lun
+        .delete_project(project.id, mode, Some(&commit), None)?;
+    // Remove managed attachment copies from disk (never files linked by path).
+    let base = root.map(Path::to_path_buf).or_else(|| crate::root::from_cwd().ok().map(|(r, _)| r));
+    if let Some(base) = base {
+        let managed = attachments_root(&base);
+        for p in &done.attachment_paths {
+            let path = Path::new(p);
+            let abs = if path.is_absolute() { path.to_path_buf() } else { base.join(path) };
+            if abs.starts_with(&managed) {
+                let _ = std::fs::remove_file(&abs);
+            }
+        }
+    }
+    let mut out = format!(
+        "Deleted project {} [{}]",
+        done.project.name, done.project.project_key
+    );
+    if let Some(t) = &done.moved_to {
+        out.push_str(&format!(
+            "\nMoved {} task{} to {} [{}]",
+            done.tasks_moved,
+            if done.tasks_moved == 1 { "" } else { "s" },
+            t.name,
+            t.project_key
+        ));
+    }
+    if done.tasks_deleted > 0 {
+        out.push_str(&format!(
+            "\nDeleted {} task{}",
+            done.tasks_deleted,
+            if done.tasks_deleted == 1 { "" } else { "s" }
+        ));
+    }
+    out.push_str(&format!("\nCommitted: {commit}"));
+    Ok(out)
+}
+
 pub fn move_task(
     app: &App,
     task_query: &str,
@@ -3488,6 +3662,13 @@ pub fn run_result_in_reader(
                 })?;
                 project_set_status(app, query, status, message, stdin)
             }
+        },
+        Some("rm") => match args.get(1).map(String::as_str) {
+            Some("proj") | Some("project") => rm_project_command(app, &args[2..], stdin, root_override),
+            _ => Err(DbError::new(
+                "usage",
+                "expected: lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes]",
+            )),
         },
         Some("move") => {
             let task_query = args

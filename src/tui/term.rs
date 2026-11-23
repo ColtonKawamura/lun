@@ -317,6 +317,9 @@ pub fn handle_key(app: &mut App, key: &KeyEvent) {
         KeyCode::Char('o') if key.modifiers == KeyModifiers::NONE && app.view == View::Task => {
             app.open_current_item()
         }
+        KeyCode::Char('D') if app.view == View::Project && accepts_shifted_shortcut(key) => {
+            app.delete_selected_project()
+        }
         KeyCode::Char('c') if key.modifiers == KeyModifiers::NONE => {
             app.toggle_complete_current_task()
         }

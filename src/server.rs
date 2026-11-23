@@ -42,6 +42,8 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/board", get(board_info))
         .route("/api/projects", get(list_projects))
         .route("/api/projects", post(create_project))
+        .route("/api/projects/{key}", get(project_by_key))
+        .route("/api/projects/{key}/delete", post(delete_project))
         .route("/api/tasks", get(list_tasks))
         .route("/api/tasks", post(create_task))
         .route("/api/tasks/search", get(search_tasks))
@@ -112,6 +114,88 @@ async fn create_project(state: State<Arc<ServerState>>, Json(body): Json<CreateP
     match lun.create_project(spec) {
         Ok(p) => (StatusCode::CREATED, Json(p)).into_response(),
         Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+async fn project_by_key(state: State<Arc<ServerState>>, Path(key): Path<String>) -> Response {
+    let lun = state.lun.lock().await;
+    match lun.project_by_key(&key) {
+        Ok(p) => {
+            let n = lun.project_task_count(p.id).unwrap_or(0);
+            let mut v = serde_json::to_value(&p).unwrap_or_default();
+            v["task_count"] = serde_json::json!(n);
+            Json(v).into_response()
+        }
+        Err(e) => api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct DeleteProjectRequest {
+    /// Project key (P-xxxx) to move the tasks to.
+    #[serde(default)]
+    move_to: Option<String>,
+    #[serde(default)]
+    cascade: bool,
+    #[serde(default)]
+    message: Option<String>,
+}
+
+async fn delete_project(
+    state: State<Arc<ServerState>>,
+    Path(key): Path<String>,
+    body: Option<Json<DeleteProjectRequest>>,
+) -> Response {
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+    let lun = state.lun.lock().await;
+    let project = match lun.project_by_key(&key) {
+        Ok(p) => p,
+        Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    if body.cascade && body.move_to.is_some() {
+        return api_err(StatusCode::BAD_REQUEST, "move_to and cascade are mutually exclusive");
+    }
+    let mode = if let Some(target_key) = &body.move_to {
+        match lun.project_by_key(target_key) {
+            Ok(t) => crate::db::ProjectDeleteMode::MoveTo(t.id),
+            Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+        }
+    } else if body.cascade {
+        crate::db::ProjectDeleteMode::Cascade
+    } else {
+        crate::db::ProjectDeleteMode::RefuseIfNotEmpty
+    };
+    match lun.delete_project(project.id, mode, body.message.as_deref(), Some("web")) {
+        Ok(done) => {
+            // Remove managed attachment copies (inside <board>/.lun/attachments/).
+            let managed = state.data_dir.join("attachments");
+            for p in &done.attachment_paths {
+                let path = std::path::Path::new(p);
+                let abs = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    state.data_dir.parent().map(|b| b.join(path)).unwrap_or_else(|| path.to_path_buf())
+                };
+                if abs.starts_with(&managed) {
+                    let _ = std::fs::remove_file(&abs);
+                }
+            }
+            Json(serde_json::json!({
+                "deleted": done.project,
+                "tasks_moved": done.tasks_moved,
+                "tasks_deleted": done.tasks_deleted,
+                "moved_to": done.moved_to,
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            let status = match e.kind() {
+                "not-found" => StatusCode::NOT_FOUND,
+                "invalid" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            api_err(status, &e.to_string())
+        }
     }
 }
 

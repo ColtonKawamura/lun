@@ -1048,7 +1048,7 @@ fn paint_project(buf: &mut Buffer, area: Rect, app: &App) {
             buf,
             area.left(),
             y,
-            "j/k select · enter set current project · / commands · q quit",
+            "j/k select · enter set current project · D delete project · / commands · q quit",
             Style::default().fg(t::DIM),
         );
     }
@@ -1059,7 +1059,7 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
     if y >= area.bottom() {
         return;
     }
-    let rows: [(&str, &str); 25] = [
+    let rows: [(&str, &str); 26] = [
         ("/", "open the command palette"),
         ("?", "open the help view"),
         (":", "quick action line — :status <project|task>"),
@@ -1102,6 +1102,10 @@ fn paint_help(buf: &mut Buffer, area: Rect) {
         ("/new-task", "open the new-task form"),
         ("/new proj", "open the new-project form"),
         ("/move", "move the current task to a different project"),
+        (
+            "rm proj",
+            "delete a project: `/rm proj <name|key> [--move-to P | --cascade]`, asks y/N",
+        ),
         ("…", "/config remains a placeholder"),
     ];
     for (key, desc) in rows {

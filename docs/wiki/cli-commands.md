@@ -5,7 +5,7 @@ All commands can be run from the shell or inside the TUI (with `/` or `:`).
 ## Global Flags
 
 - `--json`: JSON output — `lun status` and `lun status <query>` only (other commands reject it)
-- `--message "<msg>"`: commit message for `add proj`, `proj`, `move`, `task --status`, `task edit` (skips the stdin prompt)
+- `--message "<msg>"`: commit message for `add proj`, `proj`, `rm proj`, `move`, `task --status`, `task edit` (skips the stdin prompt)
 
 Every change records a commit and asks for its message on stdin when
 `--message` is absent (`add task` also asks for status, priority, assignee).
@@ -54,6 +54,27 @@ lun add proj "Test" --status inactive
 Update project status.
 ```sh
 lun proj P-001 --status inactive
+```
+
+### `lun rm proj <name|P-xxxx> [--move-to <project> | --cascade] [--yes] [--message "<msg>"]`
+Delete a project. `<name>` is the exact project name; `<P-xxxx>` is its key. `rm project` works too.
+
+- A project with no tasks asks `[y/N]` and is deleted. Its own history, links and attachments go with it.
+- A project that still has tasks (archived ones count) is **refused** until you say what happens to them:
+  - `--move-to <project>` moves every task to another project first (each move is logged on the task).
+  - `--cascade` deletes the tasks too, with their logs, links, attachments, PRs and note diffs. This cannot be undone.
+- `--yes` (or `-y`) skips the `[y/N]` question. Closed or empty stdin counts as "no", so scripts must pass `--yes`.
+- `P-000 Unassigned` can never be deleted.
+- `--move-to` and `--cascade` are mutually exclusive, and `--move-to` cannot name the project being deleted.
+- Attachment copies stored under `.lun/attachments/` are removed from disk. Files that were only linked by path are never touched.
+- The deletion is recorded as a `DELETE` entry on `P-000` (project key, name, task counts, where the tasks went), because the deleted project's own history goes with it. Read it with `lun log P-000`.
+- Exit code 2 for a refusal or a "no"; 0 on success.
+
+```sh
+lun rm proj "Old Idea"                          # empty project: asks y/N
+lun rm proj P-7dqs --yes --message "dead end"   # no prompt
+lun rm proj Website --move-to "Personal Site"   # keep the tasks
+lun rm proj Scratch --cascade --yes             # delete the tasks too
 ```
 
 ## Task Management
