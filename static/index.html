@@ -425,36 +425,76 @@ body {
   border-radius: 4px;
   padding: 4px;
 }
-textarea.notes-input {
-  width: 100%;
+/* Live notes editor (Obsidian-style hybrid). Every line renders; the line
+   holding the caret is a textarea showing its raw markdown. Block styling
+   (heading size, quote bar, list indent, code background) sits on the unit
+   wrapper (.nu), so the raw line and its rendered form line up. */
+.notes-live {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
   min-height: 120px;
-  background: var(--bg-card);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
-  font-size: 13px;
-  resize: vertical;
-}
-.notes-preview {
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 12px;
-  margin-top: 8px;
+  font-size: 14px;
   line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: anywhere;
+  cursor: text;
 }
-.notes-preview h1, .notes-preview h2, .notes-preview h3 { margin: 12px 0 6px; }
-.notes-preview table { border-collapse: collapse; margin: 8px 0; }
-.notes-preview th, .notes-preview td { border: 1px solid var(--border); padding: 4px 8px; }
-.notes-preview code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
-.notes-preview pre { background: var(--bg); padding: 10px; border-radius: 4px; overflow-x: auto; }
-.notes-preview li.task-item { list-style: none; margin-left: -1.4em; }
-.notes-preview li.task-item > input[type="checkbox"] { margin-right: 8px; accent-color: var(--accent-light); }
-.notes-preview a { color: var(--accent-light); }
-.notes-preview pre code { background: none; padding: 0; }
-.notes-preview blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-muted); }
+@media (max-width: 700px) { .notes-live { font-size: 16px; } } /* iOS: no zoom on focus */
+.notes-live .nu { min-height: 1.6em; }
+.notes-live .nu.nu-active { background: rgba(139, 92, 246, 0.10); border-radius: 4px; }
+.notes-input {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  line-height: inherit;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.notes-hint { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.notes-live .nu-h1 { font-size: 1.5em; font-weight: 700; line-height: 1.3; margin: 0.35em 0 0.15em; }
+.notes-live .nu-h2 { font-size: 1.3em; font-weight: 700; line-height: 1.3; margin: 0.3em 0 0.12em; }
+.notes-live .nu-h3 { font-size: 1.15em; font-weight: 700; line-height: 1.3; margin: 0.25em 0 0.1em; }
+.notes-live .nu-h4, .notes-live .nu-h5, .notes-live .nu-h6 { font-weight: 600; }
+.notes-live hr { border: 0; border-top: 1px solid var(--border); margin: 8px 0; }
+.notes-live .nu-quote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-muted); }
+.notes-live .nu-li { padding-left: 1.6em; }
+.notes-live .md-li { position: relative; }
+.notes-live .md-li::before {
+  content: '•'; position: absolute; left: -1.6em; width: 1.6em; text-align: center; color: var(--text-muted);
+}
+.notes-live .md-li[data-n]::before { content: attr(data-n) "."; }
+.notes-live .md-task::before { content: none; }
+.notes-live .md-task > input[type="checkbox"] {
+  pointer-events: none; margin: 0 8px 0 0; vertical-align: -1px; accent-color: var(--accent-light);
+}
+.notes-live .md-tr { display: flex; }
+.notes-live .md-td { flex: 1 1 0; min-width: 0; padding: 3px 8px; border: 1px solid var(--border); overflow-wrap: anywhere; }
+.notes-live .md-thead .md-td { font-weight: 600; background: var(--bg); }
+.notes-live .nu-tsep:not(.nu-active) { height: 0; overflow: hidden; }
+.notes-live .nu-code, .notes-live .nu-fence {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  background: var(--bg);
+  padding: 0 10px;
+  white-space: pre-wrap;
+}
+.notes-live .nu-fence { font-size: 11px; color: var(--text-muted); }
+.notes-live .nu-math { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; color: var(--text-muted); }
+.notes-live .nu-math:not(.nu-active) { font-family: inherit; font-size: inherit; color: inherit; }
+.notes-live .md-fallback { white-space: pre-wrap; }
+.notes-live a { color: var(--accent-light); }
+.notes-live code { background: var(--bg); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+.notes-live .katex-display { margin: 8px 0; }
 
 /* Log history */
 .log-entry {
@@ -836,8 +876,8 @@ textarea.notes-input {
       
       <div class="modal-section">
         <h3>Notes (Markdown)</h3>
-        <textarea class="notes-input" id="editNotes" placeholder="Write notes in Markdown..."></textarea>
-        <div class="notes-preview" id="notesPreview" style="display:none;"></div>
+        <div class="notes-live" id="notesLive" role="textbox" aria-multiline="true" aria-label="Notes"></div>
+        <div class="notes-hint">Click a line to edit it. Enter or Shift+Enter: new line. Ctrl/Cmd+Enter: save. Esc: stop editing.</div>
       </div>
 
       <div class="log-input-row">
@@ -942,6 +982,8 @@ textarea.notes-input {
       <tr><td>u / U / &lt;</td><td>Move card backward (toward planning)</td></tr>
       <tr><td>Enter</td><td>Open card detail</td></tr>
       <tr><td>Ctrl+L</td><td>Open first link on selected card</td></tr>
+      <tr><td>Enter / Shift+Enter</td><td>New line in notes (click a line to edit it)</td></tr>
+      <tr><td>Ctrl/Cmd+Enter</td><td>Save task (from the task modal)</td></tr>
       <tr><td>a</td><td>New card in column</td></tr>
       <tr><td>x</td><td>Archive task (Undo toast)</td></tr>
       <tr><td>f</td><td>Toggle filters</td></tr>
@@ -1329,8 +1371,8 @@ function setupEventListeners() {
     if (e.key === 'Enter') addLogMessage();
   });
 
-  // Notes preview
-  document.getElementById('editNotes').addEventListener('input', debounce(updateNotesPreview, 200));
+  // Live notes editor (hybrid rendering, see "Live notes editor" below)
+  setupNotesEditor();
 
   // File upload
   const dropZone = document.getElementById('dropZone');
@@ -1506,8 +1548,7 @@ async function openModal(key) {
   document.getElementById('editPriority').value = task.priority;
   document.getElementById('editScope').value = task.scope || '';
   document.getElementById('editAssignee').value = task.assignee || '';
-  document.getElementById('editNotes').value = task.notes || '';
-  document.getElementById('notesPreview').style.display = task.notes ? 'block' : 'none';
+  notesLoad(task.notes);
   
   // Set project
   document.getElementById('editProject').value = task.project_id || '';
@@ -1521,6 +1562,10 @@ async function openModal(key) {
   highlightModalField(0);
   
   document.getElementById('modalOverlay').classList.add('active');
+  // The editor was built while the modal was hidden (scrollHeight was 0);
+  // size the active textarea now that it is visible.
+  const notesTa = document.getElementById('editNotes');
+  if (notesTa) notesAutosize(notesTa);
 }
 
 async function loadTaskDetails(key) {
@@ -1608,7 +1653,6 @@ async function loadTaskDetails(key) {
     document.getElementById('prsSection').style.display = 'none';
   }
   
-  updateNotesPreview();
 }
 
 function closeModal() {
@@ -1627,7 +1671,7 @@ async function saveModal() {
     priority: document.getElementById('editPriority').value,
     scope: document.getElementById('editScope').value || null,
     assignee: document.getElementById('editAssignee').value || null,
-    notes: document.getElementById('editNotes').value || null,
+    notes: notesSource() || null,
   };
   const pid = document.getElementById('editProject').value;
   if (pid) updates.project_id = parseInt(pid);
@@ -1659,46 +1703,598 @@ async function addLogMessage() {
   }
 }
 
-function updateNotesPreview() {
-  const notes = document.getElementById('editNotes').value;
-  const preview = document.getElementById('notesPreview');
-  if (!notes.trim()) {
-    preview.style.display = 'none';
+// ---- Live notes editor (Obsidian-style hybrid rendering) ------------------
+// The notes are kept as lines (notesLines). scanNotesUnits groups them into
+// units: one line each, except a $$ block, which is one unit. Every unit
+// renders as HTML (POST /api/markdown/lines, cached by unit key) except the
+// unit holding the caret: that one is the textarea #editNotes, showing its raw
+// markdown. Typing only reaches that textarea. Changes to the line structure
+// (Enter, merging lines, a paste with newlines) rebuild the editor and
+// re-create the textarea at the new caret.
+const NOTES_LIST_RE = /^\s*([-*+]|\d{1,9}[.)])(\s|$)/;
+const NOTES_CONT_LIST_RE = /^(\s*)([-*+]|(\d{1,9})([.)]))(\s+)(\[[ xX]\](?:\s+|$))?(.*)$/;
+const NOTES_CONT_QUOTE_RE = /^((?:\s*>\s?)+)(.*)$/;
+const NOTES_FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
+const NOTES_CLOSE_FENCE_RE = /^ {0,3}(`{3,}|~{3,})\s*$/;
+const NOTES_SEP_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+let notesLines = [''];
+let notesUnits = [];
+let notesActive = 0;
+let notesSig = '';
+let notesCache = new Map();    // unit key -> rendered inner HTML
+let notesPending = new Set();  // unit keys with a render request in flight
+let notesUndo = [];
+let notesRedo = [];
+let notesRunActive = false;    // one undo step per burst of typing
+let notesRunTimer = null;
+let notesHint = null;          // caret before the current keystroke
+let notesSwitching = false;    // true while the editor DOM is being rebuilt
+let notesPrefetchTimer = null;
+let notesMirror = null;
+
+function notesSource() { return notesLines.join('\n'); }
+
+function notesLoad(text) {
+  notesLines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+  notesUndo = [];
+  notesRedo = [];
+  notesRunActive = false;
+  notesHint = null;
+  notesActive = 0;
+  notesRebuild({ focus: false, line: 0, col: 0 });
+}
+
+// Units: {s, e, k} with s..e inclusive line indexes and k the kind.
+function scanNotesUnits(lines) {
+  const units = [];
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const L = lines[i];
+    if (fence) {
+      const m = NOTES_CLOSE_FENCE_RE.exec(L);
+      const closes = !!m && m[1][0] === fence.ch && m[1].length >= fence.len;
+      units.push({ s: i, e: i, k: closes ? 'fence' : 'code' });
+      if (closes) fence = null;
+      continue;
+    }
+    const f = NOTES_FENCE_RE.exec(L);
+    if (f) {
+      fence = { ch: f[1][0], len: f[1].length };
+      units.push({ s: i, e: i, k: 'fence' });
+      continue;
+    }
+    if (L.trim() === '$$') {
+      let j = i + 1;
+      while (j < lines.length && !lines[j].trim().endsWith('$$')) j++;
+      if (j < lines.length) {
+        units.push({ s: i, e: j, k: 'math' });
+        i = j;
+        continue;
+      }
+    }
+    if (L.includes('|') && i + 1 < lines.length && lines[i + 1].includes('|') && NOTES_SEP_RE.test(lines[i + 1])) {
+      units.push({ s: i, e: i, k: 'thead' });
+      units.push({ s: i + 1, e: i + 1, k: 'tsep' });
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim() !== '') {
+        units.push({ s: j, e: j, k: 'trow' });
+        j++;
+      }
+      i = j - 1;
+      continue;
+    }
+    units.push({ s: i, e: i, k: 'line' });
+  }
+  return units;
+}
+
+function notesSignature(units) {
+  return units.map(u => u.k + ':' + u.s + '-' + u.e).join('|');
+}
+
+function notesUnitIndexFor(units, line) {
+  for (let i = 0; i < units.length; i++) if (line <= units[i].e) return i;
+  return Math.max(0, units.length - 1);
+}
+
+function notesUnitText(u) {
+  return notesLines.slice(u.s, u.e + 1).join('\n');
+}
+
+function notesKey(u) {
+  return u.k + '\u0001' + notesUnitText(u);
+}
+
+// Wrapper classes shared by the rendered unit and its raw textarea, so the
+// heading size, quote bar and list indent do not jump when the caret moves.
+function notesBlockClass(text, kind) {
+  switch (kind) {
+    case 'code': return 'nu-code';
+    case 'fence': return 'nu-fence';
+    case 'math': return 'nu-math';
+    case 'thead': return 'nu-tr nu-thead';
+    case 'trow': return 'nu-tr';
+    case 'tsep': return 'nu-tsep';
+  }
+  const h = /^ {0,3}(#{1,6})(?=\s|$)/.exec(text);
+  if (h) return 'nu-h' + h[1].length;
+  if (/^ {0,3}((\*\s*){3,}|(-\s*){3,}|(_\s*){3,})$/.test(text)) return 'nu-hr';
+  if (/^ {0,3}>/.test(text)) return 'nu-quote';
+  if (NOTES_LIST_RE.test(text)) return 'nu-li';
+  return 'nu-p';
+}
+
+function notesLocalCaret(ta, pos) {
+  const parts = ta.value.slice(0, pos).split('\n');
+  return { line: parts.length - 1, col: parts[parts.length - 1].length };
+}
+
+// Offset in the textarea's value of (line, col), where line is a notes line
+// inside unit u.
+function notesOffsetOf(u, line, col) {
+  const l = Math.min(Math.max(line, u.s), u.e);
+  let off = 0;
+  for (let i = u.s; i < l; i++) off += notesLines[i].length + 1;
+  return off + Math.min(Math.max(col, 0), notesLines[l].length);
+}
+
+// Rebuild the whole editor: one wrapper per unit, the active one holding the
+// textarea. opts: {focus, line, col} (line/col = caret in notes-line terms).
+function notesRebuild(opts = {}) {
+  const box = document.getElementById('notesLive');
+  if (!box) return;
+  notesUnits = scanNotesUnits(notesLines);
+  notesSig = notesSignature(notesUnits);
+  if (opts.line != null) notesActive = notesUnitIndexFor(notesUnits, opts.line);
+  notesActive = Math.min(Math.max(notesActive, 0), notesUnits.length - 1);
+  const u = notesUnits[notesActive];
+  const modalBox = document.querySelector('#modalOverlay .modal');
+  const scrollTop = modalBox ? modalBox.scrollTop : 0;
+  notesSwitching = true;
+  const frag = document.createDocumentFragment();
+  notesUnits.forEach((unit, idx) => {
+    const text = notesUnitText(unit);
+    const wrap = document.createElement('div');
+    wrap.dataset.u = idx;
+    wrap.className = 'nu ' + notesBlockClass(text, unit.k) + (idx === notesActive ? ' nu-active' : '');
+    if (idx === notesActive) {
+      const ta = document.createElement('textarea');
+      ta.id = 'editNotes';
+      ta.className = 'notes-input';
+      ta.rows = 1;
+      ta.value = text;
+      if (notesLines.length === 1 && notesLines[0] === '') ta.placeholder = 'Write notes in Markdown...';
+      wrap.appendChild(ta);
+    }
+    frag.appendChild(wrap);
+  });
+  box.replaceChildren(frag);
+  notesPaint();
+  notesSwitching = false;
+  const ta = document.getElementById('editNotes');
+  if (ta) {
+    notesAutosize(ta);
+    const off = notesOffsetOf(u, opts.line != null ? opts.line : u.s, opts.col || 0);
+    ta.setSelectionRange(off, off);
+    if (opts.focus) ta.focus({ preventScroll: true });
+  }
+  if (modalBox) modalBox.scrollTop = scrollTop;
+  if (ta && opts.focus) ta.scrollIntoView({ block: 'nearest' });
+}
+
+// Put rendered HTML into every non-active unit. Units without a cached render
+// show their plain text until the request for them returns.
+function notesPaint() {
+  const box = document.getElementById('notesLive');
+  if (!box) return;
+  const missing = [];
+  Array.from(box.children).forEach(el => {
+    if (el.classList.contains('nu-active')) return;
+    const u = notesUnits[+el.dataset.u];
+    if (!u) return;
+    const key = notesKey(u);
+    const cached = notesCache.get(key);
+    if (el._key === key && !(el._fallback && cached !== undefined)) return;
+    el._key = key;
+    if (cached === undefined) {
+      el.innerHTML = notesFallbackHtml(u);
+      el._fallback = true;
+      missing.push(u);
+    } else {
+      el.innerHTML = cached;
+      el._fallback = false;
+      notesMath(el);
+    }
+  });
+  if (missing.length) notesFetchMissing(missing);
+}
+
+function notesFallbackHtml(u) {
+  return '<div class="md-fallback">' + escapeHtml(notesUnitText(u)) + '</div>';
+}
+
+function notesFetchMissing(units) {
+  const items = [];
+  const keys = [];
+  const seen = new Set();
+  for (const u of units) {
+    const key = notesKey(u);
+    if (notesCache.has(key) || notesPending.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    items.push({ t: notesUnitText(u), k: u.k });
+    keys.push(key);
+  }
+  if (!items.length) return;
+  keys.forEach(k => notesPending.add(k));
+  let failed = false;
+  fetch('/api/markdown/lines', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ items })
+  })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(data => {
+      if (notesCache.size > 4000) notesCache.clear();
+      keys.forEach((k, i) => {
+        if (data && typeof data.html[i] === 'string') notesCache.set(k, data.html[i]);
+      });
+    })
+    .catch(err => {
+      // Stay on the plain-text fallback; do not re-request in a loop.
+      failed = true;
+      console.error('notes render failed:', err);
+    })
+    .finally(() => {
+      keys.forEach(k => notesPending.delete(k));
+      if (!failed) notesPaint();
+    });
+}
+
+function notesMath(el) {
+  el.querySelectorAll('.lun-math').forEach(n => {
+    const tex = n.dataset.tex || '';
+    if (window.katex) {
+      try {
+        katex.render(tex, n, { displayMode: n.dataset.display === '1', throwOnError: false });
+        return;
+      } catch (err) { /* fall back to the TeX source */ }
+    }
+    n.textContent = tex;
+  });
+  if (window.renderMathInElement) {
+    renderMathInElement(el, {
+      delimiters: [
+        { left: '$$', right: '$$', display: true },
+        { left: '$', right: '$', display: false }
+      ]
+    });
+  }
+}
+
+function notesAutosize(ta) {
+  ta.style.height = 'auto';
+  const h = ta.scrollHeight;
+  ta.style.height = h ? h + 'px' : '';
+}
+
+// Render the active unit's current text ahead of time, so the moment it
+// becomes a rendered line the cache already has it.
+function notesSchedulePrefetch() {
+  clearTimeout(notesPrefetchTimer);
+  notesPrefetchTimer = setTimeout(() => {
+    const u = notesUnits[notesActive];
+    if (u) notesFetchMissing([u]);
+  }, 150);
+}
+
+function notesEndRunLater() {
+  clearTimeout(notesRunTimer);
+  notesRunTimer = setTimeout(() => { notesRunActive = false; }, 700);
+}
+
+function notesPushUndo(line, col) {
+  notesUndo.push({ lines: notesLines.slice(), line, col });
+  if (notesUndo.length > 300) notesUndo.shift();
+  notesRedo = [];
+  notesRunActive = false;
+}
+
+function notesUndoStep(redo) {
+  const from = redo ? notesRedo : notesUndo;
+  const to = redo ? notesUndo : notesRedo;
+  if (!from.length) return;
+  const now = notesCaretNow();
+  to.push({ lines: notesLines.slice(), line: now.line, col: now.col });
+  const snap = from.pop();
+  notesRunActive = false;
+  notesLines = snap.lines.slice();
+  notesRebuild({ focus: true, line: snap.line, col: snap.col });
+}
+
+function notesCaretNow() {
+  const ta = document.getElementById('editNotes');
+  const u = notesUnits[notesActive];
+  if (!ta || !u) return { line: u ? u.s : 0, col: 0 };
+  const local = notesLocalCaret(ta, ta.selectionStart);
+  return { line: u.s + local.line, col: local.col };
+}
+
+function notesMoveTo(line, col) {
+  notesRunActive = false;
+  notesRebuild({ focus: true, line, col });
+}
+
+// Enter on a single-line unit: split the line at the caret. Inside a list or
+// quote the next line continues the marker; Enter on an empty item leaves it.
+// plain (Shift+Enter) is a bare line break: no marker continuation.
+function notesSplitAtCaret(ta, u, plain) {
+  const line = u.s;
+  const cur = notesLines[line];
+  const ss = ta.selectionStart;
+  const se = ta.selectionEnd;
+  const before = cur.slice(0, ss);
+  const after = cur.slice(se);
+  notesPushUndo(line, ss);
+  let keep = before;
+  let next = after;
+  let col = 0;
+  if (u.k === 'line' && !plain) {
+    const li = NOTES_CONT_LIST_RE.exec(before);
+    const q = li ? null : NOTES_CONT_QUOTE_RE.exec(before);
+    if (li) {
+      if (li[7].trim() === '' && after.trim() === '') {
+        keep = '';
+        next = null;
+      } else {
+        const marker = li[3] !== undefined ? (parseInt(li[3], 10) + 1) + li[4] : li[2];
+        const prefix = li[1] + marker + (li[5] || ' ') + (li[6] !== undefined ? '[ ] ' : '');
+        next = prefix + after;
+        col = prefix.length;
+      }
+    } else if (q) {
+      if (q[2].trim() === '' && after.trim() === '') {
+        keep = '';
+        next = null;
+      } else {
+        next = q[1] + after;
+        col = q[1].length;
+      }
+    }
+  }
+  if (next === null) {
+    notesLines.splice(line, 1, keep);
+    notesRebuild({ focus: true, line, col: 0 });
+  } else {
+    notesLines.splice(line, 1, keep, next);
+    notesRebuild({ focus: true, line: line + 1, col });
+  }
+}
+
+// Backspace at the start of a unit: join it onto the line above.
+function notesMergeBackward(u) {
+  const i = u.s;
+  if (i === 0) return;
+  const prev = notesLines[i - 1];
+  notesPushUndo(i, 0);
+  notesLines.splice(i - 1, 2, prev + notesLines[i]);
+  notesRebuild({ focus: true, line: i - 1, col: prev.length });
+}
+
+// Delete at the end of a unit: pull the line below up.
+function notesMergeForward(u) {
+  const i = u.e;
+  if (i + 1 >= notesLines.length) return;
+  const col = notesLines[i].length;
+  notesPushUndo(i, col);
+  notesLines.splice(i, 2, notesLines[i] + notesLines[i + 1]);
+  notesRebuild({ focus: true, line: i, col });
+}
+
+// Visual row (0-based) of a caret position inside a wrapping textarea, measured
+// with an off-screen mirror of the same width and font.
+function notesRowOf(ta, pos) {
+  if (!notesMirror) {
+    notesMirror = document.createElement('div');
+    notesMirror.setAttribute('aria-hidden', 'true');
+    notesMirror.style.cssText =
+      'position:absolute;visibility:hidden;left:-10000px;top:0;margin:0;padding:0;border:0;' +
+      'white-space:pre-wrap;word-wrap:break-word;overflow-wrap:anywhere';
+    document.body.appendChild(notesMirror);
+  }
+  const m = notesMirror;
+  const cs = getComputedStyle(ta);
+  m.style.width = ta.clientWidth + 'px';
+  m.style.fontFamily = cs.fontFamily;
+  m.style.fontSize = cs.fontSize;
+  m.style.fontWeight = cs.fontWeight;
+  m.style.fontStyle = cs.fontStyle;
+  m.style.letterSpacing = cs.letterSpacing;
+  m.style.lineHeight = cs.lineHeight;
+  m.textContent = ta.value.slice(0, pos);
+  const marker = document.createElement('span');
+  marker.textContent = '\u200b';
+  m.appendChild(marker);
+  const lh = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5;
+  return Math.round(marker.offsetTop / lh);
+}
+
+function onNotesKeydown(e) {
+  const ta = e.target;
+  if (!ta || ta.id !== 'editNotes' || e.isComposing || e.keyCode === 229) return;
+  const u = notesUnits[notesActive];
+  if (!u) return;
+  const mod = e.ctrlKey || e.metaKey;
+  const ss = ta.selectionStart;
+  const se = ta.selectionEnd;
+  const len = ta.value.length;
+  notesHint = notesCaretNow();
+
+  if (e.key === 'Enter') {
+    if (mod && !e.shiftKey) return;  // Ctrl/Cmd+Enter saves (handleKeyboard)
+    if (u.e > u.s) return;           // $$ block: native newline, re-split on input
+    e.preventDefault();
+    notesSplitAtCaret(ta, u, e.shiftKey);
     return;
   }
-  preview.style.display = 'block';
-  fetch('/api/markdown/preview', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text: notes})
-  }).then(r => r.json()).then(data => {
-    preview.innerHTML = data.html;
-    // Render server-extracted math (raw TeX in data-tex, single backslashes)
-    // with KaTeX's direct API.
-    preview.querySelectorAll('.lun-math').forEach(el => {
-      if (window.katex) {
-        try {
-          katex.render(el.dataset.tex, el, {
-            displayMode: el.dataset.display === '1',
-            throwOnError: false
-          });
-        } catch (err) {
-          el.textContent = el.dataset.tex || '';
-        }
-      } else {
-        el.textContent = el.dataset.tex || '';
-      }
-    });
-    if (window.renderMathInElement) {
-      renderMathInElement(preview, {
-        delimiters: [
-          {left: '$$', right: '$$', display: true},
-          {left: '$', right: '$', display: false}
-        ]
-      });
+  if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    notesUndoStep(e.shiftKey);
+    return;
+  }
+  if (mod && !e.shiftKey && !e.altKey && (e.key === 'y' || e.key === 'Y')) {
+    e.preventDefault();
+    notesUndoStep(true);
+    return;
+  }
+  if (e.key === 'Backspace' && ss === 0 && se === 0 && u.s > 0) {
+    e.preventDefault();
+    notesMergeBackward(u);
+    return;
+  }
+  if (e.key === 'Delete' && ss === len && se === len && u.e < notesLines.length - 1) {
+    e.preventDefault();
+    notesMergeForward(u);
+    return;
+  }
+  if (e.shiftKey || mod || e.altKey) return;
+  const hasPrev = u.s > 0;
+  const hasNext = u.e < notesLines.length - 1;
+  if (e.key === 'ArrowUp' && hasPrev && notesRowOf(ta, ss) === 0) {
+    e.preventDefault();
+    notesMoveTo(u.s - 1, notesLocalCaret(ta, ss).col);
+  } else if (e.key === 'ArrowDown' && hasNext && notesRowOf(ta, ss) === notesRowOf(ta, len)) {
+    e.preventDefault();
+    notesMoveTo(u.e + 1, notesLocalCaret(ta, ss).col);
+  } else if (e.key === 'ArrowLeft' && ss === 0 && hasPrev) {
+    e.preventDefault();
+    notesMoveTo(u.s - 1, notesLines[u.s - 1].length);
+  } else if (e.key === 'ArrowRight' && ss === len && hasNext) {
+    e.preventDefault();
+    notesMoveTo(u.e + 1, 0);
+  }
+}
+
+function onNotesInput(e) {
+  const ta = e.target;
+  if (!ta || ta.id !== 'editNotes' || e.isComposing) return;
+  const u = notesUnits[notesActive];
+  if (!u) return;
+  if (!notesRunActive) {
+    const h = notesHint || { line: u.s, col: 0 };
+    notesPushUndo(h.line, h.col);
+    notesRunActive = true;
+  }
+  notesEndRunLater();
+  notesLines.splice(u.s, u.e - u.s + 1, ...ta.value.split('\n'));
+  const caret = notesLocalCaret(ta, ta.selectionStart);
+  const caretLine = u.s + caret.line;
+  const oldSig = notesSig;
+  notesUnits = scanNotesUnits(notesLines);
+  notesSig = notesSignature(notesUnits);
+  notesActive = notesUnitIndexFor(notesUnits, caretLine);
+  // Same unit layout: only this line changed, so the textarea stays put.
+  // A new layout (a $$ or fence opened, lines added by a paste) rebuilds.
+  if (notesSig !== oldSig) notesRebuild({ focus: true, line: caretLine, col: caret.col });
+  else notesAutosize(ta);
+  notesSchedulePrefetch();
+}
+
+function onNotesFocusIn(e) {
+  if (e.target.id !== 'editNotes') return;
+  modalInsertMode = true;
+  modalFieldIndex = modalFields.indexOf('editNotes');
+  highlightModalField(modalFieldIndex, true);
+}
+
+function onNotesFocusOut(e) {
+  if (e.target.id !== 'editNotes' || notesSwitching) return;
+  modalInsertMode = false;
+  highlightModalField(modalFieldIndex, true);
+}
+
+// Click a rendered line to edit it; the caret goes where the click landed.
+function onNotesClick(e) {
+  const box = e.currentTarget;
+  const link = e.target.closest ? e.target.closest('a') : null;
+  if (link && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    if (/^https?:/i.test(link.href)) window.open(link.href, '_blank', 'noopener');
+    else window.location.href = link.href;
+    return;
+  }
+  const el = e.target.closest ? e.target.closest('.nu') : null;
+  if (!el || el.classList.contains('nu-active')) {
+    // Blank space below the last line: edit the end of the notes.
+    if (e.target === box && notesUnits.length) {
+      e.preventDefault();
+      const last = notesLines.length - 1;
+      notesMoveTo(last, notesLines[last].length);
     }
-  }).catch(() => {
-    preview.textContent = notes;
+    return;
+  }
+  e.preventDefault();
+  const idx = +el.dataset.u;
+  const u = notesUnits[idx];
+  if (!u) return;
+  let col = 0;
+  if (u.e === u.s) {
+    col = notesMapOffset(notesLines[u.s], el.textContent, notesRenderedOffset(el, e.clientX, e.clientY));
+  }
+  notesActive = idx;
+  notesRunActive = false;
+  notesRebuild({ focus: true, line: u.s, col });
+}
+
+// Map a caret offset in rendered text back to the raw line. Markup characters
+// in the raw line (**, [, ](url), #, ...) are skipped until the rendered
+// character lines up again.
+function notesMapOffset(raw, rendered, off) {
+  if (off >= rendered.length) return raw.length;
+  let i = 0;
+  let j = 0;
+  while (j < off && i < raw.length) {
+    if (raw[i] === rendered[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    const k = raw.indexOf(rendered[j], i);
+    i = k !== -1 && k - i <= 200 ? k : i + 1;
+  }
+  return Math.min(i, raw.length);
+}
+
+// Offset (in rendered text) of a point on screen inside element el.
+function notesRenderedOffset(el, x, y) {
+  let r = null;
+  if (document.caretRangeFromPoint) {
+    r = document.caretRangeFromPoint(x, y);
+  } else if (document.caretPositionFromPoint) {
+    const p = document.caretPositionFromPoint(x, y);
+    if (p) {
+      r = document.createRange();
+      r.setStart(p.offsetNode, p.offset);
+    }
+  }
+  if (!r || !el.contains(r.startContainer)) return el.textContent.length;
+  const pre = document.createRange();
+  pre.selectNodeContents(el);
+  pre.setEnd(r.startContainer, r.startOffset);
+  return pre.toString().length;
+}
+
+function setupNotesEditor() {
+  const box = document.getElementById('notesLive');
+  if (!box) return;
+  box.addEventListener('input', onNotesInput);
+  box.addEventListener('compositionend', onNotesInput);
+  box.addEventListener('keydown', onNotesKeydown);
+  box.addEventListener('focusin', onNotesFocusIn);
+  box.addEventListener('focusout', onNotesFocusOut);
+  box.addEventListener('click', onNotesClick);
+  window.addEventListener('resize', () => {
+    const ta = document.getElementById('editNotes');
+    if (ta) notesAutosize(ta);
   });
 }
 
@@ -1831,8 +2427,9 @@ function handleKeyboard(e) {
     return;
   }
 
-  // Cmd+Enter / Ctrl+Enter saves and exits modal (when modal is active)
-  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+  // Cmd+Enter / Ctrl+Enter saves and exits modal (when modal is active).
+  // Shift+Enter (incl. Ctrl+Shift+Enter) is a newline, not a save.
+  if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key === 'Enter') {
     e.preventDefault();
     if (document.getElementById('modalOverlay').classList.contains('active')) {
       saveModal();

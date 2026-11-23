@@ -51,6 +51,7 @@ lun/
 - Vanilla JS
 - KaTeX for math rendering
 - Markdown preview
+- Live notes editor: `POST /api/markdown/lines` renders one line (or `$$` block) at a time; the browser keeps the caret's line raw (see [Web UI](web-ui.md#notes-editor))
 - Service worker (PWA)
 
 ## API Endpoints
@@ -81,6 +82,7 @@ lun/
 
 ### Markdown
 - `POST /api/markdown/preview` — Render
+- `POST /api/markdown/lines` — Render notes units one by one for the live editor (`{"items": [{"t", "k"}]}` → `{"html": [...]}`)
 
 ## Data Flow
 

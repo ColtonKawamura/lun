@@ -44,6 +44,7 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 - DB layer + core CLI (`status`, `add proj`, `add task`, `task`, `move`, `log`)
 - Task workflows (`task ls|edit|complete|reopen|archive|unarchive`) and project/task attachments
 - Permanent deletion of projects and tasks (`rm proj`, `rm task`) from the CLI, the TUI command line, and the web UI (`g d`, Delete task); `x` archives a card
+- Web UI notes render live, Obsidian-style: every line shows rendered, and only the line you click into shows raw markdown (`Enter`/`Shift+Enter` for a new line, `Ctrl+Enter` saves)
 - Mac linking & attachments (`attach`, `link`, `open-link`, `open-uri`)
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
   views, task detail with vim-style keys, in-TUI logs, `/new-task`,

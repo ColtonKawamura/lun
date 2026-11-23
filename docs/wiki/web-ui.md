@@ -16,7 +16,7 @@ lun serve 127.0.0.1:8080         # Local only
 - **Touch-friendly**: Large buttons, swipe gestures
 - **Offline**: Service worker caches assets
 - **Real-time**: WebSocket updates
-- **Markdown**: Notes and logs render markdown
+- **Markdown**: Notes render live, Obsidian-style: every line shows rendered, and only the line you are editing shows its raw markdown. Logs render markdown
 - **Math**: KaTeX renders equations (`$F=ma$`)
 
 ## UI Layout
@@ -69,7 +69,41 @@ Fields:
 - Scope (text)
 - Assignee (text)
 - Title (text)
-- Notes (Markdown textarea)
+- Notes (Markdown, live editor; see [Notes editor](#notes-editor))
+
+### Notes editor
+The notes render as you type, like Obsidian's live preview. Every line shows
+rendered (headings, bold, lists, checkboxes, quotes, links, code, math, tables).
+The one line you are editing shows its raw markdown in a text box, so the
+raw text never shows on lines you are not touching.
+
+- **Edit a line:** click it (or tap it on a phone). The caret goes where you
+  clicked, mapped into the raw text. Arrow keys move between lines: `↑`/`↓` leave
+  the line from its first/last visual row (a long line that wraps moves inside
+  itself first), and `←`/`→` leave it from its start/end.
+- **New line:** `Enter`, `Shift+Enter` or `Ctrl+Shift+Enter`. Inside a list or
+  quote, `Enter` continues the marker (`- `, `1.`, `- [ ]`, `> `), and `Enter`
+  on an empty item ends the list. `Shift+Enter` is always a plain line break
+  (no marker).
+- **Join lines:** `Backspace` at the start of a line joins it to the line above;
+  `Delete` at the end pulls the line below up.
+- **Undo / redo:** `Ctrl+Z` or `Cmd+Z` undoes; `Ctrl+Shift+Z`, `Cmd+Shift+Z` or
+  `Ctrl+Y` redoes. A burst of typing is one undo step.
+- **Save:** `Ctrl+Enter` / `Cmd+Enter` saves and closes, as before. The **Save**
+  button does the same. To insert a line with a modifier, use `Shift+Enter` or
+  `Ctrl+Shift+Enter`: those never save. `Esc` leaves the text box and keeps the
+  modal open. Closing the modal without saving discards the changes.
+- **Blocks:** a fenced code block shows its lines in monospace, with the fence
+  lines still visible but muted. A `$$ ... $$` block is one unit: click any part of
+  the rendered formula to edit the whole block raw. A table row is one unit; header
+  and separator rows (`| a | b |` then `|---|---|`) are read as one table, and
+  the rows lay out in equal-width columns.
+- **Links:** a plain click on a link edits its line. `Ctrl`/`Cmd`+click opens it.
+- The rendering is the same server-side renderer as the full preview, so raw
+  HTML is dropped and unsafe link schemes are not turned into links.
+- Limitation: a selection cannot span lines in the live editor. `Ctrl+A` in the
+  notes selects only the line (or `$$` block) being edited.
+
 
 ### Log Input
 - Located under Notes section
@@ -96,7 +130,8 @@ Fields:
 - `k` / `ArrowUp`: Previous field
 - `i`: Insert mode (focus input)
 - `Esc`: Exit insert mode
-- `Enter`: Submit log message
+- `Enter`: Submit log message (in the notes, `Enter` makes a new line; see [Notes editor](#notes-editor))
+- `Ctrl`/`Cmd`+`Enter`: Save the task (from any field)
 
 ### Card View
 - `j` / `ArrowDown`: Next card
@@ -157,7 +192,8 @@ Fields:
 - `GET /api/tasks/{key}/prs` — List PRs
 
 ### Markdown
-- `POST /api/markdown/preview` — Render markdown
+- `POST /api/markdown/preview` — Render a whole markdown document (the full preview)
+- `POST /api/markdown/lines` — Render notes units for the live editor. Body: `{"items": [{"t": "<raw text>", "k": "line|code|fence|math|thead|trow|tsep"}]}` (at most 2000 items per request). Response: `{"html": ["...", ...]}`, one inner HTML fragment per item in request order. Each item is one line, or one whole `$$ ... $$` block for `k: "math"`. The web UI uses this; a `line` item is rendered with the same pipeline as the preview, so sanitizing and math are the same.
 
 ## Service Worker
 

@@ -67,6 +67,7 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/tasks/{key}/prs", get(task_prs))
         .route("/api/scopes", get(list_scopes))
         .route("/api/markdown/preview", post(markdown_preview))
+        .route("/api/markdown/lines", post(markdown_lines))
         .route("/api/attach/{id}", get(serve_attachment))
         .route("/manifest.json", get(serve_manifest))
         .route("/favicon.ico", get(serve_favicon))
@@ -624,6 +625,33 @@ async fn markdown_preview(Json(body): Json<MarkdownPreviewRequest>) -> Response 
     Json(serde_json::json!({"html": html})).into_response()
 }
 
+/// Most units one `/api/markdown/lines` request may render.
+const MAX_MARKDOWN_UNITS: usize = 2000;
+
+#[derive(Deserialize)]
+struct MarkdownLinesRequest { #[serde(default)] items: Vec<MarkdownUnit> }
+
+#[derive(Deserialize)]
+struct MarkdownUnit {
+    /// Raw source of the unit: one line, or a whole multi-line `$$` block.
+    #[serde(default)] t: String,
+    /// Unit kind from the client's scan: line | code | fence | math | thead | trow | tsep.
+    #[serde(default)] k: String,
+}
+
+/// Live notes editor: renders each unit on its own, so the client can show
+/// rendered lines next to the one raw line being edited. Returns one inner
+/// HTML fragment per item, in request order.
+async fn markdown_lines(Json(body): Json<MarkdownLinesRequest>) -> Response {
+    let html: Vec<String> = body
+        .items
+        .iter()
+        .take(MAX_MARKDOWN_UNITS)
+        .map(|u| render_markdown_unit(&u.t, &u.k))
+        .collect();
+    Json(serde_json::json!({"html": html})).into_response()
+}
+
 // ---------------------------------------------------------------------------
 // Markdown rendering
 // ---------------------------------------------------------------------------
@@ -896,6 +924,243 @@ pub fn render_markdown(text: &str) -> String {
     html
 }
 
+/// Inner HTML for one unit of the live notes editor.
+///
+/// The client wraps the fragment in its own block element and shows the raw
+/// source in a textarea while the unit holds the caret, so the output carries
+/// only what the unit needs: inline HTML, a list item, a table row or cell, an
+/// `<hr>`, or a KaTeX placeholder. Inline content goes through the same
+/// `render_markdown` pipeline as the full preview, so sanitizing and math
+/// behave the same in both views.
+pub fn render_markdown_unit(text: &str, kind: &str) -> String {
+    match kind {
+        // Code and fence lines are literal text; the wrapper keeps spacing.
+        "code" | "fence" => unit_or_br(&text_escape(text)),
+        "math" => render_math_unit(text),
+        "thead" => render_table_row(text, true),
+        "trow" => render_table_row(text, false),
+        "tsep" => String::new(),
+        _ => render_line_unit(text),
+    }
+}
+
+/// A `<br>` for an empty unit, so the line keeps its height.
+fn unit_or_br(inner: &str) -> String {
+    if inner.trim().is_empty() {
+        "<br>".to_string()
+    } else {
+        inner.to_string()
+    }
+}
+
+/// KaTeX placeholder for a `$$ ... $$` block (the client renders it).
+fn render_math_unit(text: &str) -> String {
+    let t = text.trim();
+    let inner = t.strip_prefix("$$").unwrap_or(t);
+    let inner = inner.strip_suffix("$$").unwrap_or(inner).trim();
+    if inner.is_empty() {
+        return unit_or_br(&text_escape(text));
+    }
+    format!(
+        "<span class=\"lun-math lun-math-display\" data-tex=\"{}\" data-display=\"1\"></span>",
+        attr_escape(inner)
+    )
+}
+
+/// One table row as flex cells (the client lays rows out as a table).
+fn render_table_row(text: &str, header: bool) -> String {
+    let mut out = String::from(if header { "<div class=\"md-tr md-thead\">" } else { "<div class=\"md-tr\">" });
+    for cell in split_table_cells(text) {
+        out.push_str("<span class=\"md-td\">");
+        out.push_str(&render_inline(cell.trim()));
+        out.push_str("</span>");
+    }
+    out.push_str("</div>");
+    out
+}
+
+/// Split a table row into cells. Leading and trailing pipes are optional; `\|`
+/// is a literal pipe inside a cell.
+fn split_table_cells(line: &str) -> Vec<String> {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    let mut chars = t.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' && chars.peek() == Some(&'|') {
+            cur.push('|');
+            chars.next();
+        } else if c == '|' {
+            cells.push(std::mem::take(&mut cur));
+        } else {
+            cur.push(c);
+        }
+    }
+    if !cur.is_empty() {
+        cells.push(cur);
+    }
+    cells
+}
+
+/// Inner HTML for an ordinary line: rule, heading, quote, list item or
+/// paragraph. The client decides the wrapper class from the same markers.
+fn render_line_unit(text: &str) -> String {
+    if is_hr_line(text) {
+        return "<hr>".to_string();
+    }
+    if let Some((_, content)) = heading_parts(text) {
+        return unit_or_br(&render_inline(content));
+    }
+    if let Some(content) = quote_content(text) {
+        return unit_or_br(&render_inline(content));
+    }
+    if let Some(item) = list_item_parts(text) {
+        return render_list_item(&item);
+    }
+    unit_or_br(&render_inline(text.trim_start()))
+}
+
+/// Render inline markdown only: the full pipeline, minus the wrapping `<p>`.
+fn render_inline(content: &str) -> String {
+    let html = render_markdown(content);
+    let t = html.trim();
+    let t = t
+        .strip_prefix("<p>")
+        .and_then(|s| s.strip_suffix("</p>"))
+        .unwrap_or(t);
+    t.trim().to_string()
+}
+
+/// `---`, `***` or `___` (three or more, spaces allowed between).
+fn is_hr_line(text: &str) -> bool {
+    let t = text.trim();
+    let mut chars = t.chars().filter(|c| !c.is_whitespace());
+    let Some(first) = chars.next() else { return false };
+    if !matches!(first, '-' | '*' | '_') {
+        return false;
+    }
+    let rest: Vec<char> = chars.collect();
+    rest.len() >= 2 && rest.iter().all(|c| *c == first)
+}
+
+/// `# Title` through `###### Title`: (level, content). Closing `#`s dropped.
+fn heading_parts(text: &str) -> Option<(usize, &str)> {
+    let t = text.trim_start_matches(' ');
+    if text.len() - t.len() > 3 {
+        return None;
+    }
+    let hashes = t.bytes().take_while(|b| *b == b'#').count();
+    if hashes == 0 || hashes > 6 {
+        return None;
+    }
+    let rest = &t[hashes..];
+    if !rest.is_empty() && !rest.starts_with(' ') && !rest.starts_with('\t') {
+        return None;
+    }
+    let c = rest.trim();
+    let stripped = c.trim_end_matches('#');
+    let content = if stripped.len() < c.len() && (stripped.is_empty() || stripped.ends_with(' ')) {
+        stripped.trim_end()
+    } else {
+        c
+    };
+    Some((hashes, content))
+}
+
+/// `> quote` (nested `>` markers are stripped too).
+fn quote_content(text: &str) -> Option<&str> {
+    let t = text.trim_start_matches(' ');
+    if text.len() - t.len() > 3 || !t.starts_with('>') {
+        return None;
+    }
+    let mut rest = t;
+    while let Some(r) = rest.strip_prefix('>') {
+        rest = r.strip_prefix(' ').unwrap_or(r);
+    }
+    Some(rest)
+}
+
+struct ListItem<'a> {
+    /// Leading spaces (nesting depth).
+    indent: usize,
+    /// Ordered list number, or None for a bullet.
+    ordered: Option<u64>,
+    /// `[ ]` / `[x]` task checkbox state, or None for a plain item.
+    task: Option<bool>,
+    content: &'a str,
+}
+
+/// `- item`, `* item`, `+ item`, `1. item`, `1) item`, `- [ ] task`.
+fn list_item_parts(text: &str) -> Option<ListItem<'_>> {
+    let indent = text.len() - text.trim_start_matches(' ').len();
+    let t = &text[indent..];
+    let (ordered, rest) = match t.chars().next() {
+        Some('-') | Some('*') | Some('+') => {
+            if t.len() > 1 && !t[1..].starts_with(' ') {
+                return None;
+            }
+            (None, &t[1..])
+        }
+        _ => {
+            let digits = t.bytes().take_while(|b| b.is_ascii_digit()).count();
+            if digits == 0 || digits > 9 {
+                return None;
+            }
+            let delim = t.as_bytes().get(digits).copied()?;
+            if delim != b'.' && delim != b')' {
+                return None;
+            }
+            let after = &t[digits + 1..];
+            if !after.is_empty() && !after.starts_with(' ') {
+                return None;
+            }
+            (Some(t[..digits].parse::<u64>().ok()?), after)
+        }
+    };
+    let rest = rest.trim_start_matches(' ');
+    let mut task = None;
+    let mut content = rest;
+    for (pat, checked) in [("[ ]", false), ("[x]", true), ("[X]", true)] {
+        if let Some(r) = rest.strip_prefix(pat) {
+            if r.is_empty() || r.starts_with(' ') {
+                task = Some(checked);
+                content = r.trim_start_matches(' ');
+                break;
+            }
+        }
+    }
+    Some(ListItem { indent, ordered, task, content })
+}
+
+fn render_list_item(item: &ListItem) -> String {
+    let mut class = String::from("md-li");
+    if item.task.is_some() {
+        class.push_str(" md-task");
+    }
+    let mut attrs = String::new();
+    if let Some(n) = item.ordered {
+        attrs.push_str(&format!(" data-n=\"{}\"", n));
+    }
+    if item.indent > 0 {
+        attrs.push_str(&format!(" style=\"margin-left:{:.2}em\"", item.indent as f32 * 0.28));
+    }
+    let mut out = format!("<div class=\"{}\"{}>", class, attrs);
+    match item.task {
+        Some(true) => out.push_str("<input type=\"checkbox\" disabled checked>"),
+        Some(false) => out.push_str("<input type=\"checkbox\" disabled>"),
+        None => {}
+    }
+    let inline = render_inline(item.content);
+    if inline.is_empty() {
+        out.push_str("<br>");
+    } else {
+        out.push_str(&inline);
+    }
+    out.push_str("</div>");
+    out
+}
+
 fn resolve_wikilinks(text: &str) -> String {
     let mut result = String::new();
     let mut chars = text.chars().peekable();
@@ -1014,5 +1279,127 @@ mod tests {
         // "$5 and $10" looks like math to the extractor; KaTeX will just
         // fail softly on it client-side. Either way, no leftover tokens.
         assert!(!html.contains("LUNMATH"), "no leftover tokens: {}", html);
+    }
+
+    // ---- Live notes editor: per-unit rendering -----------------------
+
+    #[test]
+    fn unit_heading_drops_hashes_and_keeps_inline_markup() {
+        let html = render_markdown_unit("## Plan **now**", "line");
+        assert!(html.contains("Plan <strong>now</strong>"), "{}", html);
+        assert!(!html.contains("##"), "hashes must be dropped: {}", html);
+        assert!(!html.contains("<h2>") && !html.contains("<p>"), "inner only: {}", html);
+    }
+
+    #[test]
+    fn unit_hash_without_space_is_a_paragraph() {
+        let html = render_markdown_unit("#hashtag", "line");
+        assert!(html.contains("#hashtag"), "{}", html);
+        assert!(!html.contains("<h1>"), "{}", html);
+    }
+
+    #[test]
+    fn unit_rules_and_near_misses() {
+        assert_eq!(render_markdown_unit("---", "line"), "<hr>");
+        assert_eq!(render_markdown_unit("- - -", "line"), "<hr>");
+        assert!(!render_markdown_unit("--", "line").contains("<hr>"));
+    }
+
+    #[test]
+    fn unit_quote_and_bullet_wrappers() {
+        let q = render_markdown_unit("> quoted _it_", "line");
+        assert!(q.contains("quoted <em>it</em>"), "{}", q);
+        assert!(!q.contains("&gt;"), "marker must be stripped: {}", q);
+
+        let b = render_markdown_unit("- item", "line");
+        assert!(b.starts_with("<div class=\"md-li\">") && b.contains("item"), "{}", b);
+        assert!(!b.contains("<ul>"), "{}", b);
+    }
+
+    #[test]
+    fn unit_ordered_and_nested_items() {
+        let o = render_markdown_unit("3. third", "line");
+        assert!(o.contains("data-n=\"3\""), "{}", o);
+        assert_eq!(list_item_parts("2) x").unwrap().ordered, Some(2));
+        let n = render_markdown_unit("    - deep", "line");
+        assert!(n.contains("margin-left:1.12em"), "{}", n);
+    }
+
+    #[test]
+    fn unit_task_items_show_checkbox_state() {
+        let done = render_markdown_unit("- [x] done", "line");
+        assert!(done.contains("md-task") && done.contains("checked"), "{}", done);
+        assert!(done.contains("done") && !done.contains("[x]"), "{}", done);
+        let open = render_markdown_unit("* [ ] open", "line");
+        assert!(open.contains("md-task") && !open.contains("checked"), "{}", open);
+    }
+
+    #[test]
+    fn unit_indented_text_is_not_a_code_block() {
+        let html = render_markdown_unit("    not code", "line");
+        assert!(!html.contains("<pre>"), "{}", html);
+        assert!(html.contains("not code"), "{}", html);
+    }
+
+    #[test]
+    fn unit_empty_lines_keep_height() {
+        assert_eq!(render_markdown_unit("", "line"), "<br>");
+        assert_eq!(render_markdown_unit("   ", "code"), "<br>");
+        assert!(render_markdown_unit("- ", "line").contains("<br>"));
+    }
+
+    #[test]
+    fn unit_code_and_fence_are_literal_and_escaped() {
+        assert_eq!(render_markdown_unit("if a < b && c", "code"), "if a &lt; b &amp;&amp; c");
+        assert_eq!(render_markdown_unit("```rust", "fence"), "```rust");
+        // Markdown inside a code line is not rendered.
+        assert!(render_markdown_unit("**x**", "code").contains("**x**"));
+    }
+
+    #[test]
+    fn unit_math_block_keeps_raw_tex() {
+        let m = render_markdown_unit("$$\n\\frac{a}{b}\n$$", "math");
+        assert!(m.contains("lun-math-display"), "{}", m);
+        assert!(m.contains("data-tex=\"\\frac{a}{b}\""), "single backslashes kept: {}", m);
+        let empty = render_markdown_unit("$$\n$$", "math");
+        assert!(!empty.contains("lun-math"), "{}", empty);
+    }
+
+    #[test]
+    fn unit_inline_math_in_a_line() {
+        let html = render_markdown_unit("energy $E=mc^2$ here", "line");
+        assert!(html.contains("data-tex=\"E=mc^2\""), "{}", html);
+        assert!(!html.contains("LUNMATH"), "{}", html);
+    }
+
+    #[test]
+    fn unit_table_rows_and_cells() {
+        let head = render_markdown_unit("| a | b |", "thead");
+        assert!(head.contains("md-thead"), "{}", head);
+        assert_eq!(head.matches("class=\"md-td\"").count(), 2, "{}", head);
+        let row = render_markdown_unit("c | **d**", "trow");
+        assert!(row.contains("<strong>d</strong>"), "{}", row);
+        assert_eq!(row.matches("class=\"md-td\"").count(), 2, "{}", row);
+        assert_eq!(render_markdown_unit("|---|---|", "tsep"), "");
+    }
+
+    #[test]
+    fn unit_escaped_pipe_stays_in_its_cell() {
+        let row = render_markdown_unit("| a \\| b | c |", "trow");
+        assert_eq!(row.matches("class=\"md-td\"").count(), 2, "{}", row);
+        assert!(row.contains("a | b"), "{}", row);
+    }
+
+    #[test]
+    fn unit_sanitizes_html_and_unsafe_links() {
+        let raw = render_markdown_unit("<img src=x onerror=alert(1)> hi", "line");
+        assert!(!raw.contains("onerror"), "{}", raw);
+        let link = render_markdown_unit("[bad](javascript:alert(1))", "line");
+        assert!(!link.contains("href=\"javascript"), "{}", link);
+    }
+
+    #[test]
+    fn unit_unknown_kind_renders_as_a_line() {
+        assert_eq!(render_markdown_unit("plain", "nonsense"), render_markdown_unit("plain", "line"));
     }
 }
