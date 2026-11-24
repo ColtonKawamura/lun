@@ -484,6 +484,8 @@ Usage:
   lun attach ls <task|project> <key|title>   List attachments
   lun attach open|rm <task|project> <key|title> <filename|id>   Open/remove attachments
   lun link <task|project> <key|title> \"<label>\" \"<uri>\"   Record a link
+  lun link delete <task|project> <key|title> <id>   Delete a link by its id (ids: `sqlite3 -readonly .lun/lun.db \"select id,uri from links\"`)
+  lun link restore <task|project> <key|title>   Restore the most recently deleted link
   lun unlink <task|project> <key|title> <label|uri> [--all]   Remove a link by label or uri (--all if several match; `lun link restore` undoes it)
   lun open-link <task|project> <key|title> <label>   Open a link via macOS `open`
   lun open-uri <uri> [--on <task|project> <key|title>]   Open any URI

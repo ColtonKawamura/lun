@@ -142,6 +142,9 @@ fn handover_swaps_the_old_session_link_for_the_new_one() {
 fn unlink_is_listed_in_help_and_completion() {
     let (app, _key, _tid) = fixture("help");
     assert!(help_text("0").contains("lun unlink <task|project> <key|title> <label|uri> [--all]"));
+    let help = help_text("0");
+    assert!(help.contains("lun link delete <task|project> <key|title> <id>"), "{help}");
+    assert!(help.contains("lun link restore <task|project> <key|title>"), "{help}");
     let out = complete_output(Some(&app), &["--".into(), "lun".into(), "unl".into()]);
     assert!(out.lines().any(|l| l.trim() == "unlink"), "{out}");
 }
