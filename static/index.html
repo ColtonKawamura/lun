@@ -569,6 +569,16 @@ body {
 .undo-toast.active { display: flex; }
 .undo-toast button { background: none; border: none; color: var(--accent-light); font-weight: 700; cursor: pointer; font-size: 14px; padding: 0; }
 
+/* Copy toast (<leader>c c copied a task key). Click-through, no button. */
+.copy-toast {
+  position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+  background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px 14px; z-index: 950;
+  display: none; font-size: 14px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.5); max-width: 90vw; pointer-events: none;
+}
+.copy-toast.active { display: block; }
+
 /* Delete project dialog */
 .btn-danger { background: var(--danger); }
 .btn-danger:hover { background: #dc2626; }
@@ -914,6 +924,7 @@ body {
 </div>
 
 <div class="undo-toast" id="undoToast" role="status"><span id="undoToastText"></span><button id="undoToastBtn">Undo</button></div>
+<div class="copy-toast" id="copyToast" role="status"></div>
 
 <!-- Command palette -->
 <div class="palette-overlay" id="paletteOverlay">
@@ -982,6 +993,7 @@ body {
       <tr><td>u / U / &lt;</td><td>Move card backward (toward planning)</td></tr>
       <tr><td>Enter</td><td>Open card detail</td></tr>
       <tr><td>Ctrl+L</td><td>Open first link on selected card</td></tr>
+      <tr><td>Space c c</td><td>Copy selected card's task key (e.g. T-ne64)</td></tr>
       <tr><td>Enter / Shift+Enter</td><td>New line in notes (click a line to edit it)</td></tr>
       <tr><td>Ctrl/Cmd+Enter</td><td>Save task (from the task modal)</td></tr>
       <tr><td>a</td><td>New card in column</td></tr>
@@ -1032,6 +1044,7 @@ let gBuffer = '';
 let gBufferTimer = null;
 let leader = false;
 let leaderTimer = null;
+let leaderC = false; // Space c is waiting for the second c (<leader>c c copies the task key)
 let modalFieldIndex = 0;
 let linkIndex = 0;
 let zBuffer = false;
@@ -2545,8 +2558,27 @@ function handleKeyboard(e) {
   if (e.key === ' ' && !isInputFocused()) {
     e.preventDefault();
     leader = true;
+    leaderC = false;
     if (leaderTimer) clearTimeout(leaderTimer);
-    leaderTimer = setTimeout(() => { leader = false; }, 800);
+    leaderTimer = setTimeout(() => { leader = false; leaderC = false; }, 800);
+    return;
+  }
+
+  // <leader>c c (Space, c, c) copies the selected card's task key. The first c
+  // clears `leader`, so h/l/p cannot fire in the middle of the chord.
+  if (leaderC && e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !isInputFocused()) {
+    e.preventDefault();
+    leaderC = false;
+    clearTimeout(leaderTimer);
+    copySelectedTaskKey();
+    return;
+  }
+  if (leader && e.key === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !isInputFocused()) {
+    e.preventDefault();
+    leader = false;
+    leaderC = true;
+    clearTimeout(leaderTimer);
+    leaderTimer = setTimeout(() => { leaderC = false; }, 800);
     return;
   }
 
@@ -2667,6 +2699,46 @@ function handleKeyboard(e) {
 function isInputFocused() {
   const el = document.activeElement;
   return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+}
+
+// <leader>c c: copy the selected card's task key (e.g. T-ne64). navigator.clipboard
+// exists only in secure contexts, and the board is served over plain http on the
+// Tailscale IP, so there the execCommand('copy') fallback is the path that runs.
+function copySelectedTaskKey() {
+  const key = activeCard?.key;
+  if (!key) { showCopyToast('No card selected'); return; }
+  const copied = () => showCopyToast('Copied ' + key);
+  const fallback = () => {
+    const prev = document.activeElement;
+    const ta = document.createElement('textarea');
+    ta.value = key;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus({ preventScroll: true });
+    ta.select();
+    ta.setSelectionRange(0, key.length); // iOS ignores select() alone
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (err) { ok = false; }
+    document.body.removeChild(ta);
+    if (prev && prev.focus) prev.focus({ preventScroll: true });
+    ok ? copied() : showCopyToast('Copy failed');
+  };
+  if (window.isSecureContext && navigator.clipboard) {
+    navigator.clipboard.writeText(key).then(copied, fallback);
+  } else {
+    fallback();
+  }
+}
+
+let copyToastTimer = null;
+function showCopyToast(text) {
+  const el = document.getElementById('copyToast');
+  el.textContent = text;
+  el.classList.add('active');
+  clearTimeout(copyToastTimer);
+  copyToastTimer = setTimeout(() => el.classList.remove('active'), 1500);
 }
 
 function getFocusableCards() {

@@ -147,6 +147,7 @@ raw text never shows on lines you are not touching.
 - `g d`: Delete the selected project (opens a confirm dialog; `Esc` cancels)
 - `x`: Archive the selected card (Undo toast for 10 seconds). It no longer closes the task
 - `/`: Command palette. The `/` is not typed into the palette input
+- `Space c c`: Copy the selected card's task key (e.g. `T-ne64`) to the clipboard, with a short toast. Space is the leader key, so press Space, `c`, then `c` within 0.8 s. Works on the board, in the list and in the task modal (normal mode, not while a field is being edited)
 
 ## API Endpoints
 
