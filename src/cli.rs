@@ -21,6 +21,10 @@
 //!   link (file path, URL, or custom URI such as `obsidian://...`).
 //! - `lun unlink <task|project> <key|title> <label|uri> [--all]` — remove a
 //!   link by its label or uri (logs UNLINK, undo with `lun link restore`).
+//! - `lun link delete <task|project> <key|title> <id>` — delete a link by its
+//!   numeric id (the id comes from `sqlite3 -readonly`; no command prints ids).
+//! - `lun link restore <task|project> <key|title>` — restore the most recently
+//!   deleted link of that card.
 //! - `lun open-link <task|project> <key|title> <label>` — look up a link
 //!   and open it with macOS `open`.
 //!

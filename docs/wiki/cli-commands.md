@@ -267,6 +267,12 @@ lun unlink task T-001 "https://figma.com/..."
 lun unlink task T-001 "chat session" --all
 ```
 
+### `lun link delete <task|project> <key|title> <id>`
+Delete one link by its numeric id. No lun command prints ids; read them with `sqlite3 -readonly .lun/lun.db "select id,uri from links"`. `lun unlink` needs no id and is the usual choice.
+
+### `lun link restore <task|project> <key|title>`
+Restore the most recently deleted link of the card (one per run, newest first).
+
 ### `lun open-link <task|project> <key|title> <label>`
 Open a link via macOS `open`.
 ```sh

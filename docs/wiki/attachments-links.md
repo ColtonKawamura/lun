@@ -146,6 +146,20 @@ lun unlink task T-001 "Design"
 lun unlink task T-001 "chat session" --all
 ```
 
+#### Delete Link by id
+```sh
+lun link delete <task|project> <key|title> <id>
+```
+
+Deletes one link by its numeric id. No lun command prints ids: read them with `sqlite3 -readonly .lun/lun.db "select id,uri from links"`. Prefer `unlink`, which needs no id.
+
+#### Restore Link
+```sh
+lun link restore <task|project> <key|title>
+```
+
+Restores the most recently deleted link of the card (one per run, newest first).
+
 #### Open Link
 ```sh
 lun open-link <task|project> <key|title> <label>
