@@ -51,6 +51,8 @@ Five columns, left to right — the task statuses:
 | Closed | green | finished |
 
 - Cards show task key, title, priority, scope, assignee and project
+- A card whose task has a link shows a chip with the first link's label; click or tap it to open the link (`http(s)` in a new tab, `message:`/`hermes:`/`obsidian:` handed to the OS). Extra links show `+N`; `Ctrl+L` opens the same link from the keyboard
+- **Drag a link onto a card** (a mail message from Apple Mail, a URL from a browser tab, a link from any app) to save it on that task. The card highlights while you drag over it, and the drag's plain text becomes the label, so a mail message shows its subject. See [Attachments & Links](attachments-links.md#dragging-a-link-onto-a-card)
 - Click a card (or focus it and press `Enter`) to open the details modal
 - Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
   shift the focused card one column right/left; `x` archives it (Undo toast);
@@ -69,6 +71,7 @@ Fields:
 - Scope (text)
 - Assignee (text)
 - Title (text)
+- Links (the task's links, each clickable, plus a label + link row that adds one; `Ctrl+L` opens the selected link, `dd` deletes it, `u` restores the last deleted one)
 - Notes (Markdown, live editor; see [Notes editor](#notes-editor))
 
 ### Notes editor
@@ -188,6 +191,8 @@ raw text never shows on lines you are not touching.
 
 ### Links
 - `GET /api/tasks/{key}/links` — List links
+- `POST /api/tasks/{key}/links` — Add a link: `{"label": "...", "uri": "message:%3C...%3E"}`. An empty label falls back to the uri. `201` with the new link; `400` when `uri` is empty
+- `GET /api/links` — Every task link on the board, oldest first, each entry with its `task_key`. One request backs the link chip on every card
 
 ### PRs
 - `GET /api/tasks/{key}/prs` — List PRs

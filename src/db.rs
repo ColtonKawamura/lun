@@ -3004,6 +3004,26 @@ impl Lun {
             .map_err(|e| DbError::new("db", format!("listing links: {e}")))
     }
 
+    /// Every task link on the board, oldest first, paired with its task key.
+    /// One query for the board view: the card's link chip needs the first
+    /// link per task, and fetching per card would be one request per card.
+    pub fn links_by_task(&self) -> Result<Vec<(String, Link)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT l.id, l.task_id, l.project_id, l.label, l.uri, l.created_at, t.task_key
+             FROM links l JOIN tasks t ON t.id = l.task_id
+             ORDER BY l.task_id, l.id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let link = Self::link_from_row(r)?;
+                let key: String = r.get(6)?;
+                Ok((key, link))
+            })
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))?;
+        rows.collect::<std::result::Result<_, _>>()
+            .map_err(|e| DbError::new("db", format!("listing links: {e}")))
+    }
+
     fn link_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Link> {
         Ok(Link {
             id: r.get(0)?,

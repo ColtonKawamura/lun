@@ -61,7 +61,8 @@ pub async fn serve(lun: Lun, data_dir: PathBuf, bind: &str) -> anyhow::Result<()
         .route("/api/projects/{key}/logs", post(add_project_log))
         .route("/api/tasks/{key}/attachments", get(task_attachments))
         .route("/api/tasks/{key}/attachments", post(upload_attachment))
-        .route("/api/tasks/{key}/links", get(task_links))
+        .route("/api/tasks/{key}/links", get(task_links).post(add_task_link))
+        .route("/api/links", get(all_task_links))
         .route("/api/tasks/{key}/links/restore", post(restore_task_link))
         .route("/api/tasks/{key}/links/{id}/delete", post(delete_task_link))
         .route("/api/tasks/{key}/prs", get(task_prs))
@@ -562,6 +563,69 @@ async fn restore_task_link(state: State<Arc<ServerState>>, Path(key): Path<Strin
     match lun.restore_last_link(LinkTarget::Task(task.id), Some("web")) {
         Ok(Some(l)) => Json(l).into_response(),
         Ok(None) => api_err(StatusCode::NOT_FOUND, "no deleted link to restore"),
+        Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+/// Add a link to a task. The web board uses this for a link dragged onto a
+/// card and for the modal's add-link row.
+#[derive(Deserialize)]
+struct AddLinkRequest {
+    #[serde(default)]
+    label: String,
+    uri: String,
+}
+
+async fn add_task_link(
+    state: State<Arc<ServerState>>,
+    Path(key): Path<String>,
+    Json(body): Json<AddLinkRequest>,
+) -> Response {
+    let lun = state.lun.lock().await;
+    let task = match lun.task_by_key(&key) {
+        Ok(t) => t, Err(e) => return api_err(StatusCode::NOT_FOUND, &e.to_string()),
+    };
+    let uri = body.uri.trim();
+    if uri.is_empty() {
+        return api_err(StatusCode::BAD_REQUEST, "uri is required");
+    }
+    let uri = uri.to_string();
+    let label = match body.label.trim() {
+        "" => uri.clone(),
+        l => l.to_string(),
+    };
+    match lun.add_link(LinkTarget::Task(task.id), &label, &uri, None, Some("web")) {
+        Ok(id) => match lun.task_links(task.id) {
+            Ok(links) => match links.into_iter().find(|l| l.id == id) {
+                Some(l) => (StatusCode::CREATED, Json(l)).into_response(),
+                None => api_err(StatusCode::INTERNAL_SERVER_ERROR, "link not found after insert"),
+            },
+            Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        },
+        Err(e) => api_err(StatusCode::BAD_REQUEST, &e.to_string()),
+    }
+}
+
+/// Every task link on the board, oldest first, as a flat list carrying the
+/// task key. One request backs the link chip on every card.
+async fn all_task_links(state: State<Arc<ServerState>>) -> Response {
+    let lun = state.lun.lock().await;
+    match lun.links_by_task() {
+        Ok(rows) => {
+            let out: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(task_key, l)| {
+                    serde_json::json!({
+                        "task_key": task_key,
+                        "id": l.id,
+                        "label": l.label,
+                        "uri": l.uri,
+                        "created_at": l.created_at,
+                    })
+                })
+                .collect();
+            Json(out).into_response()
+        }
         Err(e) => api_err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }

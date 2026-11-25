@@ -183,10 +183,20 @@ lun open-uri "https://example.com" --on task T-001
 
 ### Web UI
 
+#### Dragging a link onto a card
+Drag a mail message from Apple Mail — or a URL from a browser tab, or a link from any app that puts a URL on the drag — onto a card on the board. The card highlights with "drop to add link" and the link is saved on that task.
+- A mail message is stored as `message:%3C<message-id>%3E`, which opens that message in Mail on macOS and iOS
+- The drag's plain text becomes the label, so a mail message shows its subject
+- `file://` drags are ignored, and a `file:` path is never stored: it means nothing on a phone
+- Files still belong in the task's Attachments section
+
+The first link on a task shows as a chip under its title. Click or tap the chip to open it: `http(s)` in a new tab, every other scheme (`message:`, `hermes:`, `obsidian:`) handed to the OS. `Ctrl+L` on the board opens the same link. Extra links show `+N` on the chip and are listed in the modal.
+
 #### Links Section
-- Shows all links in task modal
-- Click to open
-- Label and URL displayed
+- Shows all links in the task modal; click one to open it (`Ctrl+L` opens the selected one)
+- Label and URL displayed; the label is the mail subject when the link came from Mail
+- The row under the list adds a link by hand (label + link). This is how a link gets onto a task from an iPhone, where no app can be dragged into Safari.
+- `dd` on the section deletes the selected link (Undo: `u`)
 
 ### API
 
@@ -204,6 +214,18 @@ List links.
   }
 ]
 ```
+
+#### POST /api/tasks/{key}/links
+Add a link. Body: `{"label": "Design", "uri": "https://figma.com/file/abc"}`. An empty label falls back to the uri. Returns the new link with `201`; `400` when `uri` is empty, `404` for an unknown task.
+
+```sh
+curl -XPOST http://localhost:9120/api/tasks/T-001/links \
+  -H 'Content-Type: application/json' \
+  -d '{"label": "Mail", "uri": "message:%3Cabc123@example.com%3E"}'
+```
+
+#### GET /api/links
+Every task link on the board, oldest first, each entry carrying the task's `task_key` as well as the link's `id`, `label`, `uri` and `created_at`. One request backs the link chip on every card.
 
 ### TUI
 

@@ -297,6 +297,55 @@ body {
 .badge.priority-med { background: #78350f; color: #fcd34d; }
 .badge.scope { background: #1e1b4b; color: #a78bfa; }
 .badge.project { color: #fff; }
+/* Link chip on a card: the first link on the task, clickable (message: links
+   open Mail, http links open a tab). */
+.card-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+.card-link:hover, .card-link:focus-visible { color: var(--text); border-color: var(--accent); outline: none; }
+.card-link-glyph { flex: none; }
+.card-link-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-link-more { flex: none; opacity: 0.7; }
+/* A link is being dragged over this card */
+.card.link-drop { border-color: var(--accent); background: rgba(108, 59, 170, 0.18); }
+.card-drop-hint { display: none; }
+.card.link-drop .card-drop-hint {
+  display: block;
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  font-size: 11px;
+  color: var(--accent-light);
+}
+/* Add-link row in the modal's Links section */
+.link-add-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.link-add-row input {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 16px;
+  flex: 1 1 140px;
+  min-width: 0;
+}
+.link-add-row .btn { flex: none; }
+.link-add-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+
 .has-notes::after {
   content: '📝';
   position: absolute;
@@ -879,9 +928,15 @@ body {
         <input type="text" id="editTitle">
       </div>
       
-      <div class="modal-section" id="linksSection" style="display:none;">
+      <div class="modal-section" id="linksSection">
         <h3>Links</h3>
         <div id="linksList"></div>
+        <div class="link-add-row">
+          <input type="text" id="newLinkLabel" placeholder="Label (optional)">
+          <input type="text" id="newLinkUri" placeholder="Link (message://…, https://…)">
+          <button class="btn" id="addLinkBtn">Add</button>
+        </div>
+        <div class="link-add-hint">Drag a mail message or a link onto a card to attach it.</div>
       </div>
       
       <div class="modal-section">
@@ -1037,6 +1092,9 @@ const PRIORITY_ORDER = ['low', 'med', 'high'];
 let tasks = [];
 let projects = [];
 let scopes = [];
+// task key -> its links, oldest first. One bulk read (/api/links) backs the
+// link chip on every card; the first link is the one the chip opens.
+let taskLinks = {};
 let activeCard = null; // {key, col, row}
 let currentView = 'board';
 let editingTask = null;
@@ -1117,7 +1175,193 @@ async function loadTasks() {
       scopes = await res.json();
       populateScopeFilter();
     } catch(e) {}
+    await loadLinks();
   } catch(e) { console.error('Failed to load tasks:', e); }
+}
+
+// One request for every task's links, grouped by task key.
+async function loadLinks() {
+  try {
+    const res = await fetch('/api/links');
+    const rows = await res.json();
+    const grouped = {};
+    for (const l of rows) {
+      (grouped[l.task_key] = grouped[l.task_key] || []).push(l);
+    }
+    taskLinks = grouped;
+  } catch(e) { taskLinks = {}; }
+}
+
+// The text a link chip shows: the stored label when it says something more
+// than the URI (a mail drag carries the subject as plain text), else a short
+// form of the URI itself.
+function linkDisplayText(link) {
+  const label = (link.label || '').trim();
+  if (label && label !== link.uri) return label;
+  return linkTextFromUri(link.uri);
+}
+
+function linkTextFromUri(uri) {
+  const u = String(uri || '');
+  if (/^message:/i.test(u)) return 'Mail message';
+  const m = u.match(/^[a-z][a-z0-9+.\-]*:\/\/([^\/?#]+)/i);
+  if (m) return m[1].replace(/^www\./i, '');
+  return u.length > 40 ? u.slice(0, 40) + '…' : u;
+}
+
+// http(s) opens a new tab; every other scheme (message:, hermes://,
+// obsidian://) is handed to the OS on the current page, which opens the app
+// without leaving an empty tab behind.
+function openLink(uri) {
+  if (!uri) return;
+  if (/^https?:/i.test(uri)) window.open(uri, '_blank', 'noopener');
+  else window.location.href = uri;
+}
+
+// ── Links dropped onto a card ───────────────────────────────────────────
+// A drag from Apple Mail carries the message as `message:%3C<id%3E` in
+// public.url (which the browser exposes as text/uri-list) and the subject
+// only in text/plain, so the subject becomes the link's label. Anything else
+// with a URL (a browser tab, a link in a page, a text selection holding a
+// URL) works the same way.
+function dragCarriesLink(dt) {
+  if (!dt) return false;
+  const types = Array.from(dt.types || []).map(t => t.toLowerCase());
+  if (types.includes('files') && !types.includes('text/uri-list') && !types.includes('text/plain')) return false;
+  return types.some(t => ['text/uri-list', 'text/plain', 'text/html', 'text/x-moz-url'].includes(t));
+}
+
+// Turn whatever the drag offered into a URI worth storing. Apple's canonical
+// form for a mail message is `message:%3C<message-id>%3E` — brackets
+// percent-encoded, the @ left alone — which opens the message in Mail on
+// macOS and iOS. A bare Message-ID becomes the same form.
+function normalizeDroppedLink(raw) {
+  const s = String(raw || '').trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!s) return '';
+  const scheme = s.match(/^([a-z][a-z0-9+.\-]*):(.*)$/i);
+  if (scheme) {
+    const name = scheme[1].toLowerCase();
+    if (name === 'file') return ''; // a local path means nothing on a phone
+    if (name === 'message') {
+      let id = scheme[2].replace(/^\/\//, '');
+      try { id = decodeURIComponent(id); } catch (e) {}
+      id = id.replace(/^</, '').replace(/>$/, '').trim();
+      return id ? `message:%3C${id}%3E` : '';
+    }
+    // "Re: lunch: tomorrow" also matches the scheme pattern; a real custom
+    // scheme URI has no whitespace in it.
+    if (!/\s/.test(s)) return s;
+    return '';
+  }
+  // A bare Message-ID, e.g. "<1234@host>" — Mail puts one on the drag too.
+  const bareId = s.replace(/^</, '').replace(/>$/, '').trim();
+  if (/^[^<>\s]+@[^<>\s]+$/.test(bareId) && bareId.includes('.')) return `message:%3C${bareId}%3E`;
+  // A bare host typed into the modal's link box, e.g. "github.com/x".
+  if (/^[a-z0-9-]+(\.[a-z0-9-]+)+([\/?#].*)?$/i.test(s) && !/\s/.test(s)) return 'https://' + s;
+  return '';
+}
+
+function labelForDroppedLink(uri, plain, html) {
+  const text = String(plain || '').split(/\r?\n/)[0].trim();
+  if (text && text !== uri && !/^(?:[a-z][a-z0-9+.\-]*:|\/\/)/i.test(text)) return text.slice(0, 80);
+  const m = String(html || '').match(/<a\b[^>]*>([^<]{1,200})<\/a>/i);
+  if (m) {
+    const t = m[1].replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+    if (t && t !== uri) return t.slice(0, 80);
+  }
+  return linkTextFromUri(uri);
+}
+
+function extractDroppedLink(dt) {
+  if (!dt) return null;
+  const read = t => { try { return dt.getData(t) || ''; } catch (e) { return ''; } };
+  const types = Array.from(dt.types || []).map(t => t.toLowerCase());
+  const has = name => types.includes(name);
+  const plain = read('text/plain');
+  const html = read('text/html');
+  const candidates = [];
+  if (has('text/uri-list')) {
+    read('text/uri-list').split(/\r?\n/).forEach(line => {
+      const l = line.trim();
+      if (l && !l.startsWith('#')) candidates.push(l);
+    });
+  }
+  if (plain) candidates.push(plain.split(/\r?\n/)[0]);
+  if (html) {
+    const m = html.match(/href\s*=\s*"([^"]+)"/i);
+    if (m) candidates.push(m[1]);
+  }
+  for (const c of candidates) {
+    const uri = normalizeDroppedLink(c);
+    if (uri) return { uri, label: labelForDroppedLink(uri, plain, html) };
+  }
+  return null;
+}
+
+async function addTaskLink(key, uri, label) {
+  try {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(key)}/links`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ uri: uri, label: label || '' }),
+    });
+    if (!res.ok) { showCopyToast('Could not add link'); return false; }
+    await loadLinks();
+    if (currentView === 'board') renderBoard();
+    return true;
+  } catch (e) {
+    showCopyToast('Could not add link');
+    return false;
+  }
+}
+
+// dragover/drop are delegated from the document because cards are re-rendered
+// on every board update. Only drags that carry a link claim the drop, so the
+// modal's file drop zone and ordinary file drags behave as before.
+function setupCardLinkDrop() {
+  let hovered = null;
+  const clearHover = () => {
+    if (hovered) { hovered.classList.remove('link-drop'); hovered = null; }
+  };
+  const cardFor = e => (e.target && e.target.closest ? e.target.closest('.card') : null);
+
+  document.addEventListener('dragenter', e => {
+    if (!dragCarriesLink(e.dataTransfer)) return;
+    if (cardFor(e)) e.preventDefault();
+  });
+
+  document.addEventListener('dragover', e => {
+    if (!dragCarriesLink(e.dataTransfer)) { clearHover(); return; }
+    const card = cardFor(e);
+    if (!card) { clearHover(); return; }
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'link';
+    if (hovered !== card) { clearHover(); hovered = card; card.classList.add('link-drop'); }
+  });
+
+  document.addEventListener('dragleave', e => {
+    if (!hovered) return;
+    if (e.target === hovered || !hovered.contains(e.relatedTarget)) clearHover();
+  });
+
+  document.addEventListener('drop', e => {
+    const card = hovered || cardFor(e);
+    clearHover();
+    if (!card || !dragCarriesLink(e.dataTransfer)) return;
+    // Claim the drop, or the browser navigates the board to the dropped URL.
+    e.preventDefault();
+    e.stopPropagation();
+    const found = extractDroppedLink(e.dataTransfer);
+    if (!found) {
+      showCopyToast('No link in that drag — open the card to add it');
+      return;
+    }
+    addTaskLink(card.dataset.key, found.uri, found.label).then(ok => {
+      if (ok) showCopyToast('Link added to ' + card.dataset.key);
+    });
+  });
+
+  window.addEventListener('dragend', clearHover);
 }
 
 async function updateTaskOnServer(key, updates) {
@@ -1239,10 +1483,21 @@ function renderList() {
   setActiveCard();
 }
 
+// The chip on a card's back: the task's first link, clickable. More than one
+// link shows a +N and the modal lists them all.
+function cardLinkChipHtml(t) {
+  const links = taskLinks[t.task_key] || [];
+  if (!links.length) return '';
+  const first = links[0];
+  const extra = links.length > 1 ? `<span class="card-link-more">+${links.length - 1}</span>` : '';
+  return `<button type="button" class="card-link" data-uri="${escapeHtml(first.uri)}" title="${escapeHtml(first.uri)}"><span class="card-link-glyph">🔗</span><span class="card-link-label">${escapeHtml(linkDisplayText(first))}</span>${extra}</button>`;
+}
+
 function cardHtml(t) {
   const priClass = t.priority === 'high' ? 'priority-high' : t.priority === 'med' ? 'priority-med' : '';
   return `<div class="card" data-key="${t.task_key}" tabindex="0">
     <div class="card-title">${escapeHtml(t.title)}</div>
+    ${cardLinkChipHtml(t)}
     <div class="commit-preview" data-commit-for="${t.task_key}"></div>
     <div class="card-meta">
       <span>${t.task_key}</span>
@@ -1251,6 +1506,7 @@ function cardHtml(t) {
       ${t.assignee ? `<span class="badge">${escapeHtml(t.assignee)}</span>` : ''}
       <span class="badge project" style="background:${projectColor(t.project_id)}">${escapeHtml(projectName(t.project_id))}</span>
     </div>
+    <span class="card-drop-hint">drop to add link</span>
   </div>`;
 }
 
@@ -1293,6 +1549,14 @@ function setActiveCard() {
 function setupEventListeners() {
   // Board card clicks – set activeCard before opening modal
   document.getElementById('boardView').addEventListener('click', e => {
+    // The link chip on a card's back opens the link, not the modal.
+    const chip = e.target.closest('.card-link');
+    if (chip) {
+      e.preventDefault();
+      e.stopPropagation();
+      openLink(chip.dataset.uri);
+      return;
+    }
     const card = e.target.closest('.card');
     if (card) {
       activeCard = {key: card.dataset.key};
@@ -1383,6 +1647,15 @@ function setupEventListeners() {
   document.getElementById('logMessageInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') addLogMessage();
   });
+
+  // Links: the modal's add row (works on a phone) and the board's drop target
+  document.getElementById('addLinkBtn').addEventListener('click', addLinkFromModal);
+  ['newLinkLabel', 'newLinkUri'].forEach(id => {
+    document.getElementById(id).addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); addLinkFromModal(); }
+    });
+  });
+  setupCardLinkDrop();
 
   // Live notes editor (hybrid rendering, see "Live notes editor" below)
   setupNotesEditor();
@@ -1527,14 +1800,39 @@ async function deleteCurrentLink() {
   const res = await fetch(`/api/tasks/${editingTask}/links/${d.dataset.id}/delete`, { method: 'POST' });
   if (!res.ok) return;
   await loadTaskDetails(editingTask);
+  await loadLinks();
+  if (currentView === 'board') renderBoard();
   if (!document.querySelectorAll('#linksList .link-item').length) modalFieldIndex = modalStep(1);
   highlightModalField(modalFieldIndex);
 }
+// Add the link typed into the modal's Links row. This is the path that works
+// on an iPhone, where no app can be dragged into Safari.
+async function addLinkFromModal() {
+  if (!editingTask) return;
+  const uriInput = document.getElementById('newLinkUri');
+  const labelInput = document.getElementById('newLinkLabel');
+  const typed = uriInput.value.trim();
+  if (!typed) { uriInput.focus(); return; }
+  const uri = normalizeDroppedLink(typed);
+  if (!uri) {
+    showCopyToast('Not a link — try message://… or https://…');
+    uriInput.focus();
+    return;
+  }
+  if (!(await addTaskLink(editingTask, uri, labelInput.value.trim()))) return;
+  uriInput.value = '';
+  labelInput.value = '';
+  await loadTaskDetails(editingTask);
+  uriInput.focus();
+}
+
 async function restoreLink() {
   if (!editingTask) return;
   const res = await fetch(`/api/tasks/${editingTask}/links/restore`, { method: 'POST' });
   if (!res.ok) return;
   await loadTaskDetails(editingTask);
+  await loadLinks();
+  if (currentView === 'board') renderBoard();
   // Land on the restored link (it is appended last).
   modalFieldIndex = modalFields.indexOf('linksSection');
   linkIndex = Math.max(0, document.querySelectorAll('#linksList .link-item').length - 1);
@@ -1598,17 +1896,18 @@ async function loadTaskDetails(key) {
     document.getElementById('attachmentsSection').style.display = 'none';
   }
 
-  // Links
+  // Links. The section stays visible when a task has none: it holds the
+  // add-link row, which is how a link gets on a task from an iPhone.
   try {
     const res = await fetch(`/api/tasks/${key}/links`);
     const links = await res.json();
-    document.getElementById('linksSection').style.display = links.length ? 'block' : 'none';
+    taskLinks[key] = links;
     linkIndex = Math.min(linkIndex, Math.max(0, links.length - 1));
     document.getElementById('linksList').innerHTML = links.map(l =>
-      `<div class="link-item" data-id="${l.id}"><a href="${escapeHtml(l.uri)}" target="_blank">${escapeHtml(l.label || l.uri)}</a></div>`
+      `<div class="link-item" data-id="${l.id}"><a href="${escapeHtml(l.uri)}" target="_blank" title="${escapeHtml(l.uri)}">${escapeHtml(linkDisplayText(l))}</a></div>`
     ).join('');
   } catch(e) {
-    document.getElementById('linksSection').style.display = 'none';
+    document.getElementById('linksList').innerHTML = '';
   }
 
   // Logs
@@ -3308,6 +3607,7 @@ const CardDragDrop = (() => {
     // Don't start drag if clicking on inputs/links inside card
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'A') return;
+    if (e.target.closest('.card-link')) return;
 
     state.mode = 'arming';
     state.sourceCard = card;
@@ -3359,6 +3659,8 @@ const CardDragDrop = (() => {
   function onTouchStart(e) {
     const card = e.target.closest('.card');
     if (!card) return;
+    // A press on the link chip is a tap on the link, never a card drag.
+    if (e.target.closest('.card-link')) return;
 
     state.mode = 'arming';
     state.sourceCard = card;
