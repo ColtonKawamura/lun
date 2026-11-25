@@ -938,7 +938,7 @@ body {
           <input type="text" id="newLinkUri" placeholder="Link (message://…, https://…)">
           <button class="btn" id="addLinkBtn">Add</button>
         </div>
-        <div class="link-add-hint">Drag a mail message or a link onto a card, or into this Links section, to attach it.</div>
+        <div class="link-add-hint">Drag a link onto a card or into this Links section. For a Mail message, save it to the Desktop first (Mail makes a .eml file), then drop that file here.</div>
       </div>
       
       <div class="modal-section">
@@ -1226,11 +1226,23 @@ function openLink(uri) {
 // only in text/plain, so the subject becomes the link's label. Anything else
 // with a URL (a browser tab, a link in a page, a text selection holding a
 // URL) works the same way.
+// A file drag counts too: Safari gives a Mail message only as a file (the .eml
+// that Mail saves), so a file drop on a link target is claimed, and the drop
+// handler says what it can use.
 function dragCarriesLink(dt) {
   if (!dt) return false;
   const types = Array.from(dt.types || []).map(t => t.toLowerCase());
-  if (types.includes('files') && !types.includes('text/uri-list') && !types.includes('text/plain')) return false;
-  return types.some(t => ['text/uri-list', 'text/plain', 'text/html', 'text/x-moz-url'].includes(t));
+  return types.some(t => ['text/uri-list', 'text/plain', 'text/html', 'text/x-moz-url', 'files'].includes(t));
+}
+
+// The drop operation to ask for: one the source allows. Asking for an operation
+// the source did not offer makes the browser refuse the drop with no event.
+function chooseDropEffect(dt) {
+  const a = dt ? dt.effectAllowed : '';
+  if (a === 'copy' || a === 'copyLink' || a === 'copyMove' || a === 'all') return 'copy';
+  if (a === 'link' || a === 'linkMove') return 'link';
+  if (a === 'move') return 'move';
+  return null;
 }
 
 // Turn whatever the drag offered into a URI worth storing. Apple's canonical
@@ -1272,6 +1284,99 @@ function labelForDroppedLink(uri, plain, html) {
     if (t && t !== uri) return t.slice(0, 80);
   }
   return linkTextFromUri(uri);
+}
+
+// ── Mail message files (.eml) ───────────────────────────────────────────
+// Safari gives a page a Mail drag only as the message file Mail saves (a
+// .eml). The file's headers hold what a link needs: Message-ID (the message's
+// identity, which Mail's message: link is built from) and Subject (the label).
+
+function isEmlFile(f) {
+  return /\.eml$/i.test(f.name || '') || (f.type || '').toLowerCase() === 'message/rfc822';
+}
+
+function readFileHead(file, bytes) {
+  return new Promise(res => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result || ''));
+    r.onerror = () => res('');
+    r.readAsText(file.slice(0, bytes));
+  });
+}
+
+// Unfold continuation lines (RFC 5322 2.2.3) and read the first occurrence of
+// each header in the top block, which is the message's own header block.
+function parseMailHeaders(text) {
+  const block = (text.split(/\r?\n\r?\n/)[0] || '').replace(/\r?\n(?=[ \t])/g, '');
+  const out = {};
+  block.split(/\r?\n/).forEach(line => {
+    const m = line.match(/^([A-Za-z0-9-]+):\s*(.*)$/);
+    if (!m) return;
+    const name = m[1].toLowerCase();
+    if (out[name] === undefined) out[name] = m[2];
+  });
+  const rawId = out['message-id'] || '';
+  const angled = rawId.match(/<([^<>]+)>/);
+  const messageId = (angled ? angled[1] : rawId).replace(/\s+/g, '');
+  return { messageId: messageId, subject: decodeMimeWords(out['subject'] || '') };
+}
+
+// RFC 2047 encoded words (=?UTF-8?B?...?= and =?UTF-8?Q?...?=). A word the
+// browser cannot decode is left as it was.
+function decodeMimeWords(s) {
+  return String(s).replace(/(\?=)\s+(=\?)/g, '$1$2').replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (word, cs, enc, data) => {
+    try {
+      let bytes;
+      if (enc.toUpperCase() === 'B') {
+        bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+      } else {
+        const t = data.replace(/_/g, ' ');
+        const arr = [];
+        for (let i = 0; i < t.length; i++) {
+          if (t[i] === '=' && /^[0-9A-F]{2}$/i.test(t.substr(i + 1, 2))) { arr.push(parseInt(t.substr(i + 1, 2), 16)); i += 2; }
+          else arr.push(t.charCodeAt(i) & 0xff);
+        }
+        bytes = Uint8Array.from(arr);
+      }
+      return new TextDecoder(cs).decode(bytes);
+    } catch (e) { return word; }
+  });
+}
+
+// The URI Mail itself puts on a drag: message:%3C<Message-ID>%3E, with the @
+// left as it is. Mail reopens the message from this form.
+function messageUriFromId(id) {
+  return 'message:%3C' + encodeURIComponent(id).replace(/%40/g, '@') + '%3E';
+}
+
+async function linkFromEml(file) {
+  const text = await readFileHead(file, 262144);
+  const h = parseMailHeaders(text);
+  if (!h.messageId || /[\s<>]/.test(h.messageId)) return null;
+  const label = (h.subject || '').trim().slice(0, 80) || 'Mail message';
+  return { uri: messageUriFromId(h.messageId), label: label };
+}
+
+// Add each Mail message file dropped on a target. Links already on the task are
+// skipped; the toast says what happened to each file.
+async function dropEmlFiles(key, files) {
+  const emls = files.filter(isEmlFile);
+  if (!emls.length) {
+    showCopyToast(files.length ? 'Only a Mail message (.eml) or a link can go here' : 'No link in that drag');
+    return;
+  }
+  let added = 0, already = 0, unreadable = 0;
+  for (const f of emls) {
+    const found = await linkFromEml(f);
+    if (!found) { unreadable++; continue; }
+    if ((taskLinks[key] || []).some(l => l.uri === found.uri)) { already++; continue; }
+    if (await addTaskLink(key, found.uri, found.label)) added++;
+  }
+  const parts = [];
+  if (added) parts.push('Added ' + added + (added === 1 ? ' message' : ' messages') + ' to ' + key);
+  if (already) parts.push('already linked: ' + already);
+  if (unreadable) parts.push('no Message-ID in ' + unreadable + (unreadable === 1 ? ' file' : ' files'));
+  showCopyToast(parts.join(' · ') || 'Nothing added');
 }
 
 function extractDroppedLink(dt) {
@@ -1356,7 +1461,8 @@ function setupCardLinkDrop() {
     const target = linkDropTargetFor(e);
     if (!target) { clearHover(); return; }
     e.preventDefault();
-    if (e.dataTransfer) e.dataTransfer.dropEffect = 'link';
+    const eff = chooseDropEffect(e.dataTransfer);
+    if (e.dataTransfer && eff) e.dataTransfer.dropEffect = eff;
     if (!hovered || hovered.el !== target.el) {
       clearHover();
       hovered = target;
@@ -1373,17 +1479,22 @@ function setupCardLinkDrop() {
     const target = hovered || linkDropTargetFor(e);
     clearHover();
     if (!target || !dragCarriesLink(e.dataTransfer)) return;
-    // Claim the drop, or the browser navigates the page to the dropped URL.
+    // Claim the drop, or the browser navigates the page to the dropped file or URL.
     e.preventDefault();
     e.stopPropagation();
-    const found = extractDroppedLink(e.dataTransfer);
-    if (!found) {
-      showCopyToast('No link in that drag — try dragging the message again');
+    const dt = e.dataTransfer;
+    // Read the File objects now, during the drop: the DataTransfer is not
+    // reliable after an await.
+    const files = Array.from(dt.files || []);
+    const found = extractDroppedLink(dt);
+    if (found) {
+      addTaskLink(target.key, found.uri, found.label).then(ok => {
+        if (ok) showCopyToast('Link added to ' + target.key);
+      });
       return;
     }
-    addTaskLink(target.key, found.uri, found.label).then(ok => {
-      if (ok) showCopyToast('Link added to ' + target.key);
-    });
+    if (files.length) { dropEmlFiles(target.key, files); return; }
+    showCopyToast('No link in that drag — try dragging the message again');
   });
 
   window.addEventListener('dragend', clearHover);

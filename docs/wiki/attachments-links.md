@@ -184,11 +184,15 @@ lun open-uri "https://example.com" --on task T-001
 ### Web UI
 
 #### Dragging a link onto a card
-Drag a mail message from Apple Mail — or a URL from a browser tab, or a link from any app that puts a URL on the drag — onto a card on the board. The card highlights with "drop to add link" and the link is saved on that task.
-- A mail message is stored as `message:%3C<message-id>%3E`, which opens that message in Mail on macOS and iOS
-- The drag's plain text becomes the label, so a mail message shows its subject
-- `file://` drags are ignored, and a `file:` path is never stored: it means nothing on a phone
-- Files still belong in the task's Attachments section
+Drag a URL from a browser tab, or a link from any app that puts a URL on the drag, onto a card on the board. The card highlights with "drop to add link" and the link is saved on that task. The same works on the Links section of the open task window.
+
+**Mail messages go through a file.** Safari does not hand a web page a drag straight from Apple Mail (it never drops), but it does take the message file. So: drag the message from Mail to the Desktop (Mail saves it as a `.eml` file), then drag that file onto a card or into the Links section. The board reads the message's Message-ID and Subject from the file:
+- The link is stored as `message:%3C<message-id>%3E`, the same form Mail puts on its own drags, so the chip opens that message in Mail
+- The subject becomes the label
+- A message already linked to the task is not added twice
+- A `.eml` with no Message-ID is reported, not stored
+
+Any other file dropped on a card is refused with a message and not attached; use the Attachments section for files. `file://` drags are ignored, and a `file:` path is never stored: it means nothing on a phone.
 
 The first link on a task shows as a chip under its title. Click or tap the chip to open it: `http(s)` in a new tab, every other scheme (`message:`, `hermes:`, `obsidian:`) handed to the OS. `Ctrl+L` on the board opens the same link. Extra links show `+N` on the chip and are listed in the modal.
 

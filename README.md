@@ -46,7 +46,7 @@ All phases of [docs/plan.md](docs/plan.md) (1–10) are implemented:
 - Permanent deletion of projects and tasks (`rm proj`, `rm task`) from the CLI, the TUI command line, and the web UI (`g d`, Delete task); `x` archives a card
 - Web UI notes render live, Obsidian-style: every line shows rendered, and only the line you click into shows raw markdown (`Enter`/`Shift+Enter` for a new line, `Ctrl+Enter` saves)
 - Mac linking & attachments (`attach`, `link`, `unlink`, `open-link`, `open-uri`)
-- Web board links you can drag: drop an Apple Mail message (or any URL) onto a card and the link is saved on that task; the card then shows a chip that opens it — Mail on macOS and iOS, a tab for `http(s)`
+- Web board links you can drag: drop a URL onto a card, or drop a Mail message's `.eml` file (save it to the Desktop from Mail first) onto a card or into a task's Links section; the card then shows a chip that opens it — Mail on macOS and iOS, a tab for `http(s)`
 - Full-screen TUI (purple theme): `/` command palette, board/status/project
   views, task detail with vim-style keys, in-TUI logs, `/new-task`,
   `/new proj` (plus `/new-project` alias), `/move`, and focused link opening

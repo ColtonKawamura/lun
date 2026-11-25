@@ -52,7 +52,7 @@ Five columns, left to right — the task statuses:
 
 - Cards show task key, title, priority, scope, assignee and project
 - A card whose task has a link shows a chip with the first link's label; click or tap it to open the link (`http(s)` in a new tab, `message:`/`hermes:`/`obsidian:` handed to the OS). Extra links show `+N`; `Ctrl+L` opens the same link from the keyboard
-- **Drag a link onto a card** (a mail message from Apple Mail, a URL from a browser tab, a link from any app) to save it on that task. The card highlights while you drag over it, and the drag's plain text becomes the label, so a mail message shows its subject. See [Attachments & Links](attachments-links.md#dragging-a-link-onto-a-card)
+- **Drag a link onto a card** (a URL from a browser tab, or a link from any app) to save it on that task. A Mail message goes through its `.eml` file: save it to the Desktop from Mail, then drop that file on the card. The card highlights while you drag over it, and the drag's plain text becomes the label. See [Attachments & Links](attachments-links.md#dragging-a-link-onto-a-card)
 - Click a card (or focus it and press `Enter`) to open the details modal
 - Drag a card to another column to change its status; `d`/`u` (or `>`/`<`)
   shift the focused card one column right/left; `x` archives it (Undo toast);
