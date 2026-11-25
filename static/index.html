@@ -345,6 +345,8 @@ body {
 }
 .link-add-row .btn { flex: none; }
 .link-add-hint { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+/* A link is being dragged over the open task's Links section */
+#linksSection.link-drop { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 4px; }
 
 .has-notes::after {
   content: '📝';
@@ -936,7 +938,7 @@ body {
           <input type="text" id="newLinkUri" placeholder="Link (message://…, https://…)">
           <button class="btn" id="addLinkBtn">Add</button>
         </div>
-        <div class="link-add-hint">Drag a mail message or a link onto a card to attach it.</div>
+        <div class="link-add-hint">Drag a mail message or a link onto a card, or into this Links section, to attach it.</div>
       </div>
       
       <div class="modal-section">
@@ -1308,6 +1310,10 @@ async function addTaskLink(key, uri, label) {
     if (!res.ok) { showCopyToast('Could not add link'); return false; }
     await loadLinks();
     if (currentView === 'board') renderBoard();
+    // A drop into the open task's Links section must show up in that list.
+    if (editingTask === key && document.getElementById('modalOverlay').classList.contains('active')) {
+      await loadTaskDetails(key);
+    }
     return true;
   } catch (e) {
     showCopyToast('Could not add link');
@@ -1318,46 +1324,65 @@ async function addTaskLink(key, uri, label) {
 // dragover/drop are delegated from the document because cards are re-rendered
 // on every board update. Only drags that carry a link claim the drop, so the
 // modal's file drop zone and ordinary file drags behave as before.
-function setupCardLinkDrop() {
-  let hovered = null;
-  const clearHover = () => {
-    if (hovered) { hovered.classList.remove('link-drop'); hovered = null; }
-  };
-  const cardFor = e => (e.target && e.target.closest ? e.target.closest('.card') : null);
+// What a link drag lands on: a board card (its task), or the Links section of
+// the open task window (that task). Anything else is not a target, and the
+// browser refuses the drop there, which is the only feedback it gives.
+function linkDropTargetFor(e) {
+  const el = e.target && e.target.closest ? e.target : null;
+  if (!el) return null;
+  const card = el.closest('.card');
+  if (card && card.dataset.key) return { el: card, key: card.dataset.key };
+  const section = el.closest('#linksSection');
+  if (section && editingTask && document.getElementById('modalOverlay').classList.contains('active')) {
+    return { el: section, key: editingTask };
+  }
+  return null;
+}
 
+function setupCardLinkDrop() {
+  let hovered = null; // {el, key} of the target under the pointer
+  const clearHover = () => {
+    if (hovered) { hovered.el.classList.remove('link-drop'); hovered = null; }
+  };
+
+  // A drop is only delivered when dragover is cancelled, so cancel it on
+  // every target that accepts links. Off-target drags are left alone.
   document.addEventListener('dragenter', e => {
-    if (!dragCarriesLink(e.dataTransfer)) return;
-    if (cardFor(e)) e.preventDefault();
+    if (dragCarriesLink(e.dataTransfer) && linkDropTargetFor(e)) e.preventDefault();
   });
 
   document.addEventListener('dragover', e => {
     if (!dragCarriesLink(e.dataTransfer)) { clearHover(); return; }
-    const card = cardFor(e);
-    if (!card) { clearHover(); return; }
+    const target = linkDropTargetFor(e);
+    if (!target) { clearHover(); return; }
     e.preventDefault();
     if (e.dataTransfer) e.dataTransfer.dropEffect = 'link';
-    if (hovered !== card) { clearHover(); hovered = card; card.classList.add('link-drop'); }
+    if (!hovered || hovered.el !== target.el) {
+      clearHover();
+      hovered = target;
+      target.el.classList.add('link-drop');
+    }
   });
 
   document.addEventListener('dragleave', e => {
     if (!hovered) return;
-    if (e.target === hovered || !hovered.contains(e.relatedTarget)) clearHover();
+    if (e.target === hovered.el || !hovered.el.contains(e.relatedTarget)) clearHover();
   });
 
   document.addEventListener('drop', e => {
-    const card = hovered || cardFor(e);
+    const target = hovered || linkDropTargetFor(e);
     clearHover();
-    if (!card || !dragCarriesLink(e.dataTransfer)) return;
-    // Claim the drop, or the browser navigates the board to the dropped URL.
+    if (!target || !dragCarriesLink(e.dataTransfer)) return;
+    // Claim the drop, or the browser navigates the page to the dropped URL.
     e.preventDefault();
     e.stopPropagation();
     const found = extractDroppedLink(e.dataTransfer);
     if (!found) {
-      showCopyToast('No link in that drag — open the card to add it');
+      showCopyToast('No link in that drag — try dragging the message again');
       return;
     }
-    addTaskLink(card.dataset.key, found.uri, found.label).then(ok => {
-      if (ok) showCopyToast('Link added to ' + card.dataset.key);
+    addTaskLink(target.key, found.uri, found.label).then(ok => {
+      if (ok) showCopyToast('Link added to ' + target.key);
     });
   });
 
@@ -1822,7 +1847,6 @@ async function addLinkFromModal() {
   if (!(await addTaskLink(editingTask, uri, labelInput.value.trim()))) return;
   uriInput.value = '';
   labelInput.value = '';
-  await loadTaskDetails(editingTask);
   uriInput.focus();
 }
 
