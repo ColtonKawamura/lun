@@ -13,8 +13,8 @@ lun serve 127.0.0.1:8080         # Local only
 ## Features
 
 - **Responsive**: Works on desktop, tablet, and mobile
-- **Touch-friendly**: Large buttons, swipe gestures
-- **Offline**: Service worker caches assets
+- **Touch-friendly**: Thumb-sized header controls, cards drag between columns, and columns snap-scroll on phones
+- **Offline**: Service worker caches the app shell and API responses
 - **Real-time**: WebSocket updates
 - **Markdown**: Notes render live, Obsidian-style: every line shows rendered, and only the line you are editing shows its raw markdown. Logs render markdown
 - **Math**: KaTeX renders equations (`$F=ma$`)
@@ -22,13 +22,16 @@ lun serve 127.0.0.1:8080         # Local only
 ## UI Layout
 
 ### Header
-- The `lun` logo with the board's directory next to it (`~/repos/`,
-  `~/personal-board/`; full path on hover; under the logo on narrow phones).
-  It comes from `GET /api/board`, so with several boards each tab says which
-  one it is. The label stays hidden if that call fails.
-- Project title
-- Task count
-- Search/filter buttons
+- The `lun` wordmark with the board's directory next to it (`~/repos/`,
+  `~/personal-board/`; full path on hover; it stays on the wordmark row on
+  phones). It comes from `GET /api/board`, so with several boards each tab
+  says which one it is. The label stays hidden if that call fails.
+- The project picker (`All Projects` by default)
+- A Board / List view toggle
+- `+ New` for a card and `+ Project` for a project; `Delete project` appears
+  while a real project is selected (hidden on All Projects and `P-000`)
+- The page title row names the selected project on desktop; on phones it is
+  hidden because the picker already names it
 - Controls wrap onto extra rows on narrow screens instead of scrolling
   sideways
 
@@ -50,7 +53,10 @@ Five columns, left to right — the task statuses:
 | Backlog | slate | parked for later |
 | Closed | green | finished |
 
-- Cards show task key, title, priority, scope, assignee and project
+- Cards show task key, title, priority, scope, assignee and project (a
+  colored dot plus the project name)
+- On phones each column is ~85% of the viewport wide and the board snaps
+  from column to column as you scroll sideways
 - A card whose task has a link shows a chip with the first link's label; click or tap it to open the link (`http(s)` in a new tab, `message:`/`hermes:`/`obsidian:` handed to the OS). Extra links show `+N`; `Ctrl+L` opens the same link from the keyboard
 - **Drag a link onto a card** (a URL from a browser tab, or a link from any app) to save it on that task. A Mail message goes through its `.eml` file: save it to the Desktop from Mail, then drop that file on the card. The card highlights while you drag over it, and the drag's plain text becomes the label. See [Attachments & Links](attachments-links.md#dragging-a-link-onto-a-card)
 - Click a card (or focus it and press `Enter`) to open the details modal
@@ -63,6 +69,10 @@ Five columns, left to right — the task statuses:
 - **Deleting a project:** pick a project, then press `g d` or click **Delete project** in the header. A dialog shows how many tasks it has and asks what to do: move them to another project (the default), or delete them too. Choosing "delete the tasks too" shows a checkbox ("I understand N tasks will be permanently deleted...") and keeps the red button disabled, labelled "Delete project and N tasks", until you tick it; switching back to "Move" clears the tick. A project with no tasks needs no choice. `Esc`, **Cancel** or a click outside closes it without changing anything. The button is hidden on "All Projects" and on `P-000 Unassigned`.
 
 ### Task Details Modal
+The modal has a fixed header, a scrolling body and a pinned footer: **Save**,
+**Close** (sets Closed) and **Delete task** stay visible at the bottom while
+the fields scroll.
+
 Fields:
 - Status (dropdown: Planning, Review, Waiting-On, Backlog, Closed; the
   **Close** button sets Closed)
@@ -203,26 +213,39 @@ raw text never shows on lines you are not touching.
 
 ## Service Worker
 
-The PWA registers a service worker for:
-- Offline asset caching
-- Background sync
-- Push notifications (future)
+The PWA registers a service worker that:
+- Serves the app shell (`/`, the manifest and the icon) network-first, with
+  the cache as the offline fallback. A rebuilt UI therefore reaches the
+  browser instead of being held in an old cache.
+- Serves the cached API routes (`/api/tasks`, `/api/projects`, `/api/scopes`,
+  `/api/markdown/preview`) network-first, falling back to the last cached
+  response when offline.
+- Names its cache `lun-v2`; a UI change bumps that name so the previous
+  cache is dropped on activation.
 
 ## Theming
 
-CSS variables in `:root`:
+The UI is a neutral near-black theme with one violet accent. Status hues
+drive the column and list dots; priority and scope chips get their own soft
+tints. CSS variables in `:root`:
 ```css
---bg: #1a1a2e;
---bg-secondary: #16213e;
---bg-card: #0f3460;
---accent: #6c3baa;
---accent-light: #8b5cf6;
---text: #e2e8f0;
---text-muted: #94a3b8;
---border: #334155;
---success: #22c55e;
---warning: #f59e0b;
---danger: #ef4444;
+--bg: #0a0b0e;
+--bg-secondary: #101116;
+--bg-card: #17181d;
+--bg-tertiary: #1e1f26;
+--accent: #7c5cff;
+--accent-light: #a78bfa;
+--text: #e7e8ec;
+--text-muted: #8a8e99;
+--border: rgba(255, 255, 255, 0.08);
+--success: #34d399;
+--warning: #fbbf24;
+--danger: #f87171;
+--planning: #60a5fa;
+--review: #c084fc;
+--waiting-on: #fbbf24;
+--backlog: #94a3b8;
+--closed: #34d399;
 ```
 
 ## Installation
