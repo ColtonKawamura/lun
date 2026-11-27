@@ -184,7 +184,7 @@ lun open-uri "https://example.com" --on task T-001
 ### Web UI
 
 #### Dragging a link onto a card
-Drag a URL from a browser tab, or a link from any app that puts a URL on the drag, onto a card on the board. The card highlights with "drop to add link" and the link is saved on that task. The same works on the Links section of the open task window.
+Drag a URL from a browser tab, or a link from any app that puts a URL on the drag, onto a card on the board. The card highlights with "drop to add link" and the link is saved on that task. The same works on the Links section of the open task window — even while that section is collapsed, where the drop opens it so the new link is visible.
 
 **Mail messages go through a file.** Safari does not hand a web page a drag straight from Apple Mail (it never drops), but it does take the message file. So: drag the message from Mail to the Desktop (Mail saves it as a `.eml` file), then drag that file onto a card or into the Links section. The board reads the message's Message-ID and Subject from the file:
 - The link is stored as `message:%3C<message-id>%3E`, the same form Mail puts on its own drags, so the chip opens that message in Mail
@@ -197,6 +197,7 @@ Any other file dropped on a card is refused with a message and not attached; use
 The first link on a task shows as a chip under its title. Click or tap the chip to open it: `http(s)` in a new tab, every other scheme (`message:`, `hermes:`, `obsidian:`) handed to the OS. `Ctrl+L` on the board opens the same link. Extra links show `+N` on the chip and are listed in the modal.
 
 #### Links Section
+- Starts collapsed: `Enter` opens it and `Esc` closes it (`j`/`k` to reach the header); on a phone tap the header row. The header shows the link count while closed, and dropping a link into it opens the section
 - Shows all links in the task modal; click one to open it (`Ctrl+L` opens the selected one)
 - Label and URL displayed; the label is the mail subject when the link came from Mail
 - The row under the list adds a link by hand (label + link). This is how a link gets onto a task from an iPhone, where no app can be dragged into Safari.

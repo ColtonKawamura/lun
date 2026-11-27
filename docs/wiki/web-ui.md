@@ -73,16 +73,25 @@ The modal has a fixed header, a scrolling body and a pinned footer: **Save**,
 **Close** (sets Closed) and **Delete task** stay visible at the bottom while
 the fields scroll.
 
-Fields:
-- Status (dropdown: Planning, Review, Waiting-On, Backlog, Closed; the
-  **Close** button sets Closed)
-- Priority (dropdown)
-- Project (dropdown)
-- Scope (text)
-- Assignee (text)
-- Title (text)
-- Links (the task's links, each clickable, plus a label + link row that adds one; `Ctrl+L` opens the selected link, `dd` deletes it, `u` restores the last deleted one)
-- Notes (Markdown, live editor; see [Notes editor](#notes-editor))
+The body is a stack of sections. **Details**, **Links**, **Attachments** and
+**PRs** collapse and start closed; **Notes** and the log/ **History** stay
+open. The section the keyboard selection is on is ringed in purple (the same
+treatment a selected form row gets), `Enter` opens it and `Esc` closes it. On a
+phone the header row is the button — 44px tall — so tap it to open or close.
+A closed header keeps a one-line summary, so status, priority, project, link
+count, file count and PR count read without opening it. The open/closed state
+is remembered per browser. See [Modal Sections](#modal-sections) for the keys.
+
+In the order they appear:
+- **Details**: Status (dropdown: Planning, Review, Waiting-On, Backlog,
+  Closed; the **Close** button sets Closed), Priority (dropdown), Project
+  (dropdown), Scope (text), Assignee (text), Title (text)
+- **Links**: the task's links, each clickable, plus a label + link row that adds one (`Ctrl+L` opens the selected link, `dd` deletes it, `u` restores the last deleted one). A link dropped here opens the section
+- **Notes** (Markdown, live editor; see [Notes editor](#notes-editor))
+- The log-message row, which adds a line to the history
+- **Attachments**: the task's files plus the upload drop zone
+- **History**: the task's log, newest first
+- **PRs**: the task's PRs, shown when it has any
 
 ### Notes editor
 The notes render as you type, like Obsidian's live preview. Every line shows
