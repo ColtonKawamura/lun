@@ -1812,8 +1812,10 @@ async function addTaskLink(key, uri, label) {
     if (!res.ok) { showCopyToast('Could not add link'); return false; }
     await loadLinks();
     if (currentView === 'board') renderBoard();
-    // A drop into the open task's Links section must show up in that list.
+    // A drop into the open task's Links section must show up in that list, so
+    // the section opens first (the drop target is the header while collapsed).
     if (editingTask === key && document.getElementById('modalOverlay').classList.contains('active')) {
+      setSectionCollapsed('linksSection', false);
       await loadTaskDetails(key);
     }
     return true;
