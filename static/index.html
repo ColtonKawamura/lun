@@ -680,6 +680,60 @@ body {
   letter-spacing: 0.08em;
   margin-bottom: 9px;
 }
+/* Collapsible modal sections — Enter expands, Esc collapses. The header stays
+   visible while the body is hidden; the summary keeps the key facts readable
+   without opening it. */
+.section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Wide, tall tap target: on a phone this row is the only way to open a
+     section (no Enter/Esc there), so it reads as a button, not a label. */
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  min-height: 34px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.section-toggle:hover { background: rgba(255, 255, 255, 0.06); }
+.section-toggle:active { background: rgba(255, 255, 255, 0.09); }
+.modal-section.collapsed .section-toggle { border-color: rgba(255, 255, 255, 0.07); }
+.section-toggle:hover .section-label { color: #b9bdc7; }
+.section-caret {
+  font-size: 10px;
+  line-height: 1;
+  color: #8a8e99;
+  width: 12px;
+  flex: none;
+}
+@media (pointer: coarse) {
+  .section-toggle { min-height: 44px; }
+}
+.section-label {
+  font-size: 10.5px;
+  color: #71757f;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
+.modal-section.modal-active .section-label { color: var(--accent); }
+.section-summary {
+  font-size: 11px;
+  color: #61656f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.section-body { margin-top: 10px; }
+.modal-section.collapsed { margin-top: 12px; padding-top: 10px; }
+.modal-section.collapsed .section-body { display: none; }
+
 .form-row {
   display: flex;
   gap: 10px;
@@ -1204,6 +1258,11 @@ body {
       <button class="modal-close" id="modalClose">&times;</button>
     </div>
     <div class="modal-body">
+      <div class="modal-section collapsible collapsed" id="fieldsSection">
+        <button type="button" class="section-toggle" data-section="fieldsSection" aria-expanded="false">
+          <span class="section-caret">▸</span><span class="section-label">Details</span><span class="section-summary" id="fieldsSummary"></span>
+        </button>
+        <div class="section-body">
       <div class="form-row">
         <label>Status</label>
         <select id="editStatus">
@@ -1238,9 +1297,14 @@ body {
         <label>Title</label>
         <input type="text" id="editTitle">
       </div>
-      
-      <div class="modal-section" id="linksSection">
-        <h3>Links</h3>
+        </div>
+      </div>
+
+      <div class="modal-section collapsible collapsed" id="linksSection">
+        <button type="button" class="section-toggle" data-section="linksSection" aria-expanded="false">
+          <span class="section-caret">▸</span><span class="section-label">Links</span><span class="section-summary" id="linksSummary"></span>
+        </button>
+        <div class="section-body">
         <div id="linksList"></div>
         <div class="link-add-row">
           <input type="text" id="newLinkLabel" placeholder="Label (optional)">
@@ -1248,6 +1312,7 @@ body {
           <button class="btn" id="addLinkBtn">Add</button>
         </div>
         <div class="link-add-hint">Drag a link onto a card or into this Links section. For a Mail message, save it to the Desktop first (Mail makes a .eml file), then drop that file here.</div>
+        </div>
       </div>
       
       <div class="modal-section">
@@ -1261,12 +1326,16 @@ body {
         <button class="btn" id="addLogBtn">Log</button>
       </div>
 
-      <div class="modal-section" id="attachmentsSection" style="display:none;">
-        <h3>Attachments</h3>
+      <div class="modal-section collapsible collapsed" id="attachmentsSection" style="display:none;">
+        <button type="button" class="section-toggle" data-section="attachmentsSection" aria-expanded="false">
+          <span class="section-caret">▸</span><span class="section-label">Attachments</span><span class="section-summary" id="attachmentsSummary"></span>
+        </button>
+        <div class="section-body">
         <div id="attachmentsList"></div>
         <div class="drop-zone" id="dropZone">
           Drop files here or click to upload
           <input type="file" id="fileInput" multiple style="display:none">
+        </div>
         </div>
       </div>
       
@@ -1275,9 +1344,13 @@ body {
         <div id="logsList"></div>
       </div>
       
-      <div class="modal-section" id="prsSection" style="display:none;">
-        <h3>PRs</h3>
+      <div class="modal-section collapsible collapsed" id="prsSection" style="display:none;">
+        <button type="button" class="section-toggle" data-section="prsSection" aria-expanded="false">
+          <span class="section-caret">▸</span><span class="section-label">PRs</span><span class="section-summary" id="prsSummary"></span>
+        </button>
+        <div class="section-body">
         <div id="prsList"></div>
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1356,7 +1429,7 @@ body {
       <tr><td>l</td><td>Focus next column</td></tr>
       <tr><td>d / D / &gt;</td><td>Move card forward (toward closed)</td></tr>
       <tr><td>u / U / &lt;</td><td>Move card backward (toward planning)</td></tr>
-      <tr><td>Enter</td><td>Open card detail</td></tr>
+      <tr><td>Enter</td><td>Open card detail · expand a section in the task window</td></tr>
       <tr><td>Ctrl+L</td><td>Open first link on selected card</td></tr>
       <tr><td>Space c c</td><td>Copy selected card's task key (e.g. T-ne64)</td></tr>
       <tr><td>Enter / Shift+Enter</td><td>New line in notes (click a line to edit it)</td></tr>
@@ -1372,7 +1445,7 @@ body {
       <tr><td>G</td><td>Last card</td></tr>
       <tr><td>/</td><td>Command palette</td></tr>
       <tr><td>?</td><td>Help (this)</td></tr>
-      <tr><td>Esc</td><td>Close overlay · clear filters · exit input</td></tr>
+      <tr><td>Esc</td><td>Collapse section · close modal/overlay · clear filters · exit input</td></tr>
     </table>
   </div>
 </div>
@@ -1420,7 +1493,22 @@ let zBufferTimer = null;
 let dBuffer = false;
 let dBufferTimer = null;
 let modalInsertMode = false;
-const modalFields = ['editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'linksSection', 'editNotes', 'logMessageInput'];
+// Keyboard order inside the task modal. A collapsible section's header is one
+// stop; the controls in its body are the following stops and are skipped while
+// the section is collapsed (see modalFieldVisible).
+const modalFields = ['fieldsSection', 'editStatus', 'editPriority', 'editProject', 'editScope', 'editAssignee', 'editTitle', 'linksSection', 'editNotes', 'logMessageInput', 'attachmentsSection', 'prsSection'];
+// Sections that collapse. Notes and the log/history stay open.
+const SECTIONS = ['fieldsSection', 'linksSection', 'attachmentsSection', 'prsSection'];
+// Collapsed state survives a reload, so opening the next card keeps the layout
+// you left. Everything but Notes/History starts collapsed.
+const sectionCollapsed = (() => {
+  const base = {fieldsSection: true, linksSection: true, attachmentsSection: true, prsSection: true};
+  try {
+    const raw = localStorage.getItem('lun.modalSections');
+    if (raw) Object.assign(base, JSON.parse(raw));
+  } catch (e) { /* private mode / bad value: keep the defaults */ }
+  return base;
+})();
 
 // Initialize
 async function loadBoardDir() {
@@ -1442,6 +1530,7 @@ async function loadBoardDir() {
   await loadTasks();
   render();
   setupEventListeners();
+  applyAllSections();
   applyFiltersFromUrl();
   
   // Register service worker
@@ -2068,6 +2157,17 @@ function setupEventListeners() {
     if (e.target === e.currentTarget) closeModal();
   });
   document.getElementById('saveBtn').addEventListener('click', saveModal);
+  // Collapsible sections: click a header to toggle it (Enter/Esc do the same).
+  document.querySelectorAll('#modalOverlay .section-toggle').forEach(btn => {
+    btn.addEventListener('click', () => {
+      toggleSection(btn.dataset.section);
+      btn.blur();
+    });
+  });
+  // Keep the collapsed Details summary in step with the fields it shows.
+  ['editStatus', 'editPriority', 'editProject'].forEach(id => {
+    document.getElementById(id).addEventListener('change', refreshSectionSummaries);
+  });
   document.getElementById('doneBtn').addEventListener('click', () => {
     if (editingTask) {
       updateTaskOnServer(editingTask, {status: 'closed'}).then(() => {
@@ -2144,6 +2244,10 @@ function setView(view) {
 
 // Modal field navigation
 function highlightModalField(idx, noScroll) {
+  // Several stops live in one section (Details holds six fields), so the
+  // section is marked from the active stop instead of per stop.
+  const activeEl = document.getElementById(modalFields[idx]);
+  const activeSection = activeEl ? activeEl.closest('.modal-section') : null;
   modalFields.forEach((id, i) => {
     const isActive = i === idx;
     const el = document.getElementById(id);
@@ -2151,7 +2255,7 @@ function highlightModalField(idx, noScroll) {
       const row = el.closest('.form-row');
       if (row) row.classList.toggle('modal-active', isActive);
       const section = el.closest('.modal-section');
-      if (section) section.classList.toggle('modal-active', isActive);
+      if (section) section.classList.toggle('modal-active', isActive || section === activeSection);
       const logRow = el.closest('.log-input-row');
       if (logRow) {
         logRow.classList.toggle('modal-active', isActive);
@@ -2174,7 +2278,9 @@ function highlightModalField(idx, noScroll) {
 }
 function modalFieldVisible(idx) {
   const el = document.getElementById(modalFields[idx]);
-  return !!el && el.style.display !== 'none';
+  if (!el || el.style.display === 'none') return false;
+  // A control inside a collapsed section has no box, so it is not a stop.
+  return el.getClientRects().length > 0;
 }
 function modalStep(dir) {
   let i = modalFieldIndex;
@@ -2188,6 +2294,71 @@ function modalFieldContainer(idx) {
   const el = document.getElementById(modalFields[idx]);
   if (!el) return null;
   return el.closest('.form-row') || el.closest('.modal-section') || el.closest('.log-input-row') || el;
+}
+
+// Collapsible sections: Enter expands the selected header, Esc collapses it
+// again, and the summary in the header keeps the essentials readable while the
+// body is hidden. Notes and the log/history have no header and stay open.
+function applySectionState(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const collapsed = !!sectionCollapsed[id];
+  el.classList.toggle('collapsed', collapsed);
+  const btn = el.querySelector('.section-toggle');
+  if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  const caret = el.querySelector('.section-caret');
+  if (caret) caret.textContent = collapsed ? '▸' : '▾';
+}
+function applyAllSections() {
+  SECTIONS.forEach(applySectionState);
+  refreshSectionSummaries();
+}
+function setSectionCollapsed(id, collapsed) {
+  if (!SECTIONS.includes(id)) return;
+  sectionCollapsed[id] = !!collapsed;
+  applySectionState(id);
+  // Collapsing (or opening) a section from the keyboard or a click lands the
+  // selection on its header, so Esc never acts on a body that just vanished.
+  const i = modalFields.indexOf(id);
+  if (i >= 0 && document.getElementById('modalOverlay').classList.contains('active')) {
+    modalFieldIndex = i;
+    linkIndex = 0;
+    highlightModalField(modalFieldIndex, true);
+  }
+  refreshSectionSummaries();
+  try { localStorage.setItem('lun.modalSections', JSON.stringify(sectionCollapsed)); } catch (e) { /* ignore */ }
+}
+function toggleSection(id) {
+  setSectionCollapsed(id, !sectionCollapsed[id]);
+}
+// The collapsible section the current selection sits in, or null.
+function selectedSectionId() {
+  const id = modalFields[modalFieldIndex];
+  if (!id) return null;
+  if (SECTIONS.includes(id)) return id;
+  const el = document.getElementById(id);
+  const sec = el && el.closest('.modal-section');
+  return sec && sec.classList.contains('collapsible') ? sec.id : null;
+}
+function refreshSectionSummaries() {
+  const fields = document.getElementById('fieldsSummary');
+  if (fields) {
+    const st = document.getElementById('editStatus').value;
+    const pr = document.getElementById('editPriority').value;
+    const pid = document.getElementById('editProject').value;
+    const proj = projects.find(p => String(p.id) === String(pid));
+    const bits = [STATUS_LABELS[st] || st];
+    if (pr) bits.push(pr.charAt(0).toUpperCase() + pr.slice(1));
+    if (proj) bits.push(proj.name);
+    fields.textContent = bits.filter(Boolean).join(' · ');
+  }
+  const label = (n, one, many) => n ? `${n} ${n === 1 ? one : many}` : 'none';
+  const links = document.getElementById('linksSummary');
+  if (links) links.textContent = label(document.querySelectorAll('#linksList .link-item').length, 'link', 'links');
+  const atts = document.getElementById('attachmentsSummary');
+  if (atts) atts.textContent = label(document.querySelectorAll('#attachmentsList .attachment-item').length, 'file', 'files');
+  const prs = document.getElementById('prsSummary');
+  if (prs) prs.textContent = label(document.querySelectorAll('#prsList > div').length, 'PR', 'PRs');
 }
 function updateLinkHighlight() {
   const active = modalFields[modalFieldIndex] === 'linksSection';
@@ -2267,7 +2438,8 @@ async function restoreLink() {
   await loadTaskDetails(editingTask);
   await loadLinks();
   if (currentView === 'board') renderBoard();
-  // Land on the restored link (it is appended last).
+  // Land on the restored link (it is appended last), so Links must be open.
+  setSectionCollapsed('linksSection', false);
   modalFieldIndex = modalFields.indexOf('linksSection');
   linkIndex = Math.max(0, document.querySelectorAll('#linksList .link-item').length - 1);
   highlightModalField(modalFieldIndex);
@@ -2300,6 +2472,7 @@ async function openModal(key) {
   
   // Load attachments, links, logs, prs
   await loadTaskDetails(key);
+  applyAllSections();
   
   // Init modal navigation
   modalFieldIndex = 0; linkIndex = 0;
@@ -2398,7 +2571,8 @@ async function loadTaskDetails(key) {
   } catch(e) {
     document.getElementById('prsSection').style.display = 'none';
   }
-  
+
+  refreshSectionSummaries();
 }
 
 function closeModal() {
@@ -3137,6 +3311,13 @@ function handleKeyboard(e) {
         field.blur();
         return;
       }
+      // Esc on (or inside) an expanded section collapses it and keeps the
+      // modal open; Esc with nothing expanded closes the modal as before.
+      const sec = selectedSectionId();
+      if (sec && !sectionCollapsed[sec]) {
+        setSectionCollapsed(sec, true);
+        return;
+      }
       // Otherwise, close the modal entirely
       closeModal();
       if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
@@ -3234,12 +3415,13 @@ function handleKeyboard(e) {
     }
     const onLinks = modalFields[modalFieldIndex] === 'linksSection';
     // dd deletes the selected link; u restores the most recently deleted one.
+    const linksOpen = onLinks && !sectionCollapsed.linksSection;
     if (dBuffer && !e.ctrlKey && !e.metaKey) {
       dBuffer = false;
       clearTimeout(dBufferTimer);
-      if (e.key === 'd' && onLinks) { e.preventDefault(); deleteCurrentLink(); return; }
+      if (e.key === 'd' && linksOpen) { e.preventDefault(); deleteCurrentLink(); return; }
     }
-    if (e.key === 'd' && onLinks && !e.ctrlKey && !e.metaKey) {
+    if (e.key === 'd' && linksOpen && !e.ctrlKey && !e.metaKey) {
       e.preventDefault();
       dBuffer = true;
       clearTimeout(dBufferTimer);
@@ -3268,6 +3450,18 @@ function handleKeyboard(e) {
       highlightModalField(modalFieldIndex);
       return;
     }
+    // Enter on a collapsed section header expands it; Esc (above) collapses it.
+    // Expanded Links falls through, because there Enter opens the hyperlink.
+    const selSection = SECTIONS.includes(modalFields[modalFieldIndex]) ? modalFields[modalFieldIndex] : null;
+    if (e.key === 'Enter' && selSection) {
+      if (sectionCollapsed[selSection]) {
+        e.preventDefault();
+        setSectionCollapsed(selSection, false);
+        return;
+      }
+      if (selSection !== 'linksSection') { e.preventDefault(); return; }
+    }
+    // Expanded Links keeps Enter for the hyperlinks themselves.
     if (e.key === 'Enter' && onLinks) {
       e.preventDefault();
       openCurrentLink();

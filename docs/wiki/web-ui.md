@@ -138,12 +138,18 @@ raw text never shows on lines you are not touching.
 
 ## Keyboard Navigation
 
+### Modal Sections
+The task window is a set of sections. **Details** (status, priority, project, scope, assignee, title), **Links**, **Attachments** and **PRs** collapse; **Notes** and the log/history stay open. A collapsed header keeps a one-line summary (status · priority · project, link count, file count, PR count), and the open/closed state is remembered per browser.
+- `Enter`: Expand the selected section header. Inside an open Links section, `Enter` opens the selected link instead
+- `Esc`: Collapse the section the selection is in. With nothing expanded, `Esc` exits insert mode, blurs a field, or closes the task window (the existing order)
+- Click or tap a section header to toggle it
+
 ### Modal Fields
-- `j` / `ArrowDown`: Next field
+- `j` / `ArrowDown`: Next field (a collapsed section's fields are skipped)
 - `k` / `ArrowUp`: Previous field
 - `i`: Insert mode (focus input)
-- `Esc`: Exit insert mode
-- `Enter`: Submit log message (in the notes, `Enter` makes a new line; see [Notes editor](#notes-editor))
+- `Esc`: Exit insert mode first, then collapse the section the selection is in
+- `Enter`: Expand a collapsed section; submit a log message; in the notes, `Enter` makes a new line (see [Notes editor](#notes-editor))
 - `Ctrl`/`Cmd`+`Enter`: Save the task (from any field)
 
 ### Card View
