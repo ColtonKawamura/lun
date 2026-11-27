@@ -665,10 +665,17 @@ body {
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 0;
 }
+/* The section the selection is on — Enter opens it, Esc closes it — gets the
+   same purple treatment as a selected form row, wrapped around the whole box
+   instead of a single line at the top. */
 .modal-section.modal-active {
+  background: rgba(124, 92, 255, 0.05);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(124, 92, 255, 0.55), 0 0 0 4px rgba(124, 92, 255, 0.12);
+}
+.modal-section.modal-active .section-toggle {
   background: transparent;
-  border: none;
-  border-top: 1px solid rgba(124, 92, 255, 0.35);
+  border-color: transparent;
 }
 .link-item { padding: 3px 6px; border-radius: 6px; border: 1px solid transparent; }
 .link-item.link-active { background: rgba(124, 92, 255, 0.12); border-color: rgba(124, 92, 255, 0.4); }
@@ -689,10 +696,10 @@ body {
   gap: 8px;
   /* Wide, tall tap target: on a phone this row is the only way to open a
      section (no Enter/Esc there), so it reads as a button, not a label. */
-  width: calc(100% + 16px);
-  margin: 0 -8px;
+  width: 100%;
+  margin: 0;
   min-height: 34px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid transparent;
   border-radius: 8px;
@@ -730,8 +737,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.section-body { margin-top: 10px; }
-.modal-section.collapsed { margin-top: 12px; padding-top: 10px; }
+/* Inset the content from the purple perimeter so controls never touch it. */
+.modal-section.collapsible { padding: 10px 8px; }
+.section-body { margin-top: 8px; padding: 0 6px; }
+.modal-section.collapsed { margin-top: 12px; padding: 4px 8px; }
 .modal-section.collapsed .section-body { display: none; }
 
 .form-row {
