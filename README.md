@@ -21,6 +21,8 @@ The canonical store is a SQLite database (`.lun/lun.db`) — tasks, projects,
 attachments, and commit logs are never plain-text files. Markdown-style output
 is a human-facing view rendered from the DB.
 
+**[Website](https://coltonkawamura.github.io/lun/)** · [Docs](docs/wiki/) · [Install](docs/wiki/installation.md)
+
 ## Task statuses
 
 Tasks move through five board columns, left to right:
